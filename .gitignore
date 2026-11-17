@@ -1,0 +1,19 @@
+# Game data: never commit
+orig/*
+!orig/README.md
+*.iso
+*.rvz
+*.wbfs
+*.dol
+*.rso
+*.rel
+
+# Third-party clones and binaries are staged locally (see docs/TOOLING.md)
+reference/
+tools/bin/
+tools/ghidra-ext/
+tools/m2c/
+
+# Build output
+build/
+generated/
