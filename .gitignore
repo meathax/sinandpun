@@ -17,3 +17,7 @@ tools/m2c/
 # Build output
 build/
 generated/
+build_translate.log
+decomp/build/
+translator/**/bin/
+translator/**/obj/

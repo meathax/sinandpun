@@ -1,0 +1,71 @@
+# Sin & Punishment: Star Successor (USA) R2VE01 rev 0
+object: sys/main.dol
+hash: 0af6529d3b8db4b431bd75dde60cf5dc70f75543
+object_base: ../orig/R2VE01
+extract_objects: false
+symbols: config/R2VE01/symbols.txt
+splits: config/R2VE01/splits.txt
+selfile: files/gs2.sel
+selfile_hash: 1323675beb557f9d09ae39f6c227127c1ab829f8
+detect_objects: true
+detect_strings: true
+write_asm: true
+fill_gaps: true
+# modules: RSO load fails in dtk 1.9.1 (stg00: "Failed to locate section 13 for .dwarf_pubnames.*"); see docs/RSO.md
+#modules:
+#- object: files/stg00.rso
+#  kind: rso
+#  module_id: 1
+#  hash: 504ba80eb1cf5efe2892fafd21e0ee55ff40cd4d
+#  name: stg00
+#  symbols: config/R2VE01/stg00/symbols.txt
+#  splits: config/R2VE01/stg00/splits.txt
+#- object: files/stg01.rso
+#  kind: rso
+#  module_id: 2
+#  hash: 55b47c8d81007a3ce01c05ccf3821874d99723d5
+#  name: stg01
+#  symbols: config/R2VE01/stg01/symbols.txt
+#  splits: config/R2VE01/stg01/splits.txt
+#- object: files/stg02.rso
+#  kind: rso
+#  module_id: 3
+#  hash: 01b4ffdfa220ea462dc1f625d8c4d6e534fe28b1
+#  name: stg02
+#  symbols: config/R2VE01/stg02/symbols.txt
+#  splits: config/R2VE01/stg02/splits.txt
+#- object: files/stg03.rso
+#  kind: rso
+#  module_id: 4
+#  hash: 2a9177774f25186a7d831176ba4dc19d5f90b2b0
+#  name: stg03
+#  symbols: config/R2VE01/stg03/symbols.txt
+#  splits: config/R2VE01/stg03/splits.txt
+#- object: files/stg04.rso
+#  kind: rso
+#  module_id: 5
+#  hash: 7cf03e51879863831a337834a06ef342f33ab52b
+#  name: stg04
+#  symbols: config/R2VE01/stg04/symbols.txt
+#  splits: config/R2VE01/stg04/splits.txt
+#- object: files/stg05.rso
+#  kind: rso
+#  module_id: 6
+#  hash: cbd3e72146ca126f28bd71468e8721ae327ff0cc
+#  name: stg05
+#  symbols: config/R2VE01/stg05/symbols.txt
+#  splits: config/R2VE01/stg05/splits.txt
+#- object: files/stg06.rso
+#  kind: rso
+#  module_id: 7
+#  hash: 8bc227a30e3d3d28b27ac01fbcd902610a1855fb
+#  name: stg06
+#  symbols: config/R2VE01/stg06/symbols.txt
+#  splits: config/R2VE01/stg06/splits.txt
+#- object: files/stg07.rso
+#  kind: rso
+#  module_id: 8
+#  hash: 5eb7c15fc020013e97b3446576fd5c8d7e9ccacb
+#  name: stg07
+#  symbols: config/R2VE01/stg07/symbols.txt
+#  splits: config/R2VE01/stg07/splits.txt
