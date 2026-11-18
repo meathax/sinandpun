@@ -84,6 +84,16 @@ internal sealed class TranslationProjectConfig
                 ParseUInt32(relDto.LoadAddress, null, "inputs.rel.load_address"));
         }
 
+        ProjectRelInput? module = null;
+        if (dto.Inputs?.Module is { Path.Length: > 0 } moduleDto)
+        {
+            var moduleInput = ResolveInput(workspaceRoot, moduleDto, "inputs.module");
+            module = new ProjectRelInput(
+                moduleInput.Path,
+                moduleInput.Sha256,
+                ParseUInt32(moduleDto.LoadAddress, null, "inputs.module.load_address"));
+        }
+
         var entryPoints = (dto.Translation?.EntryPoints ?? [])
             .Select((value, index) => ParseUInt32(value, null, $"translation.entry_points[{index}]"))
             .ToArray();
@@ -385,6 +395,8 @@ internal sealed class TranslationProjectConfig
     {
         public BinaryInputDto? Dol { get; init; }
         public RelInputDto? Rel { get; init; }
+        // Pre-linked flat image (tools/rso_link.py output) placed at load_address.
+        public RelInputDto? Module { get; init; }
     }
 
     private class BinaryInputDto
@@ -470,7 +482,7 @@ internal sealed record ProjectIdentity(
 internal sealed record ProjectMemory(uint Base, int Size, uint? SdaBase = null, uint? Sda2Base = null);
 internal record ProjectBinaryInput(string Path, string? Sha256);
 internal sealed record ProjectRelInput(string Path, string? Sha256, uint LoadAddress) : ProjectBinaryInput(Path, Sha256);
-internal sealed record ProjectInputs(ProjectBinaryInput Dol, ProjectRelInput? Rel);
+internal sealed record ProjectInputs(ProjectBinaryInput Dol, ProjectRelInput? Rel, ProjectRelInput? Module = null);
 internal sealed record ProjectTranslation(
     IReadOnlyList<uint> EntryPoints,
     string? FunctionMapPath,
