@@ -84,7 +84,7 @@ PPC_NATIVE_OVERRIDE_VOID(801A8790, OS__SetCurrentContext_801a1e70, (uint32_t con
 // OSLoadContext (0x801A1F58): restores CPU state from a guest OSContext and jumps to SRR0 by hand,
 // since the real function's privileged mtspr/rfi can't be translated.
 
-extern "C" [[noreturn]] void OS__LoadContext_801a1f58(CpuContext* ctx)
+extern "C" void OS__LoadContext_801a1f58(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t guestContextAddr = cpu->gpr[3];
@@ -154,8 +154,8 @@ extern "C" [[noreturn]] void OS__LoadContext_801a1f58(CpuContext* ctx)
         // Equivalent to 'rfi': jump to SRR0 with MSR from SRR1.
         InvokeIndirectJump(srr0, cpu);
 
-        // If we get here, the function returned normally (shouldn't happen for context switches)
-        // But for safety, just return (the caller's state is now the loaded context)
+        // If we get here, the target returned normally (unexpected for a
+        // context switch, but the recomp's dispatch makes it survivable).
         RT_LOG(RT_TAG_OS) << "OS__LoadContext: WARNING - target returned, this is unexpected!" << std::endl;
 
     } catch (const ::Memory::AccessViolation& e) {
@@ -164,10 +164,10 @@ extern "C" [[noreturn]] void OS__LoadContext_801a1f58(CpuContext* ctx)
         std::abort();
     }
 
-    // This function should never return (rfi is a non-returning jump)
-    // If InvokeIndirectJump returns, we have a problem
-    std::fflush(stderr);
-    std::abort();
+    // A normal return from here means "stay on current execution": the
+    // SRR0=0 path above and a returned target both resume the caller, which
+    // is the cooperative continuation the scheduler expects.
+    return;
 }
 
 PPC_NATIVE_OVERRIDE_VOID(801A8880, OS__LoadContext_801a1f58, (CpuContext* ctx), (ctx));
