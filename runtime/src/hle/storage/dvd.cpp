@@ -8,12 +8,9 @@
 // RAM: the game brackets them with DCInvalidateRange (not a flush), so the GX
 // layer's caches must be notified explicitly that these bytes changed.
 extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
-#include "hle/storage/riivolution.h"
 #include "ppc_runtime.h"
-#include "recomp_mod_loader.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -497,8 +494,7 @@ static void WalkDirectory(const fs::path& root, bool recursive, bool announceErr
 }
 
 // Helper: Scan directory and build file index.
-// addNewFiles=false is Riivolution's create="false": only files already on
-// the disc may be replaced, nothing new is added.
+// addNewFiles=false only replaces files already on the disc and adds nothing new.
 static void ScanDirectory(const fs::path& root, const std::string& virtualPrefix,
                           bool recursive = true, bool addNewFiles = true) {
     std::error_code ec;
@@ -538,100 +534,12 @@ static void ScanDirectory(const fs::path& root, const std::string& virtualPrefix
     WalkDirectory(root, recursive, /*announceErrors=*/true, registerEntry);
 }
 
-// Riivolution <folder> without a disc path: replace disc files that share a
-// filename with a file in the external folder (Dolphin's
-// FindFilenameNodeInFST behavior, applied across the whole index).
-static void ApplyFolderByNameMapping(const RuntimeRiivolution::Mapping& mapping) {
-    // Snapshot the current index: matches by filename may only target entries
-    // that exist before this mapping, and RegisterFileEntry appends.
-    std::map<std::string, std::vector<std::string>> discPathsByName;
-    const size_t entryCount = g_fileEntries.size();
-    for (size_t i = 0; i < entryCount; ++i) {
-        const std::string& dvdPath = g_fileEntries[i].dvdPath;
-        const size_t lastSlash = dvdPath.rfind('/');
-        std::string name = lastSlash == std::string::npos ? dvdPath : dvdPath.substr(lastSlash + 1);
-        RuntimeHle::LowerInPlace(name);
-        if (!name.empty()) {
-            discPathsByName[name].push_back(dvdPath);
-        }
-    }
-
-    uint32_t replaced = 0;
-    const auto applyEntry = [&](const fs::directory_entry& entry) {
-        std::error_code entryEc;
-        if (!entry.is_regular_file(entryEc) || entryEc) {
-            return;
-        }
-        std::string name = HostPathText(entry.path().filename());
-        RuntimeHle::LowerInPlace(name);
-        const auto matches = discPathsByName.find(name);
-        if (matches == discPathsByName.end()) {
-            return;
-        }
-        const std::uintmax_t size = fs::file_size(entry.path(), entryEc);
-        if (entryEc) {
-            return;
-        }
-        for (const std::string& dvdPath : matches->second) {
-            RegisterFileEntry(dvdPath, entry.path(), static_cast<uint32_t>(size));
-            ++replaced;
-        }
-    };
-
-    WalkDirectory(mapping.hostPath, mapping.recursive, /*announceErrors=*/false, applyEntry);
-
-    RT_LOG(RT_TAG_DVD) << HostPathText(mapping.hostPath) << ": replaced " << replaced
-              << " disc file(s) by filename" << std::endl;
-}
-
-static void ScanOverlayRoot(const RuntimeRiivolution::Overlay& overlay) {
-    if (!overlay.patches) {
-        // Fallback for mod roots that mirror the disc filesystem directly (not a
-        // Riivolution pack, which wouldn't map anything useful this way).
-        RT_LOG(RT_TAG_DVD) << HostPathText(overlay.root)
-                  << ": no Riivolution XML found, treating the root as a disc-shaped overlay"
-                  << std::endl;
-        ScanDirectory(overlay.root, "/");
-        return;
-    }
-
-    for (const auto& mapping : overlay.patches->mappings) {
-        switch (mapping.kind) {
-        case RuntimeRiivolution::Mapping::Kind::File: {
-            if (!mapping.create && !DvdEntryExists(mapping.discPath)) {
-                break;
-            }
-            std::error_code ec;
-            const std::uintmax_t size = fs::file_size(mapping.hostPath, ec);
-            if (!ec) {
-                RegisterFileEntry(mapping.discPath, mapping.hostPath, static_cast<uint32_t>(size));
-            }
-            break;
-        }
-        case RuntimeRiivolution::Mapping::Kind::Folder:
-            ScanDirectory(mapping.hostPath, mapping.discPath, mapping.recursive, mapping.create);
-            break;
-        case RuntimeRiivolution::Mapping::Kind::FolderByName:
-            ApplyFolderByNameMapping(mapping);
-            break;
-        }
-    }
-}
-
 static fs::path ResolveDvdMappedHostPath(const std::string& dvdPath, const fs::path& fallbackHostPath) {
     const std::string normalized = NormalizePath(dvdPath);
     const auto it = g_pathToEntry.find(normalized);
     if (it != g_pathToEntry.end() && it->second >= 0 &&
         it->second < static_cast<int32_t>(g_fileEntries.size())) {
         return g_fileEntries[it->second].hostPath;
-    }
-
-    for (const auto& overlay : RuntimeRiivolution::Overlays()) {
-        const fs::path candidate = overlay.root / fs::path(normalized.substr(1));
-        std::error_code ec;
-        if (fs::is_regular_file(candidate, ec)) {
-            return candidate;
-        }
     }
 
     return fallbackHostPath;
@@ -644,8 +552,8 @@ static fs::path ResolveDvdMappedHostPath(const std::string& dvdPath, const fs::p
 
 static void BuildAndPublishRuntimeFst() {
     // Preserve real disc offsets where a runtime entry replaces a file from the
-    // extracted image. Created Riivolution paths have no physical disc extent;
-    // they are opened by their shared FST/SDK entry number instead.
+    // extracted image. Runtime-added paths have no physical disc extent; they are
+    // opened by their shared FST/SDK entry number instead.
     for (const FstFileEntry& fstFile : g_fstFiles) {
         const auto mapped = g_pathToEntry.find(NormalizePath(fstFile.dvdPath));
         if (mapped == g_pathToEntry.end() || mapped->second < 0 ||
@@ -740,7 +648,7 @@ static void BuildAndPublishRuntimeFst() {
               << image.bytes.size() << " bytes) at 0x" << std::hex << fstAddress
               << " inside the boot-time MEM2 reservation" << std::dec << std::endl;
 
-    if (const char* dumpPath = std::getenv("MKW_DUMP_FST")) {
+    if (const char* dumpPath = std::getenv("SIN_DUMP_FST")) {
         std::ofstream dump(dumpPath, std::ios::binary);
         dump.write(reinterpret_cast<const char*>(image.bytes.data()),
                    static_cast<std::streamsize>(image.bytes.size()));
@@ -805,7 +713,7 @@ extern "C" void DVDInit_8015EA1C()
     //      guest DVDInit initialises its own structures around this call.
 
     // 3. Set Low Memory Globals (The "Magic" Identification)
-    // This tells the game "Yes, I am Mario Kart Wii"
+    // This tells the game which disc is inserted.
     uint32_t diskHeader = 0x80000000;
     Memory::Write32(diskHeader + 0x00, CurrentDiscGameCode());
     Memory::Write16(diskHeader + 0x04, 0x3031);     // '01' (Maker)
@@ -818,26 +726,6 @@ extern "C" void DVDInit_8015EA1C()
 
     // Map "<dvd_root>/sys" -> "/sys/" (e.g. main.dol, bi2.bin)
     ScanDirectory(rootPath / "sys", "/sys/");
-
-    const auto& overlays = RuntimeRiivolution::Overlays();
-    if (overlays.empty() && RuntimeProduct::IsRetroRewind()) {
-        RT_LOG(RT_TAG_DVD) << "WARNING: no Retro Rewind overlay root was found. "
-                     "File replacements (menu archives, karts, drivers, courses) will not apply "
-                     "and the game will look and play like the unmodded disc. Set "
-                     "[paths] retro_rewind_root in Config.toml "
-                     "with the RetroRewind6 folder."
-                  << std::endl;
-    }
-    // RegisterFileEntry lets the last registration win, so apply the roots in
-    // reverse discovery order: the explicitly configured root outranks the mod
-    // manifest.
-    const size_t vanillaEntryCount = g_fileEntries.size();
-    for (auto overlay = overlays.rbegin(); overlay != overlays.rend(); ++overlay) {
-        ScanOverlayRoot(*overlay);
-    }
-    RT_LOG(RT_TAG_DVD) << "disc index: " << vanillaEntryCount << " disc file(s), "
-              << (g_fileEntries.size() - vanillaEntryCount) << " overlay registration(s) from "
-              << overlays.size() << " root(s)" << std::endl;
 
     // Load FST mapping so real files keep their physical disc extents.
     LoadFstIndex();

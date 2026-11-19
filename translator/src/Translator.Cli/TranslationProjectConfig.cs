@@ -107,11 +107,15 @@ internal sealed class TranslationProjectConfig
         var loopPollFunctions = (dto.Translation?.LoopPollFunctions ?? [])
             .Select((value, index) => ParseUInt32(value, null, $"translation.loop_poll_functions[{index}]"))
             .ToArray();
+        var entryHooks = (dto.Translation?.EntryHooks ?? [])
+            .Select((value, index) => ParseUInt32(value, null, $"translation.entry_hooks[{index}]"))
+            .ToArray();
         var translation = new ProjectTranslation(
             entryPoints,
             functionMapPath,
             dto.Translation?.AllowUnsupportedInstructions ?? false,
-            loopPollFunctions);
+            loopPollFunctions,
+            entryHooks);
 
         var abiDirectories = (dto.Runtime?.NativeAbiDirectories ?? [])
             .Select(pathValue => ResolvePath(workspaceRoot, pathValue))
@@ -429,6 +433,9 @@ internal sealed class TranslationProjectConfig
 
         /// <summary>Guest functions that get a runtime poll call at every basic-block entry (cooperative preemption of spin loops).</summary>
         public List<string>? LoopPollFunctions { get; init; }
+
+        /// <summary>Guest functions that call the runtime hook GuestEntryHook(address, ctx) on entry (observe indirectly reached functions).</summary>
+        public List<string>? EntryHooks { get; init; }
     }
 
     private sealed class FunctionMapDto
@@ -498,7 +505,8 @@ internal sealed record ProjectTranslation(
     IReadOnlyList<uint> EntryPoints,
     string? FunctionMapPath,
     bool AllowUnsupportedInstructions,
-    IReadOnlyList<uint>? LoopPollFunctions = null);
+    IReadOnlyList<uint>? LoopPollFunctions = null,
+    IReadOnlyList<uint>? EntryHooks = null);
 internal sealed record ProjectRuntime(
     IReadOnlyList<string> NativeAbiDirectories,
     string NativeRegistrationRoot,

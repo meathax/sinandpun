@@ -23,7 +23,6 @@
 #include "recomp_mod_loader.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 #include "timebase_contract.h"
 
 // Global flag to suppress SEH reporting during static constructor execution
@@ -323,96 +322,9 @@ void SystemBridge::Initialize() {
     // (__OSInIPL lives in .sbss and gates OSInit's NAND-boot assert block).
     SeedLowMemDefaults(memoryConfig);
 
-    // Constructors run before the main entry point, but they still require the
-    // PowerPC ABI environment. Keep using the persistent context here: the old
-    // AbiCallContext path implicitly selected and seeded it for every ctor.
+    // Static constructors are not run here: the guest's own __start (0x80006310) calls
+    // __init_cpp over the real .ctors table (0x802D5100) once execution begins.
     InitializePersistentCpuContext();
-    CpuContext& cpu = GetPersistentCpuContext();
-    cpu.gpr[1] = 0x81700000u;
-    CpuContextScope scope(&cpu);
-
-    g_suppressSehReporting = true;
-
-    // Run main DOL static constructors first
-    // These set up vtables and other critical infrastructure
-    RT_LOG(RT_TAG_RUNTIME) << "Running static constructors for main DOL..." << std::endl;
-
-    const uint32_t dolCtorStart = MKW_GADDR(80244DE0);
-    const uint32_t dolCtorEnd = MKW_GADDR(80244EA0);
-
-    int dolCount = 0;
-    for (uint32_t addr = dolCtorStart; addr < dolCtorEnd; addr += 4) {
-        uint32_t funcAddr = 0;
-        try {
-            funcAddr = Memory::Read32(addr);
-        } catch (...) {
-            continue;
-        }
-
-        if (funcAddr == 0 || funcAddr == 0xFFFFFFFF) continue;
-
-        if (TranslatedFunctionRegistry::FindByAddressPtr(funcAddr)) {
-            MkwJmpBuf jumpBuf;
-            g_sehJumpTarget = &jumpBuf;
-            if (MKW_SETJMP(jumpBuf) == 0) {
-                cpu.gpr[1] = 0x81700000u;
-                InvokeIndirectCpu(funcAddr, &cpu);
-                dolCount++;
-            } else {
-                RT_LOG(RT_TAG_RUNTIME) << "SEH Exception caught invoking DOL ctor 0x" << std::hex << funcAddr
-                          << " code=0x" << g_sehLastExceptionCode
-                          << " at=0x" << g_sehLastExceptionAddress;
-                if (g_sehLastExceptionCode == 0xC0000005u && g_sehLastAccessedAddress != 0) {
-                    std::cerr << " " << (g_sehLastAccessType ? "write" : "read")
-                              << "=0x" << g_sehLastAccessedAddress;
-                }
-                std::cerr << std::dec << " - skipping." << std::endl;
-            }
-            g_sehJumpTarget = nullptr;
-        }
-    }
-    RT_LOG(RT_TAG_RUNTIME) << "Executed " << dolCount << " main DOL static constructors." << std::endl;
-
-    // StaticR.rel ctors must be run manually since we aren't using OSLink
-    RT_LOG(RT_TAG_RUNTIME) << "Running static constructors for StaticR.rel..." << std::endl;
-
-    // Define range for StaticR.rel .ctors
-    const uint32_t ctorStart = MKW_GADDR(8088f400);
-    const uint32_t ctorEnd = MKW_GADDR(8088f704);
-
-    int count = 0;
-    for (uint32_t addr = ctorStart; addr < ctorEnd; addr += 4) {
-        uint32_t funcAddr = 0;
-        try {
-            funcAddr = Memory::Read32(addr);
-        } catch (...) {
-            continue;
-        }
-
-        if (funcAddr == 0 || funcAddr == 0xFFFFFFFF) continue;
-
-        if (TranslatedFunctionRegistry::FindByAddressPtr(funcAddr)) {
-            MkwJmpBuf jumpBuf;
-            g_sehJumpTarget = &jumpBuf;
-            if (MKW_SETJMP(jumpBuf) == 0) {
-                cpu.gpr[1] = 0x81700000u;
-                InvokeIndirectCpu(funcAddr, &cpu);
-                count++;
-            } else {
-                RT_LOG(RT_TAG_RUNTIME) << "SEH Exception caught invoking ctor 0x" << std::hex << funcAddr
-                          << " code=0x" << g_sehLastExceptionCode
-                          << " at=0x" << g_sehLastExceptionAddress;
-                if (g_sehLastExceptionCode == 0xC0000005u && g_sehLastAccessedAddress != 0) {
-                    std::cerr << " " << (g_sehLastAccessType ? "write" : "read")
-                              << "=0x" << g_sehLastAccessedAddress;
-                }
-                std::cerr << std::dec << " - skipping." << std::endl;
-            }
-            g_sehJumpTarget = nullptr;
-        }
-    }
-    g_suppressSehReporting = false;
-    RT_LOG(RT_TAG_RUNTIME) << "Executed " << count << " static constructors." << std::endl;
 }
 
 void SystemBridge::WriteGuestMemorySnapshot(std::ostream& os, const std::filesystem::path& mem1Path) {
@@ -499,7 +411,7 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     constexpr uint32_t kBusClockHz =
         static_cast<uint32_t>(TimeBaseContract::kBusClockHz);
     constexpr uint32_t kCpuClockHz = kBusClockHz * 3u;
-    // Mario Kart Wii boots under IOS36. These are the IOS kernel values that
+    // The game boots under IOS36. These are the IOS kernel values that
     // Dolphin exposes in low memory for IOS36 (VersionInfo.cpp). SDK helpers
     // read them through the 0xC0000000 MEM1 alias.
     constexpr uint32_t kIos36Version = 0x00240E18u;
@@ -517,9 +429,7 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     constexpr uint32_t kIosReservedSize = 0x20000u;
 
     // The boot code exposes the current disc ID in low memory before DVDInit.
-    // Retro Rewind reads the region byte directly from here while building its
-    // Retro-WFC payload URL, and OSGetAppGamename reads the app code mirrors
-    // at 0x80003180/0x80003194 while building NAS auth fields.
+    // OSGetAppGamename reads the app code mirrors at 0x80003180/0x80003194.
     entries.push_back({0x80000000u, ::GuestRegion::CurrentFacts().gameCode, "Disc game code"});
     entries.push_back({0x80000004u, 0x30310100u, "Disc maker/id"});  // 01 + disc 1
     // OSBootInfo header (revolution/os/OSBootInfo.h): BS2 fills magic, version,
@@ -533,9 +443,6 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     entries.push_back({0x8000004Cu, 0x00000001u, "OSBootInfo consoleType (retail)", true});
     entries.push_back({0x80003180u, ::GuestRegion::CurrentFacts().gameCode, "OS app game code"});
     entries.push_back({0x80003194u, ::GuestRegion::CurrentFacts().gameCode, "OS app gamename"});
-    if (RuntimeProduct::IsRetroRewind()) {
-        entries.push_back({0x800017D8u, 0x00000001u, "Retro Rewind recomp runtime marker", true});
-    }
 
     for (const auto& reservation : RecompMod::MemoryReservations()) {
         if (reservation.start >= kMem1ArenaLoDefault &&

@@ -1,6 +1,6 @@
 // ESP HLE Stubs
 // ESP functions communicate with /dev/es to get title information.
-// We stub these to return Mario Kart Wii's title ID directly.
+// We stub these to return the running game's title ID directly.
 
 #include "hle_stubs.h"
 #include "memory.h"
@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <cctype>
 
-static constexpr uint32_t MKW_TITLE_ID_HI = 0x00010004;
+static constexpr uint32_t kTitleIdHi = 0x00010004;
 
 static bool IsValidEspTitleCode(uint32_t code) {
     for (int shift = 24; shift >= 0; shift -= 8) {
@@ -75,7 +75,7 @@ extern "C" int32_t ESP_GetTitleId_stub(uint32_t outPtr)
     }
 
     // Write title ID (big-endian)
-    Memory::Write32(outPtr, MKW_TITLE_ID_HI);
+    Memory::Write32(outPtr, kTitleIdHi);
     Memory::Write32(outPtr + 4, CurrentTitleIdLo());
     return 0;
 }

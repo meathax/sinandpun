@@ -41,34 +41,6 @@ void CompleteAsync(CpuContext* ctx, uint32_t callback, int32_t result, uint32_t 
     SetIosReturn(ctx, 0);
 }
 
-// Shared network-fd body of IOS_IoctlAsync / IOS_IoctlvAsync. Returns false when
-// the fd is not ours, leaving the caller to take the NAND path. `start` performs
-// the matching Network_HLE_Start*Async call and `blockingFallback` the matching
-// synchronous ioctl; neither call signature is changed here.
-template <typename Start, typename BlockingFallback>
-bool TryDeferredNetworkAsync(CpuContext* ctx, uint32_t fd, uint32_t callback,
-                             uint32_t callbackArg, Start&& start,
-                             BlockingFallback&& blockingFallback)
-{
-    if (!Network_HLE_IsFd(fd)) {
-        return false;
-    }
-
-    const NetworkDeferredContract::StartOutcome deferred = start();
-    if (deferred.disposition == NetworkDeferredContract::StartDisposition::Started) {
-        SetIosReturn(ctx, 0);
-        return true;
-    }
-    if (deferred.disposition == NetworkDeferredContract::StartDisposition::ImmediateResult) {
-        CompleteAsync(ctx, callback, deferred.result, callbackArg);
-        return true;
-    }
-
-    const int32_t result = blockingFallback();
-    CompleteAsync(ctx, callback, result, callbackArg);
-    return true;
-}
-
 // IOS_ReadAsync and IOS_WriteAsync differ only in the NAND entry point they call.
 void IosBufferAsync(CpuContext* ctx, int32_t (*op)(uint32_t fd, uint32_t bufferPtr, uint32_t length))
 {
@@ -98,13 +70,8 @@ extern "C" void IOS_IoctlAsync_80194158(CpuContext* ctx)
     const uint32_t outLen = ctx->gpr[8];
     const uint32_t callback = ctx->gpr[9];
     const uint32_t callbackArg = ctx->gpr[10];
-    if (TryDeferredNetworkAsync(
-            ctx, fd, callback, callbackArg,
-            [&] {
-                return Network_HLE_StartIoctlAsync(fd, cmd, inBuf, inLen, outBuf, outLen,
-                                                   callback, callbackArg);
-            },
-            [&] { return Network_HLE_Ioctl(fd, cmd, inBuf, inLen, outBuf, outLen); })) {
+    if (Network_HLE_IsFd(fd)) {
+        CompleteAsync(ctx, callback, Network_HLE_Ioctl(fd, cmd, inBuf, inLen, outBuf, outLen), callbackArg);
         return;
     }
 
@@ -198,13 +165,8 @@ extern "C" void IOS_IoctlvAsync_HLE(CpuContext* ctx)
         }
         return;
     }
-    if (TryDeferredNetworkAsync(
-            ctx, fd, callback, callbackArg,
-            [&] {
-                return Network_HLE_StartIoctlvAsync(fd, cmd, numIn, numOut, vectorPtr,
-                                                    callback, callbackArg);
-            },
-            [&] { return Network_HLE_Ioctlv(fd, cmd, numIn, numOut, vectorPtr); })) {
+    if (Network_HLE_IsFd(fd)) {
+        CompleteAsync(ctx, callback, Network_HLE_Ioctlv(fd, cmd, numIn, numOut, vectorPtr), callbackArg);
         return;
     }
 

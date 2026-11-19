@@ -1,6 +1,6 @@
 #pragma once
 
-// Persisted options added with the tabbed settings menu that have no home in runtime_config.h:
+// Persisted options of the in-game options menu that have no home in runtime_config.h:
 //   [video]  scaling_filter = "bilinear" | "area"   (live)
 //            msaa = 1 | 2 | 4 | 8                   (restart; AuroraConfig.msaa)
 //            anisotropy = 1 | 2 | 4 | 8 | 16        (restart; AuroraConfig.maxTextureAnisotropy)

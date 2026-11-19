@@ -22,7 +22,6 @@
 #define RT_TAG_NET "net"
 #define RT_TAG_DVD "dvd"
 #define RT_TAG_NAND "nand"
-#define RT_TAG_RIIVOLUTION "riivolution"
 #define RT_TAG_VI "vi"
 #define RT_TAG_BT "bt"
 

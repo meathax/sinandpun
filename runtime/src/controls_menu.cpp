@@ -11,78 +11,40 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cfloat>
 #include <cmath>
+#include <cctype>
 #include <cstdio>
 #include <string>
+#include <utility>
 
 namespace controls_menu {
 namespace {
 
 using AimSettings::Action;
 using AimSettings::kActionCount;
+using game_ui::kChanged;
+using game_ui::kCommit;
+using game_ui::ListView;
 using Clock = std::chrono::steady_clock;
+
+constexpr std::array<const char*, kPageCount> kPageNames = {"Aiming", "Mapping", "Mouse & Keyboard"};
 
 struct Edit {
     bool dirty = false;  // push to the live settings
     bool save = false;   // write Config.toml
+    void Take(game_ui::Change change) {
+        if (change & kChanged) dirty = true;
+        if (change & kCommit) save = true;
+    }
 };
 
-void Tip(const char* help) {
-    if (help != nullptr && *help != '\0' && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
-}
-
-bool Slider(Edit& e, const char* label, float* v, float lo, float hi, const char* fmt, const char* help) {
-    ImGui::SetNextItemWidth(220.0f);
-    const bool changed = ImGui::SliderFloat(label, v, lo, hi, fmt);
-    if (changed) e.dirty = true;
-    if (ImGui::IsItemDeactivatedAfterEdit()) e.save = true;
-    Tip(help);
-    return changed;
-}
-
-bool Check(Edit& e, const char* label, bool* v, const char* help) {
-    const bool changed = ImGui::Checkbox(label, v);
-    if (changed) e.dirty = e.save = true;
-    Tip(help);
-    return changed;
-}
-
-template <size_t N>
-bool Combo(Edit& e, const char* label, int* index, const std::array<const char*, N>& items, const char* help) {
-    ImGui::SetNextItemWidth(260.0f);
-    const bool changed = ImGui::Combo(label, index, items.data(), static_cast<int>(N));
-    if (changed) e.dirty = e.save = true;
-    Tip(help);
-    return changed;
-}
-
-// Two presses within three seconds: a cheap confirmation that works with every input device.
-bool ConfirmButton(const char* label, const char* id) {
-    static std::string armedId;
-    static Clock::time_point armedAt{};
-    const bool armed = armedId == id && Clock::now() - armedAt < std::chrono::seconds(3);
-    const std::string text = armed ? std::string("Really reset? Press again##") + id : std::string(label) + "##" + id;
-    if (ImGui::Button(text.c_str())) {
-        if (armed) {
-            armedId.clear();
-            return true;
-        }
-        armedId = id;
-        armedAt = Clock::now();
-    }
-    return false;
-}
-
-// ---- Live preview ------------------------------------------------------------------------------
+// ---- Live preview ------------------------------------------------------------------------------------
 
 struct Preview {
     DualAnalog::PointerState pointer;
-    DualAnalog::StickFilter filter;
     InputMap::Arbiter arbiter;
     float lastMouseX = 0.f, lastMouseY = 0.f;
     bool haveMouse = false;
-    float mouseU = 0.5f, mouseV = 0.5f;
     float rawX = 0.f, rawY = 0.f;
 } g_preview;
 
@@ -103,7 +65,11 @@ void AimVector(const AimSettings::Settings& s, const InputMap::RawSample& raw, f
 
 // Mirrors the virtual remote's arbitration with the same pure functions; the real remote is input-blocked
 // while the menu is open, so the preview runs its own copy.
-InputMap::AimSource UpdatePreview(const AimSettings::Settings& s, bool precision) {
+InputMap::AimSource UpdatePreview(const AimSettings::Settings& s) {
+    static int lastFrame = -1;
+    const int frame = ImGui::GetFrameCount();
+    if (frame == lastFrame) return g_preview.arbiter.active;
+    lastFrame = frame;
     const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
     const InputMap::RawSample raw = AimInput::Sample();
     AimVector(s, raw, g_preview.rawX, g_preview.rawY);
@@ -133,361 +99,408 @@ InputMap::AimSource UpdatePreview(const AimSettings::Settings& s, bool precision
             g_preview.pointer.y = DualAnalog::SmoothToward(g_preview.pointer.y, ty, dt, s.mouse.smoothingMs);
         }
     } else {
-        DualAnalog::Advance(g_preview.pointer, s.aim, -g_preview.rawX, g_preview.rawY, dt, precision);
+        DualAnalog::Advance(g_preview.pointer, s.aim, -g_preview.rawX, g_preview.rawY, dt, false);
     }
     return g_preview.arbiter.active;
 }
 
-void DrawAimDevice(InputMap::AimSource source, bool mouseEnabled) {
+void DrawAimDevice(ListView& v, InputMap::AimSource source, bool mouseEnabled) {
     const bool mouse = source == InputMap::AimSource::Mouse && mouseEnabled;
-    ImGui::TextUnformatted("Active aim device:");
-    ImGui::SameLine();
-    ImGui::TextColored(mouse ? ImVec4(0.4f, 0.8f, 1.0f, 1.0f) : ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s",
-                       mouse ? "Mouse" : "Right stick / aim keys");
-    Tip("Whichever device started moving last drives the aim. Move the other one to take over.");
+    v.Info("Active aim device", mouse ? "Mouse" : "Right stick / aim keys", mouse ? IM_COL32(150, 220, 255, 255) : game_ui::kGood);
 }
 
-void DrawPreview(const AimSettings::Settings& s) {
-    const DualAnalog::Config& c = s.aim;
-    const float size = 120.0f;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
+void DrawPreview(ListView& v, const AimSettings::Settings& s) {
+    const DualAnalog::Config c = s.aim;
+    v.Block(150.0f, [&](ImDrawList* dl, ImVec2 mn, ImVec2 mx) {
+        const float S = game_ui::Scale();
+        const float size = 116.0f * S;
+        const float gap = 22.0f * S;
+        const ImU32 bg = IM_COL32(8, 30, 62, 150);
+        const ImU32 rim = IM_COL32(255, 255, 255, 110);
+        const float top = mn.y + 2.0f * S;
+        float x = mn.x + 4.0f * S;
 
-    // Stick box: deadzone and saturation rings, raw stick (white), shaped output (green).
-    const ImVec2 centre(origin.x + size * 0.5f, origin.y + size * 0.5f);
-    const float r = size * 0.5f - 2.0f;
-    dl->AddRect(origin, ImVec2(origin.x + size, origin.y + size), IM_COL32(120, 120, 120, 255));
-    dl->AddCircle(centre, r, IM_COL32(90, 90, 90, 255), 48);
-    dl->AddCircle(centre, r * c.radialDeadzone, IM_COL32(200, 120, 60, 255), 32);
-    dl->AddCircle(centre, r * c.outerSaturation, IM_COL32(60, 160, 200, 255), 48);
-    float ox = 0.f, oy = 0.f;
-    DualAnalog::ApplyDeadzoneAndCurve(c, g_preview.rawX, g_preview.rawY, ox, oy);
-    if (c.invertY) oy = -oy;
-    dl->AddCircleFilled(ImVec2(centre.x + g_preview.rawX * r, centre.y + g_preview.rawY * r), 3.0f,
-                        IM_COL32(255, 255, 255, 255));
-    dl->AddCircleFilled(ImVec2(centre.x + ox * r, centre.y + oy * r), 4.0f, IM_COL32(80, 255, 80, 255));
+        // Stick: deadzone and saturation rings, raw stick (white), shaped output (green).
+        const ImVec2 boxMin(x, top);
+        const ImVec2 boxMax(x + size, top + size);
+        dl->AddRectFilled(boxMin, boxMax, bg, 14.0f * S);
+        dl->AddRect(boxMin, boxMax, rim, 14.0f * S, 0, 1.5f);
+        const ImVec2 centre(x + size * 0.5f, top + size * 0.5f);
+        const float r = size * 0.5f - 8.0f * S;
+        dl->AddCircle(centre, r, IM_COL32(255, 255, 255, 70), 48);
+        dl->AddCircle(centre, r * c.radialDeadzone, IM_COL32(255, 168, 80, 230), 32, 1.5f);
+        dl->AddCircle(centre, r * c.outerSaturation, IM_COL32(110, 200, 255, 230), 48, 1.5f);
+        float ox = 0.f, oy = 0.f;
+        DualAnalog::ApplyDeadzoneAndCurve(c, g_preview.rawX, g_preview.rawY, ox, oy);
+        if (c.invertY) oy = -oy;
+        dl->AddCircleFilled(ImVec2(centre.x + g_preview.rawX * r, centre.y + g_preview.rawY * r), 4.0f * S, IM_COL32(255, 255, 255, 255));
+        dl->AddCircleFilled(ImVec2(centre.x + ox * r, centre.y + oy * r), 5.0f * S, IM_COL32(110, 255, 120, 255));
+        game_ui::Text(dl, 20.0f, ImVec2(x + 6.0f * S, boxMax.y + 2.0f * S), game_ui::kTextDim, "Stick", game_ui::Outline::Thin);
+        x += size + gap;
 
-    // Pointer box (the picture area): where the reticle ends up.
-    const ImVec2 box(origin.x + size + 16.0f, origin.y);
-    const float boxW = 160.0f, boxH = 120.0f;
-    dl->AddRectFilled(box, ImVec2(box.x + boxW, box.y + boxH), IM_COL32(20, 20, 30, 255));
-    dl->AddRect(box, ImVec2(box.x + boxW, box.y + boxH), IM_COL32(120, 120, 120, 255));
-    const float hx = (c.cameraMaxX - c.cameraMinX) * 0.5f * s.mouse.rangeX;
-    const float hy = (c.cameraMaxY - c.cameraMinY) * 0.5f * s.mouse.rangeY;
-    const float u = std::clamp(0.5f - (g_preview.pointer.x - DualAnalog::CenterX(c)) / (2.0f * hx), 0.f, 1.f);
-    const float v = std::clamp(0.5f + (g_preview.pointer.y - DualAnalog::CenterY(c)) / (2.0f * hy), 0.f, 1.f);
-    const ImVec2 p(box.x + u * boxW, box.y + v * boxH);
-    dl->AddLine(ImVec2(p.x - 6, p.y), ImVec2(p.x + 6, p.y), IM_COL32(255, 80, 80, 255));
-    dl->AddLine(ImVec2(p.x, p.y - 6), ImVec2(p.x, p.y + 6), IM_COL32(255, 80, 80, 255));
+        // Pointer box (the picture area): where the reticle ends up.
+        const float boxW = size * 1.35f;
+        const ImVec2 pMin(x, top);
+        const ImVec2 pMax(x + boxW, top + size);
+        dl->AddRectFilled(pMin, pMax, IM_COL32(6, 20, 44, 190), 14.0f * S);
+        dl->AddRect(pMin, pMax, rim, 14.0f * S, 0, 1.5f);
+        const float hx = (c.cameraMaxX - c.cameraMinX) * 0.5f * s.mouse.rangeX;
+        const float hy = (c.cameraMaxY - c.cameraMinY) * 0.5f * s.mouse.rangeY;
+        const float u = std::clamp(0.5f - (g_preview.pointer.x - DualAnalog::CenterX(c)) / (2.0f * hx), 0.f, 1.f);
+        const float vv = std::clamp(0.5f + (g_preview.pointer.y - DualAnalog::CenterY(c)) / (2.0f * hy), 0.f, 1.f);
+        const ImVec2 p(pMin.x + 10.0f * S + u * (boxW - 20.0f * S), pMin.y + 10.0f * S + vv * (size - 20.0f * S));
+        const float arm = 9.0f * S;
+        dl->AddCircle(p, arm * 0.8f, IM_COL32(255, 96, 96, 255), 20, 2.0f);
+        dl->AddLine(ImVec2(p.x - arm * 1.5f, p.y), ImVec2(p.x + arm * 1.5f, p.y), IM_COL32(255, 96, 96, 255), 1.5f);
+        dl->AddLine(ImVec2(p.x, p.y - arm * 1.5f), ImVec2(p.x, p.y + arm * 1.5f), IM_COL32(255, 96, 96, 255), 1.5f);
+        game_ui::Text(dl, 20.0f, ImVec2(pMin.x + 6.0f * S, pMax.y + 2.0f * S), game_ui::kTextDim, "Reticle", game_ui::Outline::Thin);
+        x += boxW + gap;
 
-    // Response curve plot with the current deflection marked.
-    const ImVec2 plot(box.x + boxW + 16.0f, origin.y);
-    const float plotW = 120.0f, plotH = 120.0f;
-    dl->AddRect(plot, ImVec2(plot.x + plotW, plot.y + plotH), IM_COL32(120, 120, 120, 255));
-    ImVec2 previous(plot.x, plot.y + plotH);
-    for (int i = 1; i <= 64; ++i) {
-        const float in = static_cast<float>(i) / 64.0f;
-        const float out = DualAnalog::EvalCurve(c, DualAnalog::RemapMagnitude(c, in));
-        const ImVec2 next(plot.x + in * plotW, plot.y + plotH - out * plotH);
-        dl->AddLine(previous, next, IM_COL32(255, 220, 80, 255), 1.5f);
-        previous = next;
-    }
-    const float mag = std::min(1.0f, std::sqrt(g_preview.rawX * g_preview.rawX + g_preview.rawY * g_preview.rawY));
-    const float markY = DualAnalog::EvalCurve(c, DualAnalog::RemapMagnitude(c, mag));
-    dl->AddCircleFilled(ImVec2(plot.x + mag * plotW, plot.y + plotH - markY * plotH), 3.0f, IM_COL32(80, 255, 80, 255));
+        // Response curve with the current deflection marked.
+        const ImVec2 cMin(x, top);
+        const ImVec2 cMax(x + size, top + size);
+        dl->AddRectFilled(cMin, cMax, bg, 14.0f * S);
+        dl->AddRect(cMin, cMax, rim, 14.0f * S, 0, 1.5f);
+        const float inset = 10.0f * S;
+        const float pw = size - inset * 2.0f;
+        ImVec2 previous(cMin.x + inset, cMax.y - inset);
+        for (int i = 1; i <= 64; ++i) {
+            const float in = static_cast<float>(i) / 64.0f;
+            const float out = DualAnalog::EvalCurve(c, DualAnalog::RemapMagnitude(c, in));
+            const ImVec2 next(cMin.x + inset + in * pw, cMax.y - inset - out * pw);
+            dl->AddLine(previous, next, IM_COL32(255, 226, 90, 255), 2.0f);
+            previous = next;
+        }
+        const float mag = std::min(1.0f, std::sqrt(g_preview.rawX * g_preview.rawX + g_preview.rawY * g_preview.rawY));
+        const float markY = DualAnalog::EvalCurve(c, DualAnalog::RemapMagnitude(c, mag));
+        dl->AddCircleFilled(ImVec2(cMin.x + inset + mag * pw, cMax.y - inset - markY * pw), 5.0f * S, IM_COL32(110, 255, 120, 255));
+        game_ui::Text(dl, 20.0f, ImVec2(cMin.x + 6.0f * S, cMax.y + 2.0f * S), game_ui::kTextDim, "Response", game_ui::Outline::Thin);
+        x += size + gap;
 
-    ImGui::Dummy(ImVec2(size + boxW + plotW + 32.0f, size));
-    ImGui::TextDisabled("Stick (raw white, shaped green)   Reticle position   Response curve");
+        // Legend
+        const float lx = x;
+        const char* lines[] = {"White: raw stick", "Green: shaped", "Orange: deadzone", "Blue: full deflection"};
+        const ImU32 colours[] = {IM_COL32(255, 255, 255, 255), IM_COL32(110, 255, 120, 255), IM_COL32(255, 168, 80, 255),
+                                 IM_COL32(110, 200, 255, 255)};
+        float ly = top + 8.0f * S;
+        for (int i = 0; i < 4; ++i) {
+            if (lx + 150.0f * S > mx.x) break;
+            dl->AddCircleFilled(ImVec2(lx + 6.0f * S, ly + 10.0f * S), 5.0f * S, colours[i], 12);
+            game_ui::Text(dl, 20.0f, ImVec2(lx + 20.0f * S, ly), game_ui::kTextNormal, lines[i], game_ui::Outline::Thin);
+            ly += 30.0f * S;
+        }
+    });
 }
 
-// ---- Pages -------------------------------------------------------------------------------------
+// ---- Pages -------------------------------------------------------------------------------------------
 
-void DrawAiming(AimSettings::Settings& s, Edit& e) {
+void BuildAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
     DualAnalog::Config& c = s.aim;
-    const InputMap::AimSource source = UpdatePreview(s, false);
-    DrawAimDevice(source, s.mouse.enabled);
-    DrawPreview(s);
+    const DualAnalog::Config d{};
+    const InputMap::AimSource source = UpdatePreview(s);
+    v.Section("Live preview");
+    DrawAimDevice(v, source, s.mouse.enabled);
+    DrawPreview(v, s);
 
-    ImGui::SeparatorText("Right stick");
+    v.Section("Right stick");
     int dz = static_cast<int>(c.deadzoneMode);
-    if (Combo(e, "Deadzone type", &dz, DualAnalog::kDeadzoneModeLabels,
-              "Scaled radial: no jump at the edge (recommended).\nRadial: hard cut.\nAxial: each axis on its own.")) {
+    if (auto r = v.Choice("Deadzone type", &dz, DualAnalog::kDeadzoneModeLabels.data(), DualAnalog::kDeadzoneModeCount,
+                          static_cast<int>(d.deadzoneMode),
+                          "Scaled radial: no jump at the edge. Radial: hard cut. Axial: each axis on its own.", 0, "Scaled radial")) {
         c.deadzoneMode = static_cast<DualAnalog::DeadzoneMode>(dz);
+        e.Take(r);
     }
-    Slider(e, "Inner deadzone", &c.radialDeadzone, 0.0f, 0.5f, "%.2f", "Stick travel ignored around the centre. Default 0.12.");
-    Slider(e, "Outer saturation", &c.outerSaturation, 0.5f, 1.0f, "%.2f",
-           "Deflection that counts as full. Lower it if your stick never reaches 1. Default 0.95.");
+    e.Take(v.Slider("Inner deadzone", &c.radialDeadzone, 0.0f, 0.5f, 0.01f, "%.2f", d.radialDeadzone,
+                    "Stick travel ignored around the centre."));
+    e.Take(v.Slider("Outer saturation", &c.outerSaturation, 0.5f, 1.0f, 0.01f, "%.2f", d.outerSaturation,
+                    "Deflection that counts as full. Lower it if your stick never reaches 1."));
     int curve = static_cast<int>(c.curve);
-    if (Combo(e, "Response curve", &curve, DualAnalog::kCurveLabels, "How deflection turns into speed. Default Linear.")) {
+    if (auto r = v.Choice("Response curve", &curve, DualAnalog::kCurveLabels.data(), DualAnalog::kCurveCount,
+                          static_cast<int>(d.curve), "How deflection turns into speed.")) {
         c.curve = static_cast<DualAnalog::Curve>(curve);
+        e.Take(r);
     }
     if (c.curve == DualAnalog::Curve::Power) {
-        Slider(e, "Exponent", &c.curveExponent, 0.3f, 4.0f, "%.2f", "Below 1 = faster near the centre, above 1 = finer control. Default 1.6.");
+        e.Take(v.Slider("Exponent", &c.curveExponent, 0.3f, 4.0f, 0.05f, "%.2f", d.curveExponent,
+                        "Below 1 = faster near the centre, above 1 = finer control.", game_ui::kRowIndent));
     } else if (c.curve == DualAnalog::Curve::DualZone) {
-        Slider(e, "Precision zone size", &c.dualZoneSplit, 0.1f, 0.9f, "%.2f", "Deflection where the precision zone ends. Default 0.50.");
-        Slider(e, "Precision zone output", &c.dualZoneOutput, 0.05f, 0.9f, "%.2f", "Output reached at the end of the zone. Default 0.25.");
+        e.Take(v.Slider("Precision zone size", &c.dualZoneSplit, 0.1f, 0.9f, 0.01f, "%.2f", d.dualZoneSplit,
+                        "Deflection where the precision zone ends.", game_ui::kRowIndent));
+        e.Take(v.Slider("Precision zone output", &c.dualZoneOutput, 0.05f, 0.9f, 0.01f, "%.2f", d.dualZoneOutput,
+                        "Output reached at the end of the zone.", game_ui::kRowIndent));
     }
-    Slider(e, "Sensitivity X", &c.sensitivityX, 0.1f, 4.0f, "%.2f", "Horizontal gain. Default 1.00.");
-    Slider(e, "Sensitivity Y", &c.sensitivityY, 0.1f, 4.0f, "%.2f", "Vertical gain. Default 1.00.");
-    Check(e, "Invert Y", &c.invertY, "Push up to aim down.");
-    Slider(e, "Smoothing", &c.smoothingMs, 0.0f, 150.0f, "%.0f ms", "Low-pass filter on the stick. 0 = off.");
-    Slider(e, "Precision scale", &c.precisionScale, 0.1f, 1.0f, "%.2f", "Speed factor while the Precision control is held. Default 0.35.");
+    e.Take(v.Slider("Sensitivity X", &c.sensitivityX, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityX, "Horizontal gain."));
+    e.Take(v.Slider("Sensitivity Y", &c.sensitivityY, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityY, "Vertical gain."));
+    e.Take(v.Toggle("Invert Y", &c.invertY, d.invertY, "Push up to aim down."));
+    e.Take(v.Slider("Smoothing", &c.smoothingMs, 0.0f, 150.0f, 5.0f, "%.0f ms", d.smoothingMs, "Low-pass filter on the stick. 0 = off."));
+    e.Take(v.Slider("Precision scale", &c.precisionScale, 0.1f, 1.0f, 0.05f, "%.2f", d.precisionScale,
+                    "Speed factor while the Precision control is held."));
 
-    ImGui::SeparatorText("Pointer (Wii Remote scheme)");
+    v.Section("Pointer (Wii Remote scheme)");
     int mode = c.absoluteMode ? 1 : 0;
-    ImGui::SetNextItemWidth(260.0f);
-    if (ImGui::Combo("Stick pointer mode", &mode, "Velocity (like a mouse)\0Absolute (stick = position)\0")) {
+    static const char* const kModes[] = {"Velocity", "Absolute"};
+    if (auto r = v.Choice("Stick pointer mode", &mode, kModes, 2, 0,
+                          "Velocity: deflection sets speed, release holds the position, like a mouse. Absolute: stick position is pointer position.")) {
         c.absoluteMode = mode == 1;
-        e.dirty = e.save = true;
+        e.Take(r);
     }
-    Tip("Velocity: deflection sets speed, release holds the position. Absolute: stick position is pointer position.");
     float maxSpeed = c.maxSpeedX;
-    if (Slider(e, "Max speed", &maxSpeed, 100.0f, 3000.0f, "%.0f px/s", "Camera pixels per second at full deflection. Default 900.")) {
+    if (auto r = v.Slider("Max speed", &maxSpeed, 100.0f, 3000.0f, 50.0f, "%.0f px/s", d.maxSpeedX,
+                          "Camera pixels per second at full deflection.")) {
         c.maxSpeedX = maxSpeed;
         c.maxSpeedY = maxSpeed * (700.0f / 900.0f);
+        e.Take(r);
     }
-    Slider(e, "Speed cap", &c.speedCap, 200.0f, 4000.0f, "%.0f px/s", "Upper limit after ramp-up and edge boost. Default 1600.");
+    e.Take(v.Slider("Speed cap", &c.speedCap, 200.0f, 4000.0f, 50.0f, "%.0f px/s", d.speedCap, "Upper limit after ramp-up and edge boost."));
     float rampMs = c.rampSeconds * 1000.0f;
-    if (Slider(e, "Ramp-up time", &rampMs, 0.0f, 500.0f, "%.0f ms", "Slow start after leaving the deadzone. Default 120.")) {
+    if (auto r = v.Slider("Ramp-up time", &rampMs, 0.0f, 500.0f, 10.0f, "%.0f ms", d.rampSeconds * 1000.0f,
+                          "Slow start after leaving the deadzone.")) {
         c.rampSeconds = rampMs * 0.001f;
+        e.Take(r);
     }
-    Slider(e, "Edge boost", &c.edgeBoost, 1.0f, 3.0f, "x%.2f", "Extra speed while the stick is held at the edge. 1 = off.");
+    e.Take(v.Slider("Edge boost", &c.edgeBoost, 1.0f, 3.0f, 0.05f, "x%.2f", d.edgeBoost, "Extra speed while the stick is held at the edge. 1 = off."));
     float edgeMs = c.edgeAccelSeconds * 1000.0f;
-    if (Slider(e, "Edge boost time", &edgeMs, 50.0f, 2000.0f, "%.0f ms", "How quickly the boost builds. Default 400.")) {
+    if (auto r = v.Slider("Edge boost time", &edgeMs, 50.0f, 2000.0f, 25.0f, "%.0f ms", d.edgeAccelSeconds * 1000.0f,
+                          "How quickly the boost builds.")) {
         c.edgeAccelSeconds = edgeMs * 0.001f;
+        e.Take(r);
     }
-    Check(e, "Recenter on release", &c.recenterOnRelease, "Spring the pointer back to the centre when the stick is released.");
+    e.Take(v.Toggle("Recenter on release", &c.recenterOnRelease, d.recenterOnRelease,
+                    "Spring the pointer back to the centre when the stick is released."));
     if (c.recenterOnRelease) {
         float springMs = c.recenterSeconds * 1000.0f;
-        if (Slider(e, "Recenter time", &springMs, 30.0f, 2000.0f, "%.0f ms", "Default 250.")) {
+        if (auto r = v.Slider("Recenter time", &springMs, 30.0f, 2000.0f, 10.0f, "%.0f ms", d.recenterSeconds * 1000.0f,
+                              "How fast the pointer springs back.", game_ui::kRowIndent)) {
             c.recenterSeconds = springMs * 0.001f;
+            e.Take(r);
         }
     }
 
-    ImGui::SeparatorText("Left stick");
-    Slider(e, "Move deadzone", &c.leftDeadzone, 0.0f, 0.5f, "%.2f", "Default 0.12.");
+    v.Section("Left stick");
+    e.Take(v.Slider("Move deadzone", &c.leftDeadzone, 0.0f, 0.5f, 0.01f, "%.2f", d.leftDeadzone, "Left stick travel ignored around the centre."));
 }
 
+// Position-based pad names: the Classic Controller's A / B sit in the east / south positions, which are the
+// Xbox B / A buttons, so letters would mislead.
 std::string FriendlyName(const InputMap::Binding& b) {
-    std::string name = InputMap::Format(b);
+    const std::string name = InputMap::Format(b);
     if (name.empty()) return "-";
     const size_t colon = name.find(':');
-    std::string kind = name.substr(0, colon);
+    if (colon == std::string::npos) return "-";
+    const std::string kind = name.substr(0, colon);
     std::string rest = name.substr(colon + 1);
+    if (rest.empty()) return "-";
+    if (kind == "pad") {
+        static const std::pair<const char*, const char*> kPadNames[] = {
+            {"south", "Bottom face"}, {"east", "Right face"}, {"west", "Left face"}, {"north", "Top face"},
+            {"left_shoulder", "LB / L1"}, {"right_shoulder", "RB / R1"}, {"left_trigger", "LT / L2"},
+            {"right_trigger", "RT / R2"}, {"start", "Start"}, {"back", "Back"}, {"guide", "Guide"},
+            {"left_stick", "L3 (click)"}, {"right_stick", "R3 (click)"}, {"dpad_up", "D-pad up"},
+            {"dpad_down", "D-pad down"}, {"dpad_left", "D-pad left"}, {"dpad_right", "D-pad right"},
+        };
+        for (const auto& entry : kPadNames) {
+            if (rest == entry.first) return entry.second;
+        }
+    }
     std::replace(rest.begin(), rest.end(), '_', ' ');
-    kind = kind == "pad" ? "Pad" : kind == "mouse" ? "Mouse" : "Key";
-    return kind + " " + rest;
+    if (!rest.empty()) rest[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(rest[0])));
+    return kind == "mouse" ? "Mouse " + rest : rest;
 }
-
 struct CaptureUi {
     bool open = false;
-    bool openPopup = false;
     size_t action = 0;
     size_t slot = 0;
     InputMap::Profile profile = InputMap::Profile::Gamepad;
     Clock::time_point deadline{};
+    game_ui::ModalState modal;
 } g_capture;
 
 std::string g_status;
+int g_profileIndex = 0;
 
-void ApplyCapture(AimSettings::Settings& s, Edit& e, const InputMap::Binding& binding) {
+void ApplyCapture(const InputMap::Binding& binding) {
+    AimSettings::Settings s = AimSettings::Get();
     auto& table = s.bindings.For(g_capture.profile);
     const auto swapped = InputMap::AssignSwap(table, g_capture.action, g_capture.slot, binding);
     g_status = swapped ? std::string("Swapped with \"") + AimSettings::kActions[*swapped].label + "\"" : std::string();
-    e.dirty = e.save = true;
+    AimSettings::Set(s);
+    AimSettings::Save();
 }
 
-void DrawCapturePopup(AimSettings::Settings& s, Edit& e) {
-    if (g_capture.openPopup) {
-        ImGui::OpenPopup("Bind input");
-        g_capture.openPopup = false;
-    }
-    bool open = g_capture.open;
-    if (!ImGui::BeginPopupModal("Bind input", &open, ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (g_capture.open) {
-            g_capture.open = false;
-            AimInput::CancelCapture();
-        }
-        return;
-    }
-    const AimSettings::ActionInfo& info = AimSettings::kActions[g_capture.action];
-    const bool pad = g_capture.profile == InputMap::Profile::Gamepad;
-    ImGui::Text("Bind: %s", info.label);
-    ImGui::TextUnformatted(pad ? "Press a gamepad button, pull a trigger or push a stick."
-                               : "Press a key, click a mouse button or scroll the wheel.");
-    ImGui::TextUnformatted(pad ? "Release everything first." : "Esc cancels, Delete clears.");
-    const float remaining = std::chrono::duration<float>(g_capture.deadline - Clock::now()).count();
-    ImGui::Text("Cancels in %d s", std::max(0, static_cast<int>(std::ceil(remaining))));
-    const bool clear = ImGui::Button("Clear binding");
-    ImGui::SameLine();
-    const bool cancel = ImGui::Button("Cancel");
-    const bool overUi = ImGui::IsAnyItemHovered();
-    InputMap::Binding none;
-    if (g_capture.open) {
-        if (clear) {
-            ApplyCapture(s, e, none);
-            g_capture.open = false;
-            AimInput::CancelCapture();
-        } else if (cancel || !open || remaining <= 0.0f) {
-            g_capture.open = false;
-            AimInput::CancelCapture();
-        } else {
-            const AimInput::CaptureResult result = AimInput::PollCapture(overUi);
-            if (result.state == AimInput::CaptureState::Done) {
-                ApplyCapture(s, e, result.binding);
-                g_capture.open = false;
-            } else if (result.state == AimInput::CaptureState::Cleared) {
-                ApplyCapture(s, e, none);
-                g_capture.open = false;
-            } else if (result.state == AimInput::CaptureState::Cancelled) {
-                g_capture.open = false;
-            }
-        }
-    }
-    if (!g_capture.open) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-}
-
-void DrawMapping(AimSettings::Settings& s, Edit& e) {
-    static int profileIndex = 0;
-    ImGui::TextUnformatted("Profile:");
-    ImGui::SameLine();
-    ImGui::RadioButton("Gamepad", &profileIndex, 0);
-    ImGui::SameLine();
-    ImGui::RadioButton("Keyboard and mouse", &profileIndex, 1);
-    const InputMap::Profile profile = profileIndex == 0 ? InputMap::Profile::Gamepad : InputMap::Profile::KeyboardMouse;
-    ImGui::TextDisabled("Click a slot to rebind, right-click to clear. Up to three bindings per action.");
-    ImGui::TextDisabled("Names follow Sin & Punishment's Classic Controller layout; the Wii Remote scheme maps them to B/A/C/Z.");
-
+void BuildMapping(ListView& v, AimSettings::Settings& s, Edit& e) {
+    static const char* const kProfiles[] = {"Gamepad", "Keyboard and mouse"};
+    v.Section("Profile");
+    v.Choice("Bindings for", &g_profileIndex, kProfiles, 2, 0,
+             "Pick the device to edit. Up to three bindings per action. A or click rebinds the selected slot, X or right-click clears it.");
+    const InputMap::Profile profile = g_profileIndex == 0 ? InputMap::Profile::Gamepad : InputMap::Profile::KeyboardMouse;
     auto& table = s.bindings.For(profile);
     if (const size_t conflicts = InputMap::CountConflicts(table)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "%zu duplicate binding(s) in this profile.", conflicts);
+        v.Info("Conflicts", std::to_string(conflicts) + " duplicate binding(s) in this profile", game_ui::kWarn);
     }
-    if (!g_status.empty()) ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", g_status.c_str());
+    if (!g_status.empty()) v.Info("Last change", g_status, game_ui::kWarn);
 
-    if (ImGui::BeginTable("##bindings", 1 + static_cast<int>(InputMap::kSlots),
-                          ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-        const char* group = "";
-        for (size_t a = 0; a < kActionCount; ++a) {
-            const AimSettings::ActionInfo& info = AimSettings::kActions[a];
-            if (std::string(info.group) != group) {
-                group = info.group;
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextDisabled("%s", group);
-            }
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(info.label);
-            Tip(info.detail);
-            for (size_t slot = 0; slot < InputMap::kSlots; ++slot) {
-                ImGui::TableSetColumnIndex(1 + static_cast<int>(slot));
-                ImGui::PushID(static_cast<int>(a * 8 + slot));
-                const std::string label = FriendlyName(table[a][slot]) + "###slot";
-                if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
-                    g_capture = {true, true, a, slot, profile, Clock::now() + std::chrono::seconds(8)};
-                    AimInput::BeginCapture(profile);
-                }
-                if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                    InputMap::AssignSwap(table, a, slot, InputMap::Binding{});
-                    g_status.clear();
-                    e.dirty = e.save = true;
-                }
-                ImGui::PopID();
-            }
+    const char* group = "";
+    for (size_t a = 0; a < kActionCount; ++a) {
+        const AimSettings::ActionInfo& info = AimSettings::kActions[a];
+        if (std::string(info.group) != group) {
+            group = info.group;
+            v.Section(group);
         }
-        ImGui::EndTable();
+        std::array<std::string, 3> names;
+        for (size_t slot = 0; slot < InputMap::kSlots; ++slot) names[slot] = FriendlyName(table[a][slot]);
+        int cleared = -1;
+        const int fired = v.Bindings(info.label, names, info.detail[0] != '\0' ? info.detail : "A rebinds the selected slot, X clears it.", &cleared);
+        if (fired >= 0) {
+            g_capture.open = true;
+            g_capture.action = a;
+            g_capture.slot = static_cast<size_t>(fired);
+            g_capture.profile = profile;
+            g_capture.deadline = Clock::now() + std::chrono::seconds(8);
+            g_capture.modal = game_ui::ModalState{};
+            AimInput::BeginCapture(profile);
+        }
+        if (cleared >= 0) {
+            InputMap::AssignSwap(table, a, static_cast<size_t>(cleared), InputMap::Binding{});
+            g_status.clear();
+            e.dirty = e.save = true;
+        }
     }
-    DrawCapturePopup(s, e);
-
-    if (ConfirmButton("Reset this profile to defaults", "resetprofile")) {
-        const AimSettings::Settings defaults = AimSettings::DefaultBindings();
-        s.bindings.For(profile) = defaults.bindings.For(profile);
-        g_status.clear();
-        e.dirty = e.save = true;
+    v.Section("Reset");
+    if (v.Action("Reset this profile to defaults", "Reset...", "Restores every binding of the selected device profile.")) {
+        game_ui::RequestConfirm("Reset bindings", "Restore the default bindings for this profile?", "Reset", [profile] {
+            AimSettings::Settings cur = AimSettings::Get();
+            const AimSettings::Settings defaults = AimSettings::DefaultBindings();
+            cur.bindings.For(profile) = defaults.bindings.For(profile);
+            g_status.clear();
+            AimSettings::Set(cur);
+            AimSettings::Save();
+        });
     }
 }
 
-void DrawMouseKeyboard(AimSettings::Settings& s, Edit& e) {
+void BuildMouseKeyboard(ListView& v, AimSettings::Settings& s, Edit& e) {
     AimSettings::MouseConfig& m = s.mouse;
-    const InputMap::AimSource source = UpdatePreview(s, false);
-    DrawAimDevice(source, m.enabled);
-    Check(e, "Mouse aims", &m.enabled, "Let the mouse drive the reticle. The last device to move wins.");
+    const AimSettings::MouseConfig d{};
+    const InputMap::AimSource source = UpdatePreview(s);
+    v.Section("Mouse aiming");
+    DrawAimDevice(v, source, m.enabled);
+    e.Take(v.Toggle("Mouse aims", &m.enabled, d.enabled, "Let the mouse drive the reticle. The last device to move wins."));
     int mode = m.raw ? 1 : 0;
-    ImGui::SetNextItemWidth(260.0f);
-    if (ImGui::Combo("Mouse mode", &mode, "Absolute (cursor position)\0Relative (captured, raw motion)\0")) {
+    static const char* const kModes[] = {"Absolute", "Relative"};
+    if (auto r = v.Choice("Mouse mode", &mode, kModes, 2, 0,
+                          "Absolute: the reticle sits under the OS cursor (Wii Remote scheme). Relative: the cursor is captured and hidden; motion moves the reticle.")) {
         m.raw = mode == 1;
-        e.dirty = e.save = true;
+        e.Take(r);
     }
-    Tip("Absolute: the reticle sits under the OS cursor (Wii Remote scheme).\n"
-        "Relative: the cursor is captured and hidden; motion moves the reticle.");
     if (m.raw) {
-        Slider(e, "Sensitivity", &m.sensitivity, 0.1f, 4.0f, "%.2f", "Camera pixels per mouse count. Default 0.60.");
+        e.Take(v.Slider("Sensitivity", &m.sensitivity, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivity, "Camera pixels per mouse count.", game_ui::kRowIndent));
     } else {
-        Slider(e, "Smoothing", &m.smoothingMs, 0.0f, 150.0f, "%.0f ms", "0 applies the latest mouse sample directly.");
-        Slider(e, "Calibration X", &m.rangeX, 0.5f, 1.5f, "%.2f", "Scales horizontal reach so the reticle lines up with the cursor. Default 1.00.");
-        Slider(e, "Calibration Y", &m.rangeY, 0.5f, 1.5f, "%.2f", "Scales vertical reach. Default 1.00.");
+        e.Take(v.Slider("Smoothing", &m.smoothingMs, 0.0f, 150.0f, 5.0f, "%.0f ms", d.smoothingMs, "0 applies the latest mouse sample directly.", game_ui::kRowIndent));
+        e.Take(v.Slider("Calibration X", &m.rangeX, 0.5f, 1.5f, 0.01f, "%.2f", d.rangeX,
+                        "Scales horizontal reach so the reticle lines up with the cursor.", game_ui::kRowIndent));
+        e.Take(v.Slider("Calibration Y", &m.rangeY, 0.5f, 1.5f, 0.01f, "%.2f", d.rangeY, "Scales vertical reach.", game_ui::kRowIndent));
     }
-    Slider(e, "Classic scheme stick speed", &m.stickSpeed, 300.0f, 6000.0f, "%.0f counts/s",
-           "In the Classic scheme the mouse emulates the right stick: this speed equals full deflection.");
-    DrawPreview(s);
-    ImGui::SeparatorText("Fixed keys");
-    ImGui::TextDisabled("F10 / F1: open or close this menu    Esc: back / close    Alt+Enter: fullscreen");
-    ImGui::TextDisabled("Gamepad: Back + Start opens or closes this menu.");
-    ImGui::TextDisabled("Rebind actions on the Mapping page (profile: Keyboard and mouse).");
-    if (ConfirmButton("Reset mouse options", "resetmouse")) {
-        m = AimSettings::MouseConfig{};
-        e.dirty = e.save = true;
-    }
+    e.Take(v.Slider("Classic scheme stick speed", &m.stickSpeed, 300.0f, 6000.0f, 100.0f, "%.0f/s", d.stickSpeed,
+                    "In the Classic Controller scheme the mouse emulates the right stick: this speed equals full deflection."));
+    v.Section("Preview");
+    DrawPreview(v, s);
+    v.Section("Fixed keys");
+    v.Note("Esc: back or close the menu     Alt+Enter: fullscreen     Q / E or Tab: switch tabs\n"
+           "Rebind the game actions on the Mapping page (profile: Keyboard and mouse).");
 }
 
 } // namespace
 
-bool Capturing() { return g_capture.open || AimInput::Capturing(); }
+const char* PageName(int page) { return page >= 0 && page < kPageCount ? kPageNames[static_cast<size_t>(page)] : ""; }
 
-bool ResetConfirmButton(const char* label, const char* id) { return ConfirmButton(label, id); }
-
-void ResetAll() {
-    AimSettings::ResetAllToDefaults();
-    AimSettings::Save();
-}
-
-void Draw(void (*drawGamepadPage)()) {
+void BuildPage(ListView& view, int page) {
     AimSettings::Settings s = AimSettings::Get();
     Edit e;
-    int scheme = static_cast<int>(s.scheme);
-    if (Combo(e, "Controller scheme (restart required)", &scheme, AimSettings::kSchemeLabels,
-              "Classic Controller: the game reads the right stick and moves its own reticle.\n"
-              "Wii Remote + Nunchuk: the port synthesizes the pointer (best for mouse aiming).\n"
-              "Takes effect the next time the game starts.")) {
-        s.scheme = static_cast<AimSettings::Scheme>(scheme);
-    }
-    ImGui::Spacing();
-    if (ImGui::BeginTabBar("##controlsTabs")) {
-        if (ImGui::BeginTabItem("Aiming")) {
-            DrawAiming(s, e);
-            if (ConfirmButton("Reset aiming to defaults", "resetaim")) {
-                s.aim = DualAnalog::Config{};
-                e.dirty = e.save = true;
-            }
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Mapping")) {
-            DrawMapping(s, e);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Mouse & Keyboard")) {
-            DrawMouseKeyboard(s, e);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Gamepad")) {
-            if (drawGamepadPage != nullptr) drawGamepadPage();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+    switch (page) {
+    case 0: BuildAiming(view, s, e); break;
+    case 1: BuildMapping(view, s, e); break;
+    default: BuildMouseKeyboard(view, s, e); break;
     }
     if (e.dirty) AimSettings::Set(s);
     if (e.save) AimSettings::Save();
+}
+
+AimSettings::Scheme LaunchScheme() {
+    static const AimSettings::Scheme launch = AimSettings::Get().scheme;
+    return launch;
+}
+
+void BuildSchemeRow(ListView& view) {
+    const AimSettings::Scheme launch = LaunchScheme();
+    AimSettings::Settings s = AimSettings::Get();
+    int scheme = static_cast<int>(s.scheme);
+    if (view.Choice("Controller scheme", &scheme, AimSettings::kSchemeLabels.data(),
+                             static_cast<int>(AimSettings::kSchemeLabels.size()), 0,
+                             "Classic Controller: the game reads the right stick and moves its own reticle. Wii Remote + Nunchuk: the port synthesizes the pointer (best for mouse aiming). Applies the next time the game starts.",
+                             game_ui::kRowRestart)) {
+        s.scheme = static_cast<AimSettings::Scheme>(scheme);
+        AimSettings::Set(s);
+        AimSettings::Save();
+    }
+    if (s.scheme != launch) view.Note("Restart the game to switch the controller scheme.", game_ui::kWarn);
+}
+
+void DrawModals(game_ui::Frame& input) {
+    if (!g_capture.open) return;
+    const AimSettings::ActionInfo& info = AimSettings::kActions[g_capture.action];
+    const bool pad = g_capture.profile == InputMap::Profile::Gamepad;
+    const float remaining = std::chrono::duration<float>(g_capture.deadline - Clock::now()).count();
+    game_ui::ModalSpec spec;
+    spec.title = std::string("Bind: ") + info.label;
+    spec.lines = {pad ? "Press a gamepad button, pull a trigger or push a stick." : "Press a key, click a mouse button or scroll the wheel.",
+                  pad ? "Release everything first." : "Esc cancels, Delete clears."};
+    spec.buttons = {"Clear binding", "Cancel"};
+    spec.progress = std::clamp(remaining / 8.0f, 0.0f, 1.0f);
+    spec.mouseOnly = true;
+    spec.hint = "Cancels in " + std::to_string(std::max(0, static_cast<int>(std::ceil(remaining)))) + " s";
+    const int result = game_ui::DrawModal(g_capture.modal, input, spec);
+    InputMap::Binding none;
+    if (result == 0) {
+        ApplyCapture(none);
+        g_capture.open = false;
+        AimInput::CancelCapture();
+    } else if (result == 1 || remaining <= 0.0f) {
+        g_capture.open = false;
+        AimInput::CancelCapture();
+    } else {
+        const AimInput::CaptureResult captured = AimInput::PollCapture(game_ui::ModalHot());
+        if (captured.state == AimInput::CaptureState::Done) {
+            ApplyCapture(captured.binding);
+            g_capture.open = false;
+        } else if (captured.state == AimInput::CaptureState::Cleared) {
+            ApplyCapture(none);
+            g_capture.open = false;
+        } else if (captured.state == AimInput::CaptureState::Cancelled) {
+            g_capture.open = false;
+        }
+    }
+    if (!g_capture.open) g_capture.modal = game_ui::ModalState{};
+}
+
+bool RestartPending() { return AimSettings::Get().scheme != LaunchScheme(); }
+
+bool Capturing() { return g_capture.open || AimInput::Capturing(); }
+
+void ResetPage(int page) {
+    AimSettings::Settings s = AimSettings::Get();
+    switch (page) {
+    case 0: s.aim = DualAnalog::Config{}; break;
+    case 1: s = AimSettings::DefaultBindings(s); g_status.clear(); break;
+    default: s.mouse = AimSettings::MouseConfig{}; break;
+    }
+    AimSettings::Set(s);
+    AimSettings::Save();
+}
+
+void ResetAll() {
+    g_status.clear();
+    AimSettings::ResetAllToDefaults();
+    AimSettings::Save();
 }
 
 } // namespace controls_menu

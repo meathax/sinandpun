@@ -78,20 +78,6 @@ static bool RenameNoReplace(const std::filesystem::path& from,
 #endif
 }
 
-extern "C" int32_t NANDInit_HLE(void) {
-    // Initialize ISFS
-    ISFS_OpenLib_Initialize(&GetPersistentCpuContext());
-
-    // NANDHomeDir is at 0x80346D20 (from ESP_GetDataDir output)
-    WriteGuestNandPath(MKW_GADDR(80346D20), CurrentNandDataDir());
-
-    // Mark NAND as initialized (0x80386848 = 2)
-    Memory::Write32(MKW_GADDR(80386848), 2);
-
-    return NAND_RESULT_OK;
-}
-SIN_DISABLED_NATIVE_OVERRIDE(8019E18C, NANDInit_HLE, int32_t, (void), ());
-
 extern "C" int32_t NANDGetCurrentDir_HLE(uint32_t outPathPtr) {
     return WriteNandDataDir(outPathPtr);
 }

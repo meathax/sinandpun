@@ -4,7 +4,6 @@
 #include "nand_internal.h"
 
 #include "isa/big_endian.h"
-#include "hle/storage/riivolution.h"
 #include "nand_guest_path.h"
 #include "runtime_log.h"
 
@@ -78,14 +77,14 @@ void CloseFd(int32_t fd) {
 // Path Translation
 // ============================================================================
 
-uint32_t CurrentMkwTitleIdLo() {
+uint32_t CurrentTitleIdLo() {
     return RuntimeHle::CurrentGameCode(NandTitleIdLo());
 }
 
 std::string CurrentNandDataDir() {
     char path[64];
     std::snprintf(path, sizeof(path), "/title/%08x/%08x/data",
-                  kNandTitleIdHi, CurrentMkwTitleIdLo());
+                  kNandTitleIdHi, CurrentTitleIdLo());
     return path;
 }
 
@@ -180,96 +179,10 @@ static std::string NormalizeAbsoluteWiiPath(const char* wiiPath) {
     return path;
 }
 
-struct RiivolutionSaveRedirect {
-    bool enabled = false;
-    bool clone = false;
-    std::filesystem::path hostDirectory;
-};
-
-static std::once_flag g_riivolutionSaveRedirectOnce;
-static RiivolutionSaveRedirect g_riivolutionSaveRedirect;
-
-static const RiivolutionSaveRedirect& GetRiivolutionSaveRedirect() {
-    // The active pack's <savegame> patch, resolved against the virtual SD root
-    // exactly like Dolphin resolves it for Riivolution launches. This keeps
-    // the recomp's save in the same folder a Dolphin/WheelWizard launch of the
-    // pack uses (e.g. .../Riivolution/WheelWizard/riivolution/save/RetroWFC/RMCP).
-    std::call_once(g_riivolutionSaveRedirectOnce, []() {
-        const auto& redirect = RuntimeRiivolution::GetSaveRedirect();
-        if (!redirect) {
-            return;
-        }
-        g_riivolutionSaveRedirect.enabled = true;
-        g_riivolutionSaveRedirect.clone = redirect->clone;
-        g_riivolutionSaveRedirect.hostDirectory = redirect->hostDirectory;
-        // Riivolution creates the redirect folder if it does not exist.
-        CreateDirectoryPath(g_riivolutionSaveRedirect.hostDirectory);
-    });
-
-    return g_riivolutionSaveRedirect;
-}
-
-static void CloneRiivolutionSaveIfNeeded(const std::filesystem::path& sourceHostPath,
-                                         const std::filesystem::path& redirectedHostPath,
-                                         const RiivolutionSaveRedirect& redirect) {
-    if (!redirect.clone || PathExists(redirectedHostPath) || !PathExists(sourceHostPath)) {
-        return;
-    }
-
-    CreateParentDirectories(redirectedHostPath);
-
-    std::error_code ec;
-    std::filesystem::copy_file(sourceHostPath, redirectedHostPath,
-                               std::filesystem::copy_options::skip_existing, ec);
-    if (ec) {
-        LogNandWarning("RiivolutionSave", "WARNING: failed to clone '%s' -> '%s': %s",
-                       HostPathText(sourceHostPath).c_str(),
-                       HostPathText(redirectedHostPath).c_str(), ec.message().c_str());
-    }
-}
-
-static bool ResolveRiivolutionSaveHostPath(const std::string& absoluteWiiPath,
-                                           std::filesystem::path& outHostPath) {
-    const RiivolutionSaveRedirect& redirect = GetRiivolutionSaveRedirect();
-    if (!redirect.enabled) {
-        return false;
-    }
-
-    const std::string dataDir = CurrentNandDataDir();
-    if (absoluteWiiPath != dataDir &&
-        (absoluteWiiPath.size() <= dataDir.size() ||
-         absoluteWiiPath.compare(0, dataDir.size(), dataDir) != 0 ||
-         absoluteWiiPath[dataDir.size()] != '/')) {
-        return false;
-    }
-
-    std::string relative;
-    if (absoluteWiiPath.size() > dataDir.size()) {
-        relative = absoluteWiiPath.substr(dataDir.size() + 1);
-    }
-
-    // The path belongs to the redirect either way; an unsafe one resolves to nothing
-    // rather than falling back to the NAND root.
-    auto redirected = RuntimeNandGuestPath::AppendBelowRoot(redirect.hostDirectory, relative);
-    if (!redirected) {
-        outHostPath.clear();
-        return true;
-    }
-
-    outHostPath = std::move(*redirected);
-    CloneRiivolutionSaveIfNeeded(BuildHostNandPath(absoluteWiiPath), outHostPath, redirect);
-    return true;
-}
-
 std::filesystem::path TranslateNandPath(const char* wiiPath) {
     std::string wiiPathStr = NormalizeAbsoluteWiiPath(wiiPath);
     if (wiiPathStr.empty()) {
         return {};
-    }
-
-    std::filesystem::path redirectedHostPath;
-    if (ResolveRiivolutionSaveHostPath(wiiPathStr, redirectedHostPath)) {
-        return redirectedHostPath;
     }
 
     return BuildHostNandPath(wiiPathStr);

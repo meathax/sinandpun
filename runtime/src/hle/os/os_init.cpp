@@ -11,30 +11,16 @@
 #include <thread>
 
 #include "abi_bridge.h"
+#include "hle/os/os_internal.h"
 
 // os_scheduler.cpp exports these (extern "C"); no shared header exists.
 extern "C" void SelectThread_801a9c08(CpuContext* ctx);
 #include "memory.h"
 #include "hle_stubs.h"
 #include "ppc_runtime.h"
-#include "recomp_mod_loader.h"
 #include "runtime_log.h"
 #include "system_bridge.h"
 #include "guest_function_imports.h"
-
-extern "C" void OSInitAlarm_RecompModLateInit_801a961c(CpuContext* ctx) {
-    MKW_GUEST_FUNC(801A961C)(ctx);
-}
-
-REGISTER_NATIVE_FUNCTION_AS(0x801A961C, OSInitAlarm_RecompModLateInit_801a961c, "OSInitAlarm_RecompModLateInit_801a961c");
-
-extern "C" void StaticRProlog_RecompModInit_8055531c(CpuContext* ctx) {
-    RecompMod::RunMemoryInitializers();
-    MKW_GUEST_FUNC(8055531C)(ctx);
-    RecompMod::RunPostRelInitializers();
-}
-
-REGISTER_NATIVE_FUNCTION_AS(0x8055531C, StaticRProlog_RecompModInit_8055531c, "StaticRProlog_RecompModInit_8055531c");
 
 namespace {
 std::string ReadGuestCStringLimited(uint32_t address, size_t limit = 4096) {
@@ -55,31 +41,6 @@ std::string ReadGuestCStringLimited(uint32_t address, size_t limit = 4096) {
     return text;
 }
 }
-
-extern "C" void OSFatal_HLE_801a4ec4(CpuContext* ctx) {
-    const uint32_t fg = ctx ? ctx->gpr[3] : 0;
-    const uint32_t bg = ctx ? ctx->gpr[4] : 0;
-    const uint32_t messagePtr = ctx ? ctx->gpr[5] : 0;
-    RT_LOG(RT_TAG_OS) << "OS::Fatal called fg=0x" << std::hex << fg
-              << " bg=0x" << bg
-              << " message=0x" << messagePtr
-              << std::dec << " '" << ReadGuestCStringLimited(messagePtr) << "'" << std::endl;
-    if (ctx) {
-        SystemBridge::DumpCpuState(ctx);
-    }
-    const std::string guestMessage = ReadGuestCStringLimited(messagePtr);
-    const std::string details =
-        guestMessage.empty() ? std::string("OS::Fatal was called without a message.") : guestMessage;
-    // MarkFatalErrorReported below suppresses the atexit reporter, so this path
-    // has to write its own artifacts or the run folder gets nothing.
-    RuntimeCrash::WriteCrashArtifacts("osfatal", details);
-    SetRuntimeExitCode(EXIT_FAILURE);
-    ShowRuntimeFatalPopup("the guest operating system reported a fatal error", details);
-    MarkFatalErrorReported();
-    std::exit(EXIT_FAILURE);
-}
-
-REGISTER_NATIVE_FUNCTION_AS(0x801A4EC4, OSFatal_HLE_801a4ec4, "OSFatal_HLE_801a4ec4");
 
 extern "C" void GKI_delay_HLE_801301b4()
 {

@@ -4,48 +4,7 @@
 
 #include "nand_internal.h"
 
-#include "discord_presence.h"
 #include "runtime_log.h"
-
-extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx);
-
-// ============================================================================
-// SHA device handles
-// ============================================================================
-
-struct ShaHandle {
-    CryptoPP::SHA1 hash;
-    uint64_t byteCount = 0;
-
-    void Restart() {
-        hash.Restart();
-        byteCount = 0;
-    }
-};
-
-static std::map<int32_t, ShaHandle> g_shaHandles;
-static int32_t g_nextShaFd = 0x10001;
-static std::mutex g_shaMutex;
-
-static int32_t AllocateShaFd() {
-    std::lock_guard<std::mutex> lock(g_shaMutex);
-    const int32_t fd = g_nextShaFd++;
-    g_shaHandles.try_emplace(fd);
-    return fd;
-}
-
-static ShaHandle* GetShaHandle(int32_t fd) {
-    auto it = g_shaHandles.find(fd);
-    if (it == g_shaHandles.end()) {
-        return nullptr;
-    }
-    return &it->second;
-}
-
-static void CloseShaFd(int32_t fd) {
-    std::lock_guard<std::mutex> lock(g_shaMutex);
-    g_shaHandles.erase(fd);
-}
 
 struct ISFSFileStats {
     uint32_t length;    // File size in bytes
@@ -59,24 +18,7 @@ struct ISFSFileStats {
 // Special FD for /dev/fs (the ISFS device)
 static constexpr int32_t ISFS_DEV_FD = 1;
 static constexpr int32_t ES_DEV_FD = 3;
-static constexpr int32_t DOLPHIN_DEV_FD = 4;
-static constexpr uint32_t ES_IOCTL_GETDEVICEID = 0x07;
-static constexpr uint32_t ES_IOCTL_GETDEVICECERT = 0x1E;
 static constexpr uint32_t ES_IOCTL_GETTITLEID = 0x20;
-static constexpr uint32_t ES_IOCTL_SIGN = 0x30;
-static constexpr uint32_t DOLPHIN_IOCTL_GET_ELAPSED_TIME = 0x01;
-static constexpr uint32_t DOLPHIN_IOCTL_GET_VERSION = 0x02;
-static constexpr uint32_t DOLPHIN_IOCTL_GET_SPEED_LIMIT = 0x03;
-static constexpr uint32_t DOLPHIN_IOCTL_SET_SPEED_LIMIT = 0x04;
-static constexpr uint32_t DOLPHIN_IOCTL_GET_CPU_SPEED = 0x05;
-static constexpr uint32_t DOLPHIN_IOCTL_GET_REAL_PRODUCT_CODE = 0x06;
-static constexpr uint32_t DOLPHIN_IOCTL_DISCORD_SET_CLIENT = 0x07;
-static constexpr uint32_t DOLPHIN_IOCTL_DISCORD_SET_PRESENCE = 0x08;
-static constexpr uint32_t DOLPHIN_IOCTL_DISCORD_RESET = 0x09;
-static constexpr uint32_t DOLPHIN_IOCTL_GET_SYSTEM_TIME = 0x0A;
-static constexpr uint32_t SHA_IOCTL_INIT = 0;
-static constexpr uint32_t SHA_IOCTL_UPDATE = 1;
-static constexpr uint32_t SHA_IOCTL_FINAL = 2;
 
 static std::string ReadGuestCString(uint32_t address, size_t maxLength = 1024) {
     std::string text;
@@ -97,8 +39,6 @@ static std::string ReadGuestCString(uint32_t address, size_t maxLength = 1024) {
     }
     return text;
 }
-static constexpr uint32_t SHA_CONTEXT_SIZE = 0x1c;
-static constexpr uint32_t SHA_DIGEST_SIZE = 0x14;
 
 // Same guest layout as the /dev/net ioctlv descriptors; see runtime_parse_helpers.h.
 using IosVector = RuntimeHle::IoVector;
@@ -108,8 +48,8 @@ static IosVector ReadIosVector(uint32_t vectorPtr, uint32_t index) {
     return ReadIoVector(vectorPtr, index);
 }
 
-static uint64_t CurrentMkwTitleId() {
-    uint32_t low = CurrentMkwTitleIdLo();
+static uint64_t CurrentTitleId() {
+    uint32_t low = CurrentTitleIdLo();
     return (static_cast<uint64_t>(kNandTitleIdHi) << 32) | low;
 }
 
@@ -124,238 +64,6 @@ static bool WriteGuestBytes(uint32_t address, uint32_t size, const uint8_t* data
 
 static bool IsValidGuestRange(uint32_t address, uint32_t size) {
     return size == 0 || (address != 0 && Memory::Contains(address, size));
-}
-
-using DolphinClock = std::chrono::steady_clock;
-// Dolphin starts this clock when the emulation device is constructed, not on its first ioctl.
-static const DolphinClock::time_point g_dolphinElapsedStart = DolphinClock::now();
-
-static uint32_t DolphinElapsedMilliseconds() {
-    return static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(DolphinClock::now() - g_dolphinElapsedStart).count());
-}
-
-static int32_t HandleDolphinIoctlv(uint32_t cmd, uint32_t numIn, uint32_t numOut, uint32_t vectorPtr) {
-    if (vectorPtr != 0 && !Memory::Contains(vectorPtr, static_cast<size_t>(numIn + numOut) * 8u)) {
-        return ISFS_EINVAL;
-    }
-
-    // Every /dev/dolphin command answers through exactly one output vector.
-    // `minimumSize` 0 means the case validates the buffer itself (WriteGuestBytes).
-    const auto singleOut = [&](uint32_t minimumSize, IosVector& out) -> bool {
-        if (numOut != 1 || vectorPtr == 0) {
-            return false;
-        }
-        out = ReadIosVector(vectorPtr, numIn);
-        return minimumSize == 0 ||
-               (out.size >= minimumSize && Memory::Contains(out.address, minimumSize));
-    };
-
-    IosVector out;
-    switch (cmd) {
-        case DOLPHIN_IOCTL_GET_ELAPSED_TIME: {
-            if (!singleOut(4u, out)) {
-                return ISFS_EINVAL;
-            }
-            Memory::Write32(out.address, DolphinElapsedMilliseconds());
-            return ISFS_OK;
-        }
-
-        case DOLPHIN_IOCTL_GET_VERSION: {
-            if (!singleOut(0u, out)) {
-                return ISFS_EINVAL;
-            }
-            static constexpr char kVersion[] = "WiiCompiled-DolphinDevice";
-            if (!WriteGuestBytes(out.address, out.size,
-                                 reinterpret_cast<const uint8_t*>(kVersion), sizeof(kVersion))) {
-                return ISFS_EINVAL;
-            }
-            return ISFS_OK;
-        }
-
-        case DOLPHIN_IOCTL_GET_SPEED_LIMIT:
-        case DOLPHIN_IOCTL_GET_CPU_SPEED: {
-            if (!singleOut(4u, out)) {
-                return ISFS_EINVAL;
-            }
-            Memory::Write32(out.address, cmd == DOLPHIN_IOCTL_GET_SPEED_LIMIT ? 100u : 729000000u);
-            return ISFS_OK;
-        }
-
-        case DOLPHIN_IOCTL_GET_REAL_PRODUCT_CODE: {
-            if (!singleOut(0u, out)) {
-                return ISFS_EINVAL;
-            }
-            char productCode[8] = {};
-            uint32_t discId = Memory::Contains(0x80000000u, 4u) ? Memory::Read32(0x80000000u) : NandTitleIdLo();
-            productCode[0] = static_cast<char>((discId >> 24) & 0xffu);
-            productCode[1] = static_cast<char>((discId >> 16) & 0xffu);
-            productCode[2] = static_cast<char>((discId >> 8) & 0xffu);
-            productCode[3] = static_cast<char>(discId & 0xffu);
-            productCode[4] = '0';
-            productCode[5] = '1';
-            if (!WriteGuestBytes(out.address, out.size,
-                                 reinterpret_cast<const uint8_t*>(productCode), sizeof(productCode))) {
-                return ISFS_EINVAL;
-            }
-            return ISFS_OK;
-        }
-
-        case DOLPHIN_IOCTL_SET_SPEED_LIMIT:
-            return ISFS_OK;
-
-        case DOLPHIN_IOCTL_DISCORD_SET_CLIENT: {
-            if (numIn != 1 || numOut != 0 || vectorPtr == 0) {
-                return ISFS_EINVAL;
-            }
-            const IosVector client = ReadIosVector(vectorPtr, 0);
-            if (!IsValidGuestRange(client.address, client.size)) {
-                return ISFS_EINVAL;
-            }
-            if (RuntimeConfigFile::DiscordPresenceEnabled()) {
-                DiscordPresence::SetClient(ReadGuestCString(client.address, client.size));
-            }
-            return ISFS_OK;
-        }
-
-        case DOLPHIN_IOCTL_DISCORD_SET_PRESENCE: {
-            if (numIn != 10 || numOut != 0 || vectorPtr == 0) {
-                return ISFS_EINVAL;
-            }
-            std::array<IosVector, 10> values{};
-            for (uint32_t index = 0; index < values.size(); ++index) {
-                values[index] = ReadIosVector(vectorPtr, index);
-                if (!IsValidGuestRange(values[index].address, values[index].size)) {
-                    return ISFS_EINVAL;
-                }
-            }
-            if (RuntimeConfigFile::DiscordPresenceEnabled()) {
-                DiscordPresence::Activity activity;
-                activity.details = ReadGuestCString(values[0].address, values[0].size);
-                activity.state = ReadGuestCString(values[1].address, values[1].size);
-                activity.largeImageKey = ReadGuestCString(values[2].address, values[2].size);
-                activity.largeImageText = ReadGuestCString(values[3].address, values[3].size);
-                activity.smallImageKey = ReadGuestCString(values[4].address, values[4].size);
-                activity.smallImageText = ReadGuestCString(values[5].address, values[5].size);
-                if (values[6].size >= 8 && Memory::Contains(values[6].address, 8)) {
-                    activity.startTimestamp = static_cast<int64_t>(
-                        (static_cast<uint64_t>(Memory::Read32(values[6].address)) << 32) |
-                        Memory::Read32(values[6].address + 4));
-                }
-                if (values[7].size >= 8 && Memory::Contains(values[7].address, 8)) {
-                    activity.endTimestamp = static_cast<int64_t>(
-                        (static_cast<uint64_t>(Memory::Read32(values[7].address)) << 32) |
-                        Memory::Read32(values[7].address + 4));
-                }
-                if (values[8].size >= 4) {
-                    activity.partySize = Memory::Read32(values[8].address);
-                }
-                if (values[9].size >= 4) {
-                    activity.partyMax = Memory::Read32(values[9].address);
-                }
-                DiscordPresence::SetActivity(std::move(activity));
-            }
-            return ISFS_OK;
-        }
-
-        case DOLPHIN_IOCTL_DISCORD_RESET:
-            if (numIn != 0 || numOut != 0) {
-                return ISFS_EINVAL;
-            }
-            if (RuntimeConfigFile::DiscordPresenceEnabled()) {
-                DiscordPresence::Reset();
-            }
-            return ISFS_OK;
-
-        case DOLPHIN_IOCTL_GET_SYSTEM_TIME: {
-            if (!singleOut(8u, out)) {
-                return ISFS_EINVAL;
-            }
-            const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-            const uint64_t value = static_cast<uint64_t>(nowMs);
-            Memory::Write32(out.address, static_cast<uint32_t>(value >> 32));
-            Memory::Write32(out.address + 4u, static_cast<uint32_t>(value));
-            return ISFS_OK;
-        }
-
-        default:
-            LogNandWarning("IOS_Ioctlv", "/dev/dolphin unsupported cmd=%u", cmd);
-            return ISFS_EINVAL;
-    }
-}
-
-static bool WriteShaOutputs(const ShaHandle& handle, const IosVector& context, const IosVector& hash) {
-    CryptoPP::SHA1 snapshot = handle.hash;
-    std::array<uint8_t, CryptoPP::SHA1::DIGESTSIZE> digest{};
-    snapshot.Final(digest.data());
-    if (!WriteGuestBytes(hash.address, hash.size, digest.data(), digest.size())) {
-        return false;
-    }
-
-    if (context.address != 0 && context.size >= SHA_CONTEXT_SIZE && Memory::Contains(context.address, SHA_CONTEXT_SIZE)) {
-        Memory::Write32(context.address + 0x00, 0x67452301u);
-        Memory::Write32(context.address + 0x04, 0xEFCDAB89u);
-        Memory::Write32(context.address + 0x08, 0x98BADCFEu);
-        Memory::Write32(context.address + 0x0c, 0x10325476u);
-        Memory::Write32(context.address + 0x10, 0xC3D2E1F0u);
-        const uint64_t bitCount = handle.byteCount * 8u;
-        Memory::Write32(context.address + 0x14, static_cast<uint32_t>(bitCount >> 32));
-        Memory::Write32(context.address + 0x18, static_cast<uint32_t>(bitCount));
-    }
-
-    return true;
-}
-
-static int32_t HandleShaIoctlv(int32_t fd, uint32_t cmd, uint32_t numIn, uint32_t numOut, uint32_t vectorPtr) {
-    if (!vectorPtr || !Memory::Contains(vectorPtr, static_cast<size_t>(numIn + numOut) * 8u)) {
-        return ISFS_EINVAL;
-    }
-    if (numIn != 1 || numOut != 2) {
-        LogNandWarning("IOS_Ioctlv", "/dev/sha unsupported vector shape cmd=%u numIn=%u numOut=%u",
-                cmd, numIn, numOut);
-        return ISFS_EINVAL;
-    }
-
-    ShaHandle* handle = GetShaHandle(fd);
-    if (!handle) {
-        return ISFS_EINVAL;
-    }
-
-    const IosVector input = ReadIosVector(vectorPtr, 0);
-    const IosVector context = ReadIosVector(vectorPtr, 1);
-    const IosVector hash = ReadIosVector(vectorPtr, 2);
-    if (!IsValidGuestRange(input.address, input.size) ||
-        context.size < SHA_CONTEXT_SIZE || hash.size < SHA_DIGEST_SIZE ||
-        !IsValidGuestRange(context.address, SHA_CONTEXT_SIZE) ||
-        !IsValidGuestRange(hash.address, SHA_DIGEST_SIZE)) {
-        LogNandWarning("IOS_Ioctlv",
-                "/dev/sha invalid buffers cmd=%u in=0x%08X/%u ctx=0x%08X/%u hash=0x%08X/%u",
-                cmd, input.address, input.size, context.address, context.size, hash.address, hash.size);
-        return ISFS_EINVAL;
-    }
-
-    if (cmd == SHA_IOCTL_INIT) {
-        handle->Restart();
-    } else if (cmd != SHA_IOCTL_UPDATE && cmd != SHA_IOCTL_FINAL) {
-        LogNandWarning("IOS_Ioctlv", "/dev/sha unsupported cmd=%u", cmd);
-        return ISFS_EINVAL;
-    }
-
-    if (input.size != 0) {
-        const uint8_t* bytes = Memory::GetPointer(input.address, input.size);
-        handle->hash.Update(bytes, input.size);
-        handle->byteCount += input.size;
-    }
-
-    if (!WriteShaOutputs(*handle, context, hash)) {
-        return ISFS_EINVAL;
-    }
-
-    if (cmd == SHA_IOCTL_FINAL) {
-        handle->Restart();
-    }
-    return ISFS_OK;
 }
 
 extern "C" int32_t NAND_IOS_Open_HLE(uint32_t pathPtr, uint32_t mode) {
@@ -375,18 +83,11 @@ extern "C" int32_t NAND_IOS_Open_HLE(uint32_t pathPtr, uint32_t mode) {
         if (std::strcmp(path, "/dev/es") == 0) {
             return ES_DEV_FD;
         }
-        if (std::strcmp(path, "/dev/sha") == 0) {
-            const int32_t fd = AllocateShaFd();
-            return fd;
-        }
         if (const int32_t netFd = Network_HLE_OpenDevice(path, mode)) {
             return netFd;
         }
         if (const int32_t btFd = Bluetooth_HLE_OpenDevice(path)) {
             return btFd;
-        }
-        if (std::strcmp(path, "/dev/dolphin") == 0) {
-            return DOLPHIN_DEV_FD;
         }
         LogNandWarning("IOS_Open", "unknown device '%s' mode=%u", path, mode);
         return ISFS_ENOENT;
@@ -435,25 +136,11 @@ extern "C" int32_t NAND_IOS_Open_HLE(uint32_t pathPtr, uint32_t mode) {
 }
 PPC_NATIVE_OVERRIDE(80199D00, NAND_IOS_Open_HLE, int32_t, (uint32_t pathPtr, uint32_t mode), (pathPtr, mode));
 
-extern "C" void NAND_IOS_OpenBody_HLE_801938FC(CpuContext* ctx) {
-    const int32_t result = NAND_IOS_Open_HLE(ctx->gpr[3], ctx->gpr[4]);
-    ctx->gpr[3] = static_cast<uint32_t>(result);
-    ctx->gpr[1] = ctx->gpr[1] + 32u;
-}
-REGISTER_NATIVE_REPLACEMENT_AS(0x801938FC, NAND_IOS_OpenBody_HLE_801938FC, "NAND_IOS_OpenBody_HLE_801938FC");
-
 extern "C" int32_t NAND_IOS_Close_HLE(uint32_t fd) {
     if (fd == ISFS_DEV_FD) {
         return ISFS_OK;
     }
     if (fd == ES_DEV_FD) {
-        return ISFS_OK;
-    }
-    if (fd == DOLPHIN_DEV_FD) {
-        return ISFS_OK;
-    }
-    if (GetShaHandle(static_cast<int32_t>(fd))) {
-        CloseShaFd(static_cast<int32_t>(fd));
         return ISFS_OK;
     }
     if (Network_HLE_IsFd(fd)) {
@@ -573,17 +260,9 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
         return Network_HLE_Ioctl(fd, cmd, inBufPtr, inLen, outBufPtr, outLen);
     }
 
-    if (GetShaHandle(static_cast<int32_t>(fd))) {
-        LogNandWarning("IOS_Ioctl", "/dev/sha does not support scalar ioctl cmd=%u", cmd);
-        return ISFS_EINVAL;
-    }
     if (Bluetooth_HLE_IsFd(fd)) {
         LogNandWarning("IOS_Ioctl", "/dev/usb/oh1 does not support scalar ioctl cmd=%u", cmd);
         return -4;
-    }
-    if (fd == DOLPHIN_DEV_FD) {
-        LogNandWarning("IOS_Ioctl", "/dev/dolphin does not support scalar ioctl cmd=%u", cmd);
-        return ISFS_EINVAL;
     }
     
     // Handle /dev/fs ISFS commands
@@ -760,70 +439,6 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
     return ISFS_OK;
 }
 
-// The stack frame a guest thread parks on while a deferred network ioctl runs.
-// `newStack` is always oldStack - kFrameSize, even when the frame could not be
-// built, because the sleep path installs it unconditionally.
-struct IosWaitFrame {
-    bool valid = false;
-    uint32_t oldStack = 0;
-    uint32_t newStack = 0;
-    uint32_t waitQueue = 0;
-};
-
-static IosWaitFrame InitializeIosWaitQueueFrame(CpuContext* ctx) {
-    constexpr uint32_t kFrameSize = 0x40u;
-    constexpr uint32_t kWaitQueueOffset = 0x30u;
-
-    IosWaitFrame frame;
-    frame.oldStack = ctx->gpr[1];
-    frame.newStack = frame.oldStack - kFrameSize;
-    if (frame.oldStack < kFrameSize || !Memory::Contains(frame.newStack, kFrameSize)) {
-        return frame;
-    }
-    // Preserve the PPC linkage area and the required r3-r10 outgoing-argument
-    // save area. The queue lives in local storage beyond sp+0x28 so a guest
-    // switch callback cannot legally spill over it while this thread sleeps.
-    Memory::Write32(frame.newStack, frame.oldStack);
-    Memory::Write32(frame.newStack + 4u, 0);
-    Memory::Write32(frame.newStack + kWaitQueueOffset, 0);
-    Memory::Write32(frame.newStack + kWaitQueueOffset + 4u, 0);
-    frame.waitQueue = frame.newStack + kWaitQueueOffset;
-    frame.valid = true;
-    return frame;
-}
-
-static void FinishDeferredIosWait(CpuContext* ctx, uint32_t oldStack, uint64_t token) {
-    int32_t result = -101;
-    if (!Network_HLE_TakeSyncResult(token, &result)) {
-        RT_LOGF(RT_TAG_NAND,
-                     "deferred network waiter resumed without result token=%llu\n",
-                     static_cast<unsigned long long>(token));
-    }
-    ctx->gpr[1] = oldStack;
-    ctx->gpr[3] = static_cast<uint32_t>(result);
-}
-
-// IOS_Ioctl and IOS_Ioctlv park a network request the same way: build the wait
-// frame, hand its queue to the network layer, and either sleep on it or take the
-// immediate answer. True when the request was handled here.
-template <typename StartSync>
-static bool TryDeferredNetworkIosSync(CpuContext* ctx, StartSync&& startSync) {
-    const IosWaitFrame frame = InitializeIosWaitQueueFrame(ctx);
-    const auto deferred = startSync(frame.valid ? frame.waitQueue : 0u);
-    if (deferred.disposition == NetworkDeferredContract::StartDisposition::Started) {
-        ctx->gpr[1] = frame.newStack;
-        ctx->gpr[3] = frame.waitQueue;
-        OSSleepThread_HLE_801aa9b8(ctx);
-        FinishDeferredIosWait(ctx, frame.oldStack, deferred.token);
-        return true;
-    }
-    if (deferred.disposition == NetworkDeferredContract::StartDisposition::ImmediateResult) {
-        ctx->gpr[3] = static_cast<uint32_t>(deferred.result);
-        return true;
-    }
-    return false;
-}
-
 extern "C" void NAND_IOS_Ioctl_Entry_HLE(CpuContext* ctx) {
     const uint32_t fd = ctx->gpr[3];
     const uint32_t cmd = ctx->gpr[4];
@@ -832,135 +447,10 @@ extern "C" void NAND_IOS_Ioctl_Entry_HLE(CpuContext* ctx) {
     const uint32_t outBufPtr = ctx->gpr[7];
     const uint32_t outLen = ctx->gpr[8];
 
-    if (Network_HLE_IsFd(fd)) {
-        const bool handled = TryDeferredNetworkIosSync(ctx, [&](uint32_t waitQueue) {
-            return Network_HLE_StartIoctlSync(fd, cmd, inBufPtr, inLen, outBufPtr, outLen, waitQueue);
-        });
-        if (handled) {
-            return;
-        }
-    }
-
     ctx->gpr[3] = static_cast<uint32_t>(
         NAND_IOS_Ioctl_HLE(fd, cmd, inBufPtr, inLen, outBufPtr, outLen));
 }
 PPC_NATIVE_OVERRIDE_VOID(8019A5E0, NAND_IOS_Ioctl_Entry_HLE, (CpuContext* ctx), (ctx));
-
-// ============================================================================
-// ISFS_OpenLib - Initialize ISFS
-// ============================================================================
-
-// Global state for ISFS initialization
-static bool g_isfsInitialized = false;
-
-// The ISFS/IPC globals ISFS_OpenLib touches, as negative r13 (SDA1) offsets.
-// These are address-exact: they name the SDK's own variables, so the numbers are
-// load-bearing and must not be "tidied". Names come from the RVL IPC/ISFS
-// sources; only the naming changed here, never a value.
-namespace {
-// The ISFS client's small-data globals.
-const uint32_t kIsfsFdGlobal = MKW_GADDR(80385920);            // __ISFS_fd
-const uint32_t kIsfsPathGlobal = MKW_GADDR(80385928);          // __ISFS_path ("/dev/fs")
-const uint32_t kIpcBufferLoGlobal = MKW_GADDR(803867EC);       // IPC buffer window, low
-const uint32_t kIpcBufferHiGlobal = MKW_GADDR(803867F0);       // IPC buffer window, high
-const uint32_t kIpcArenaLoGlobal = MKW_GADDR(8038677C);        // __IPCArenaLo
-const uint32_t kIpcArenaHiGlobal = MKW_GADDR(80386780);        // __IPCArenaHi
-const uint32_t kIsfsHeapHandleGlobal = MKW_GADDR(80386784);    // ISFS heap handle
-const uint32_t kIsfsHeapBaseGlobal = MKW_GADDR(80386774);      // ISFS heap base address
-const uint32_t kIsfsHeapInitializedGlobal = MKW_GADDR(80386770);  // ISFS heap created flag
-} // namespace
-
-static void WriteGuestString(uint32_t address, const char* value) {
-    if (!value) {
-        return;
-    }
-    const size_t length = std::strlen(value) + 1;
-    if (!Memory::Contains(address, length)) {
-        return;
-    }
-    for (size_t i = 0; i < length; ++i) {
-        Memory::Write8(address + static_cast<uint32_t>(i), static_cast<uint8_t>(value[i]));
-    }
-}
-
-int32_t ISFS_OpenLib_Initialize(CpuContext* ctx) {
-    g_isfsInitialized = true;
-    
-    // Create the title data directory if it doesn't exist
-    char titleId[32];
-    std::snprintf(titleId, sizeof(titleId), "%08x", kNandTitleIdHi);
-    char gameId[32];
-    std::snprintf(gameId, sizeof(gameId), "%08x", CurrentMkwTitleIdLo());
-    CreateDirectoryPath(GetNandBasePath() / "title" / titleId / gameId / "data");
-
-    if (!ctx) {
-        return ISFS_OK;
-    }
-
-    WriteGuestString(kIsfsPathGlobal, "/dev/fs");
-
-    if (Memory::Contains(kIsfsFdGlobal, 4)) {
-        Memory::Write32(kIsfsFdGlobal, static_cast<uint32_t>(ISFS_DEV_FD));
-    }
-
-    // The heap bring-up below reads and writes all seven IPC globals, so it only
-    // runs when every one of them is inside guest memory.
-    for (const uint32_t global : {kIpcBufferLoGlobal, kIpcBufferHiGlobal, kIpcArenaLoGlobal,
-                                  kIpcArenaHiGlobal, kIsfsHeapHandleGlobal, kIsfsHeapBaseGlobal,
-                                  kIsfsHeapInitializedGlobal}) {
-        if (!Memory::Contains(global, 4)) {
-            return ISFS_OK;
-        }
-    }
-
-    uint32_t ipcLo = Memory::Read32(kIpcBufferLoGlobal);
-    uint32_t ipcHi = Memory::Read32(kIpcBufferHiGlobal);
-    if (ipcLo == 0 || ipcHi == 0 || ipcLo >= ipcHi) {
-        return ISFS_OK;
-    }
-
-    if (Memory::Read32(kIsfsHeapInitializedGlobal) == 0) {
-        Memory::Write32(kIpcArenaLoGlobal, ipcLo);
-        Memory::Write32(kIpcArenaHiGlobal, ipcHi);
-
-        const uint32_t heapBase = (ipcLo + 31u) & ~31u;
-        const uint32_t heapSize = 5440u;
-        if (heapBase + heapSize <= ipcHi) {
-            Memory::Write32(kIsfsHeapBaseGlobal, heapBase);
-
-            const uint32_t savedR3 = ctx->gpr[3];
-            const uint32_t savedR4 = ctx->gpr[4];
-            const uint32_t savedR5 = ctx->gpr[5];
-            const uint32_t savedLr = ctx->lr;
-
-            ctx->gpr[3] = heapBase;
-            ctx->gpr[4] = heapSize;
-            ctx->lr = MKW_GADDR(80197D60);
-            InvokeIndirectCpu(MKW_GADDR(8019AD20), ctx);
-            const uint32_t heapHandle = ctx->gpr[3];
-
-            ctx->gpr[3] = heapBase + heapSize;
-            ctx->lr = MKW_GADDR(80197D60);
-            InvokeIndirectCpu(MKW_GADDR(80193040), ctx);
-
-            ctx->gpr[3] = savedR3;
-            ctx->gpr[4] = savedR4;
-            ctx->gpr[5] = savedR5;
-            ctx->lr = savedLr;
-
-            Memory::Write32(kIsfsHeapHandleGlobal, heapHandle);
-            Memory::Write32(kIsfsHeapInitializedGlobal, 1u);
-        }
-    }
-
-    return ISFS_OK;
-}
-
-extern "C" void ISFS_OpenLib_HLE_80169BCC(CpuContext* ctx) {
-    ctx->gpr[3] = static_cast<uint32_t>(ISFS_OpenLib_Initialize(ctx));
-}
-
-REGISTER_NATIVE_FUNCTION_AS(0x80169BCC, ISFS_OpenLib_HLE_80169BCC, "ISFS_OpenLib_HLE_80169BCC");
 
 // ============================================================================
 // IOS_Ioctlv HLE - Vector Ioctl for complex ISFS operations
@@ -1049,14 +539,6 @@ extern "C" int32_t NAND_IOS_Ioctlv_HLE(
         return Bluetooth_HLE_Ioctlv(fd, cmd, numIn, numOut, vectorPtr);
     }
 
-    if (GetShaHandle(static_cast<int32_t>(fd))) {
-        return HandleShaIoctlv(static_cast<int32_t>(fd), cmd, numIn, numOut, vectorPtr);
-    }
-
-    if (fd == DOLPHIN_DEV_FD) {
-        return HandleDolphinIoctlv(cmd, numIn, numOut, vectorPtr);
-    }
-
     if (fd == ISFS_DEV_FD) {
         if (!vectorPtr || !Memory::Contains(vectorPtr, static_cast<size_t>(numIn + numOut) * 8u)) {
             return ISFS_EINVAL;
@@ -1073,31 +555,6 @@ extern "C" int32_t NAND_IOS_Ioctlv_HLE(
         }
 
         switch (cmd) {
-            case ES_IOCTL_GETDEVICEID: {
-                if (numIn != 0 || numOut != 1) {
-                    return ISFS_EINVAL;
-                }
-                const IosVector out = ReadIosVector(vectorPtr, 0);
-                if (out.size < 4 || out.address == 0 || !Memory::Contains(out.address, 4)) {
-                    return ISFS_EINVAL;
-                }
-                const WiiEsCrypto::Identity& identity = WiiEsCrypto::CurrentIdentity();
-                Memory::Write32(out.address, identity.deviceId);
-                return ISFS_OK;
-            }
-
-            case ES_IOCTL_GETDEVICECERT: {
-                if (numIn != 0 || numOut != 1) {
-                    return ISFS_EINVAL;
-                }
-                const IosVector out = ReadIosVector(vectorPtr, 0);
-                const auto cert = WiiEsCrypto::GetDeviceCertificate();
-                if (!WriteGuestBytes(out.address, out.size, cert.data(), cert.size())) {
-                    return ISFS_EINVAL;
-                }
-                return ISFS_OK;
-            }
-
             case ES_IOCTL_GETTITLEID: {
                 if (numIn != 0 || numOut != 1) {
                     return ISFS_EINVAL;
@@ -1106,30 +563,9 @@ extern "C" int32_t NAND_IOS_Ioctlv_HLE(
                 if (out.size < 8 || out.address == 0 || !Memory::Contains(out.address, 8)) {
                     return ISFS_EINVAL;
                 }
-                const uint64_t titleId = CurrentMkwTitleId();
+                const uint64_t titleId = CurrentTitleId();
                 Memory::Write32(out.address, static_cast<uint32_t>(titleId >> 32));
                 Memory::Write32(out.address + 4u, static_cast<uint32_t>(titleId));
-                return ISFS_OK;
-            }
-
-            case ES_IOCTL_SIGN: {
-                if (numIn != 1 || numOut != 2) {
-                    return ISFS_EINVAL;
-                }
-                const IosVector in = ReadIosVector(vectorPtr, 0);
-                const IosVector sigOut = ReadIosVector(vectorPtr, 1);
-                const IosVector certOut = ReadIosVector(vectorPtr, 2);
-                if (in.address == 0 || !Memory::Contains(in.address, in.size)) {
-                    return ISFS_EINVAL;
-                }
-                const uint8_t* input = Memory::GetPointer(in.address, in.size);
-                WiiEsCrypto::EcSignature signature{};
-                WiiEsCrypto::EccCert cert{};
-                WiiEsCrypto::Sign(CurrentMkwTitleId(), input, in.size, signature, cert);
-                if (!WriteGuestBytes(sigOut.address, sigOut.size, signature.data(), signature.size()) ||
-                    !WriteGuestBytes(certOut.address, certOut.size, cert.data(), cert.size())) {
-                    return ISFS_EINVAL;
-                }
                 return ISFS_OK;
             }
 
@@ -1149,15 +585,6 @@ extern "C" void NAND_IOS_Ioctlv_Entry_HLE(CpuContext* ctx) {
     const uint32_t numIn = ctx->gpr[5];
     const uint32_t numOut = ctx->gpr[6];
     const uint32_t vectorPtr = ctx->gpr[7];
-
-    if (Network_HLE_IsFd(fd)) {
-        const bool handled = TryDeferredNetworkIosSync(ctx, [&](uint32_t waitQueue) {
-            return Network_HLE_StartIoctlvSync(fd, cmd, numIn, numOut, vectorPtr, waitQueue);
-        });
-        if (handled) {
-            return;
-        }
-    }
 
     ctx->gpr[3] = static_cast<uint32_t>(
         NAND_IOS_Ioctlv_HLE(fd, cmd, numIn, numOut, vectorPtr));

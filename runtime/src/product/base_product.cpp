@@ -4,8 +4,7 @@ namespace RuntimeProduct {
 
 const Descriptor& Active() noexcept {
     static constexpr Descriptor descriptor{
-        Kind::BaseGame,
-        "WiiCompiled",
+        "Sin & Punishment: Star Successor",
     };
     return descriptor;
 }

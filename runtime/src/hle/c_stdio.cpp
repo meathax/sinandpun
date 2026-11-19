@@ -9,48 +9,6 @@
 #include <sstream>
 #include <string>
 
-// Hardware boundary used by the translated MetroWerks stdio implementation.
-// The original routine forwards completed FILE-buffer writes to UART/EXI or TRK.
-// Keep __FileWrite (0x80011620), __fwrite, and fwide translated so their buffering,
-// orientation, short-write, and return-value semantics remain guest-owned.
-extern "C" uint32_t ConsoleWrite_HLE_80015500(
-    uint32_t handle, uint32_t bufferAddr, uint32_t lengthPtr, uint32_t refCon)
-{
-    (void)handle;
-    (void)refCon;
-
-    if (!lengthPtr) {
-        return 1;
-    }
-
-    try {
-        const uint32_t length = Memory::Read32(lengthPtr);
-        if (length == 0) {
-            return 0;
-        }
-
-        const uint8_t* data = Memory::GetPointer(bufferAddr, length);
-        if (!data) {
-            Memory::Write32(lengthPtr, 0);
-            return 1;
-        }
-
-        return 0;
-    } catch (const Memory::AccessViolation&) {
-        try {
-            Memory::Write32(lengthPtr, 0);
-        } catch (const Memory::AccessViolation&) {
-        }
-        return 1;
-    }
-}
-
-SIN_DISABLED_NATIVE_OVERRIDE(80015500, ConsoleWrite_HLE_80015500, uint32_t,
-         (uint32_t handle, uint32_t bufferAddr, uint32_t lengthPtr, uint32_t refCon),
-         (handle, bufferAddr, lengthPtr, refCon));
-
-
-
 // --------------------------------------------------------------------------
 // Shared guest printf formatter used by CPU-context stdio and OSReport paths.
 // --------------------------------------------------------------------------

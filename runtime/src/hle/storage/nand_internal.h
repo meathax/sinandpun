@@ -15,7 +15,6 @@
 #include "recomp_mod_loader.h"
 #include "runtime_config.h"
 #include "runtime_product.h"
-#include "wii_es_crypto.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -90,7 +89,7 @@ void CloseFd(int32_t fd);
 // Path Translation
 // ============================================================================
 
-uint32_t CurrentMkwTitleIdLo();
+uint32_t CurrentTitleIdLo();
 std::string CurrentNandDataDir();
 const std::filesystem::path& GetNandBasePath();
 std::filesystem::path TranslateNandPath(const char* wiiPath);
@@ -182,12 +181,6 @@ enum ISFSResult {
     ISFS_EIO = -114,         // I/O error
     ISFS_MAXFD = -22,        // Max file descriptors
 };
-
-// ============================================================================
-// ISFS library initialization (defined in nand_isfs.cpp)
-// ============================================================================
-
-int32_t ISFS_OpenLib_Initialize(CpuContext* ctx);
 
 // Shadow-write machinery, defined with the NANDSafeOpen/NANDSafeClose section below.
 std::filesystem::path SafeTempPathFor(const std::filesystem::path& hostPath);

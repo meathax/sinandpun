@@ -97,22 +97,6 @@ set(MKW_NATIVE_PREBUILT_EXPORT_DIR "" CACHE PATH
 option(MKW_USE_PREBUILT_RUNTIME
     "Link the native prebuilt package's runtime archive when it matches this workspace" ON)
 
-# The two Crypto++ configuration macros are load-bearing for ABI: they shape the
-# structs and inline code the headers generate, so a first-party TU including
-# <cryptopp/...> must see exactly what the archive was compiled with. Both the
-# from-source target below and the prebuilt import in cmake/NativePrebuilt.cmake
-# consume this one definition.
-set(MKW_CRYPTOPP_INTERFACE_DEFINITIONS CRYPTOPP_DISABLE_ASM CRYPTOPP_NO_GLOBAL_BYTE)
-
-# Riivolution XML is parsed with pugixml, matching the parser used by Dolphin.
-# The four upstream files from v1.15 (ee86beb30e4973f5feffe3ce63bfa4fbadf72f38)
-# are vendored so builds remain usable with FETCHCONTENT_FULLY_DISCONNECTED.
-add_library(mkw_pugixml STATIC third_party/pugixml/pugixml.cpp)
-add_library(mkw::pugixml ALIAS mkw_pugixml)
-target_include_directories(mkw_pugixml PUBLIC third_party/pugixml)
-target_compile_features(mkw_pugixml PUBLIC cxx_std_17)
-set_target_properties(mkw_pugixml PROPERTIES UNITY_BUILD OFF)
-
 # Runtime configuration is real TOML, parsed by toml11 rather than a project-
 # specific line parser. Keep it header-only and vendored so disconnected release
 # builds have exactly the same parser as developer builds.
@@ -121,70 +105,6 @@ add_library(mkw::toml11 ALIAS mkw_toml11)
 target_include_directories(mkw_toml11 SYSTEM INTERFACE third_party/toml11)
 target_compile_features(mkw_toml11 INTERFACE cxx_std_17)
 
-# Wii ES signatures use the standard binary-field sect233r1 curve. Crypto++
-# supplies that curve, SHA-1, ECDSA and an OS-seeded CSPRNG. The complete 8.9.0
-# source distribution is vendored. Assembly and algorithm-specific SIMD units
-# are disabled to keep the library portable and independent of the runtime's
-# x86-64-v3 policy; the static linker retains only the algorithms we reference.
-#
-# Crypto++ is by far the most expensive vendored library to compile (~150
-# translation units), and under the shipped fixed toolchain it is bit-for-bit
-# identical for every user, so the prebuilt package harvests its archive and
-# this block is skipped entirely in that mode (see cmake/NativePrebuilt.cmake).
-if(NOT MKW_NATIVE_PREBUILT_DIR)
-    file(GLOB MKW_CRYPTOPP_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_LIST_DIR}/third_party/cryptopp/*.cpp")
-    list(FILTER MKW_CRYPTOPP_SOURCES EXCLUDE REGEX
-        "/(adhoc|bench[123]|datatest|dlltest|fipsalgt|fipstest|pch|regtest[1234]|simple|test|validat[0-9]+)\\.cpp$")
-    list(FILTER MKW_CRYPTOPP_SOURCES EXCLUDE REGEX
-        "(_avx|_ppc|_simd|_sse)\\.cpp$")
-    add_library(mkw_cryptopp STATIC ${MKW_CRYPTOPP_SOURCES})
-    add_library(mkw::cryptopp ALIAS mkw_cryptopp)
-    target_include_directories(mkw_cryptopp SYSTEM PUBLIC third_party)
-    target_compile_features(mkw_cryptopp PUBLIC cxx_std_17)
-    target_compile_definitions(mkw_cryptopp PUBLIC ${MKW_CRYPTOPP_INTERFACE_DEFINITIONS})
-    target_compile_options(mkw_cryptopp PRIVATE -w)
-    set_target_properties(mkw_cryptopp PROPERTIES UNITY_BUILD OFF)
-endif()
-
-# TLS for non-Windows guest network HLE (runtime/src/hle/net/network_ssl.cpp) - the Windows path
-# uses Schannel (a Windows-only OS API), which has no equivalent on Linux/Android, so this project
-# needs its own TLS library there. mbed TLS was chosen over OpenSSL specifically because it cross-
-# compiles cleanly for Android with nothing beyond a plain C toolchain (no perl/asm build-script
-# dependency the way OpenSSL's build has), matching how this project already prefers toolchain-
-# simple libraries (see Crypto++ above, similarly stripped of ASM/SIMD for portability).
-# The from-source build fetches a pinned upstream tarball with a checked SHA-256.
-# The Linux native prebuilt package instead ships its compiled archives and headers.
-# Bump both values in cmake/MbedTLSPin.cmake when updating; the hash comes from
-# upstream's signed `mbedtls-<version>-sha256sum.txt` release asset.
-#
-# The alias exists on every platform so the link lines in cmake/PublicProducts.cmake stay
-# platform-independent, but it is only populated where network_ssl.cpp actually compiles the mbed
-# TLS path (`#ifndef _WIN32`). Windows keeps Schannel and must not fetch anything: its builds run
-# with FETCHCONTENT_FULLY_DISCONNECTED=ON against the offline dependency set prepared by
-# Launcher/Prepare-Dependencies.ps1, so an unconditional fetch would fail a clean configure there
-# and would also add a dependency Windows never links.
-add_library(mkw_mbedtls INTERFACE)
-add_library(mkw::mbedtls ALIAS mkw_mbedtls)
-if(NOT MKW_PLATFORM_WINDOWS)
-    include("${CMAKE_CURRENT_LIST_DIR}/cmake/MbedTLSPin.cmake")
-    if(NOT MKW_NATIVE_PREBUILT_DIR)
-        include(FetchContent)
-        FetchContent_Declare(mkw_mbedtls_upstream
-            URL "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-${MKW_MBEDTLS_VERSION}/mbedtls-${MKW_MBEDTLS_VERSION}.tar.bz2"
-            URL_HASH SHA256=${MKW_MBEDTLS_SHA256}
-            DOWNLOAD_EXTRACT_TIMESTAMP FALSE
-        )
-        # Subproject mode already disables testing and codegen; it still enables programs.
-        set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
-        set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-        set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
-        set(DISABLE_PACKAGE_CONFIG_AND_INSTALL ON CACHE BOOL "" FORCE)
-        FetchContent_MakeAvailable(mkw_mbedtls_upstream)
-        target_link_libraries(mkw_mbedtls INTERFACE MbedTLS::mbedtls MbedTLS::mbedx509 MbedTLS::mbedcrypto)
-    endif()
-endif()
-
 set(MKW_TRANSLATED_COMPILE_JOBS 0 CACHE STRING
     "Cap on concurrently compiling translated shard TUs via a Ninja job pool (0 = uncapped). \
 Scheduling only - never affects output bytes, so it is deliberately outside the canonical flag fingerprint.")
@@ -192,7 +112,7 @@ set(MKW_CPPWINRT_INCLUDE_DIR "" CACHE PATH "Optional self-contained C++/WinRT in
 
 # Precompiled aurora + third-party package (see launcher/Prepare-NativePrebuilt.ps1).
 # Empty - the default - keeps the from-source behaviour every developer build
-# uses. When set, aurora-main, its extern/ tree and the vendored Crypto++ are
+# uses. When set, aurora-main and its extern/ tree are
 # not compiled at all; imported targets with the same names are wired up from
 # the package instead, so this project's own code compiles and links exactly
 # as before.
@@ -359,12 +279,11 @@ else()
 endif()
 set(MKW_PLATFORM_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/platform/host_platform.cpp")
 set(MKW_BASE_PRODUCT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/product/base_product.cpp")
-set(MKW_RETRO_REWIND_PRODUCT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/product/retro_rewind_product.cpp")
 # The host ISA guard is the one translation unit that must not receive the
 # x86-64-v3 flags, so it gets its own object library instead of riding along in
 # the runtime library. See cmake/PublicProducts.cmake and the file's own header.
 set(MKW_CPU_BASELINE_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/host_cpu_baseline.cpp")
-list(REMOVE_ITEM SOURCES ${MKW_BASE_PRODUCT_SOURCE} ${MKW_RETRO_REWIND_PRODUCT_SOURCE}
+list(REMOVE_ITEM SOURCES ${MKW_BASE_PRODUCT_SOURCE}
      ${MKW_CPU_BASELINE_SOURCE} ${MKW_PLATFORM_SOURCE})
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/PlatformTests.cmake")
@@ -385,7 +304,7 @@ endif()
 
 # The translator emits the complete, content-addressed source graph. Consuming
 # this one manifest keeps configure independent of the 28k generated function
-# files and of optional Retro Rewind artifacts such as code.map.
+# files.
 if(MKW_BUILD_PRODUCTS)
     set(MKW_TRANSLATED_SHARD_MANIFEST
         "${CMAKE_CURRENT_LIST_DIR}/../generated/build_shards/shards.cmake"
@@ -402,11 +321,9 @@ if(MKW_BUILD_PRODUCTS)
             "Run Translator.Cli emit-build-shards first; see translator/README.md.")
     endif()
     include("${MKW_TRANSLATED_SHARD_MANIFEST}")
-    set(MKW_HAVE_RETRO_REWIND ${MKW_HAVE_RETRO_REWIND_SHARDS})
     message(STATUS
         "Translator graph: ${MKW_SHARED_BASE_FUNCTION_COUNT}/${MKW_BASE_FUNCTION_COUNT} base functions shared; "
-        "${MKW_PROFILE_SENSITIVE_CALLER_COUNT} profile-sensitive callers; "
-        "${MKW_RETRO_REWIND_FUNCTION_COUNT} Retro Rewind functions")
+        "${MKW_PROFILE_SENSITIVE_CALLER_COUNT} profile-sensitive callers")
 
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/PublicProducts.cmake")
 else()
@@ -422,7 +339,7 @@ else()
         target_compile_definitions(mkw_macos_native_compile PRIVATE SDL_MAIN_HANDLED TARGET_PC)
         target_link_libraries(mkw_macos_native_compile PRIVATE
             aurora::gx aurora::pad aurora::si aurora::vi aurora::mtx
-            mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls)
+            mkw::toml11)
         if(MKW_PLATFORM_MACOS_X86_64)
             target_link_libraries(mkw_macos_native_compile PRIVATE mkw::libco)
             target_compile_options(mkw_macos_native_compile PRIVATE

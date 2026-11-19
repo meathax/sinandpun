@@ -34,21 +34,6 @@ std::vector<RecompMod::InitializerFn>& PostRelInitializers() {
     return initializers;
 }
 
-std::vector<std::filesystem::path>& OverlayRoots() {
-    static std::vector<std::filesystem::path> roots;
-    return roots;
-}
-
-std::string& RiivolutionXmlPath() {
-    static std::string path;
-    return path;
-}
-
-std::vector<RecompMod::RiivolutionOptionSelection>& RiivolutionSelections() {
-    static std::vector<RecompMod::RiivolutionOptionSelection> selections;
-    return selections;
-}
-
 std::vector<RecompMod::MemoryReservation>& Reservations() {
     static std::vector<RecompMod::MemoryReservation> reservations;
     return reservations;
@@ -268,64 +253,6 @@ void RunPostRelInitializers() {
     if (!pending.empty()) {
         RT_LOG(RT_TAG_MOD) << "Ran " << pending.size() << " recomp mod post-REL initializer(s)" << std::endl;
     }
-}
-
-void RegisterDvdOverlayRoot(std::string root) {
-    if (root.empty()) {
-        return;
-    }
-
-    // Documented exception to the "relative to Config.toml" rule: overlay roots
-    // are registered by mod code shipped beside the executable, so they resolve
-    // against the executable directory instead.
-    const std::filesystem::path base =
-        RuntimeConfigFile::ExecutableDirectory().value_or(std::filesystem::current_path());
-    std::filesystem::path resolved = RuntimeConfigFile::ResolveRelativeTo(base, root);
-
-    std::lock_guard<std::mutex> lock(ModMutex());
-    auto& roots = OverlayRoots();
-    const auto it = std::find(roots.begin(), roots.end(), resolved);
-    if (it == roots.end()) {
-        roots.push_back(std::move(resolved));
-    }
-}
-
-const std::vector<std::filesystem::path>& DvdOverlayRoots() {
-    return OverlayRoots();
-}
-
-void RegisterRiivolutionXml(const char* packRelativePath) {
-    if (!packRelativePath || packRelativePath[0] == '\0') {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(ModMutex());
-    RiivolutionXmlPath() = packRelativePath;
-}
-
-void RegisterRiivolutionOption(const char* sectionName, const char* optionName, unsigned int choice) {
-    if (!optionName || optionName[0] == '\0') {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(ModMutex());
-    auto& selections = RiivolutionSelections();
-    const auto existing = std::find_if(selections.begin(), selections.end(), [&](const RiivolutionOptionSelection& selection) {
-        return selection.section == (sectionName ? sectionName : "") && selection.option == optionName;
-    });
-    if (existing != selections.end()) {
-        existing->choice = choice;
-        return;
-    }
-    selections.push_back({sectionName ? sectionName : "", optionName, choice});
-}
-
-const std::string& RiivolutionXml() {
-    return RiivolutionXmlPath();
-}
-
-const std::vector<RiivolutionOptionSelection>& RiivolutionOptionSelections() {
-    return RiivolutionSelections();
 }
 
 void RegisterMemoryReservation(uint32_t start, uint32_t end, std::string name) {

@@ -74,18 +74,8 @@ struct RuntimeUserConfig {
     // the window has focus instead of its desktop one (buttons bound to mouse and keyboard).
     std::optional<bool> steamInputOverride;
     std::optional<uint32_t> steamInputAppId;
-    std::optional<bool> networkEnabled;
-    std::optional<bool> discordPresenceEnabled;
-    // The application ID of the WiiCompiled Discord application. This is only
-    // used by the base product; Retro Rewind supplies its own ID through the
-    // standard Dolphin /dev/dolphin interface.
-    std::optional<std::string> discordClientId;
     std::optional<std::string> nandRoot;
     std::optional<std::string> dvdRoot;
-    // The one canonical Retro Rewind installation, owned and updated by the frontend. Setup records
-    // it here instead of copying the pack, so an asset-only update is visible on the next launch.
-    std::optional<std::string> retroRewindRoot;
-    std::vector<std::string> overlayRoots;
     // Controller mappings use Wii/GameCube button names as keys and up to two
     // comma-separated SDL-style physical button names ("south", or
     // "dpad_up,left_shoulder") as values; pressing either bound button counts.
@@ -279,8 +269,8 @@ inline void EnsureConfigFile() {
     if (!output) {
         return;
     }
-    output << "# WiiCompiled user configuration\n"
-              "# Set paths.dvd_root to an extracted Mario Kart Wii DATA directory.\n\n"
+    output << "# Sin & Punishment: Star Successor user configuration\n"
+              "# Set paths.dvd_root to the extracted game directory (contains sys/ and files/).\n\n"
               "[video]\n"
               "widescreen = true\n"
               "force_aspect = false\n"
@@ -304,32 +294,17 @@ inline void EnsureConfigFile() {
               "texture_dumps = false\n\n"
               "[audio]\n"
               "volume = 1.0\n"
-              "music_volume = 1.0\n"
-              "sound_effects_volume = 1.0\n"
-              "ui_volume = 1.0\n"
-              "voices_volume = 1.0\n"
               "muted = false\n"
-              "attenuate_music_when_media_plays = false\n"
               "# Runs the AX/DSP voice mix on its own thread, joined before the\n"
               "# guest can observe it. Set to false to mix inline on the guest\n"
               "# thread exactly as the runtime did before.\n"
               "mix_worker = true\n\n"
-              "[network]\n"
-              "enabled = true\n\n"
               "[controller]\n"
               "steam_input_override = true\n"
               "# steam_input_app_id = 480\n\n"
-              "[discord]\n"
-              "# Rich Presence talks only to a locally-running Discord client.\n"
-              "# Retro Rewind supplies its official app ID automatically. Set this\n"
-              "# to WiiCompiled's Discord application ID for basic base-game presence.\n"
-              "enabled = true\n"
-              "# client_id = \"123456789012345678\"\n\n"
               "[paths]\n"
-              "# dvd_root = \"D:\\\\MarioKartWii\\\\DATA\"\n"
-              "# nand_root = \"D:\\\\WiiNand\"\n"
-              "# retro_rewind_root = \"D:\\\\RetroRewind\\\\RetroRewind6\"\n"
-              "# overlay_roots = [\"D:\\\\RetroRewind\"]\n";
+              "# dvd_root = \"D:\\\\Sin\\\\orig\\\\R2VE01\"\n"
+              "# nand_root = \"D:\\\\WiiNand\"\n";
 }
 
 template <typename T>
@@ -374,21 +349,6 @@ inline std::optional<float> FindConfigFloat(
         return std::nullopt;
     }
     return static_cast<float>(*value);
-}
-
-inline void AppendOverlayRoots(RuntimeUserConfig& config, const std::string& roots) {
-    size_t begin = 0;
-    while (begin < roots.size()) {
-        const size_t end = roots.find(';', begin);
-        std::string root = Trim(std::string_view(roots).substr(begin, end - begin));
-        if (!root.empty()) {
-            config.overlayRoots.push_back(std::move(root));
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        begin = end + 1;
-    }
 }
 
 // Reads every supported setting out of a parsed Config.toml document.
@@ -519,24 +479,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     if (const auto value = FindConfigUint(document, "controller", "steam_input_app_id"); value && *value != 0) {
         config.steamInputAppId = *value;
     }
-    config.networkEnabled = FindConfigValue<bool>(document, "network", "enabled");
-    config.discordPresenceEnabled = FindConfigValue<bool>(document, "discord", "enabled");
-    config.discordClientId = FindConfigValue<std::string>(document, "discord", "client_id");
 
     config.nandRoot = FindConfigValue<std::string>(document, "paths", "nand_root");
     config.dvdRoot = FindConfigValue<std::string>(document, "paths", "dvd_root");
-    config.retroRewindRoot = FindConfigValue<std::string>(document, "paths", "retro_rewind_root");
-    if (auto roots = FindConfigValue<std::vector<std::string>>(document, "paths", "overlay_roots")) {
-        for (auto& root : *roots) {
-            root = Trim(root);
-            if (!root.empty()) {
-                config.overlayRoots.push_back(std::move(root));
-            }
-        }
-    } else if (auto roots = FindConfigValue<std::string>(document, "paths", "overlay_roots")) {
-        AppendOverlayRoots(config, *roots);
-    }
-
     return config;
 }
 
@@ -1057,10 +1002,6 @@ inline std::string DisplayMode(std::string fallback = "windowed") {
     return Get().displayMode.value_or(std::move(fallback));
 }
 
-inline bool NetworkEnabled(bool fallback = true) {
-    return Get().networkEnabled.value_or(fallback);
-}
-
 inline std::string NandRoot(std::string fallback = "") {
     return Get().nandRoot.value_or(std::move(fallback));
 }
@@ -1089,23 +1030,6 @@ inline std::filesystem::path ResolveRelativeToConfig(const std::string& value) {
 inline std::filesystem::path ResolvedDvdRoot() {
     const std::string configured = DvdRoot();
     return configured.empty() ? std::filesystem::path{} : ResolveRelativeToConfig(configured);
-}
-
-/// The canonical Retro Rewind installation the frontend owns, or "" when none is recorded.
-inline std::string RetroRewindRoot(std::string fallback = "") {
-    return Get().retroRewindRoot.value_or(std::move(fallback));
-}
-
-inline bool DiscordPresenceEnabled(bool fallback = true) {
-    return Get().discordPresenceEnabled.value_or(fallback);
-}
-
-inline std::string DiscordClientId(std::string fallback = "1543984562369990706") {
-    return Get().discordClientId.value_or(std::move(fallback));
-}
-
-inline const std::vector<std::string>& OverlayRoots() {
-    return Get().overlayRoots;
 }
 
 inline void LogLoadedConfig() {
@@ -1160,17 +1084,8 @@ inline void LogLoadedConfig() {
             if (config.audioMuted) {
                 std::cout << " audio_muted=" << (*config.audioMuted ? "true" : "false");
             }
-            if (config.networkEnabled) {
-                std::cout << " network_enabled=" << (*config.networkEnabled ? "true" : "false");
-            }
-            if (config.discordPresenceEnabled) {
-                std::cout << " discord_enabled=" << (*config.discordPresenceEnabled ? "true" : "false");
-            }
             if (config.nandRoot) {
                 std::cout << " nand_root=" << *config.nandRoot;
-            }
-            if (config.retroRewindRoot) {
-                std::cout << " retro_rewind_root=" << *config.retroRewindRoot;
             }
         }
         std::cout << std::endl;

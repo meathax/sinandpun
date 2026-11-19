@@ -2,7 +2,6 @@
 #include "runtime_config.h"
 #include "runtime_log.h"
 
-#include <imgui.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_joystick.h>
 #include <SDL3/SDL_platform.h>
@@ -347,6 +346,26 @@ void HandleSdlEvent(const SDL_Event& event) {
         StopWizard();
         return;
     }
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+        if (event.key.scancode == SDL_SCANCODE_RETURN || event.key.scancode == SDL_SCANCODE_KP_ENTER) {
+            if (g_wizard.stepIndex < kSteps.size()) {
+                g_wizard.status.clear();
+                AdvanceStep(std::nullopt);
+            } else if (std::any_of(g_wizard.bindings.begin(), g_wizard.bindings.end(),
+                                   [](const std::optional<std::string>& b) { return b.has_value(); })) {
+                FinishWizard();
+            }
+            return;
+        }
+        if (event.key.scancode == SDL_SCANCODE_BACKSPACE && g_wizard.stepIndex > 0) {
+            --g_wizard.stepIndex;
+            g_wizard.bindings[g_wizard.stepIndex].reset();
+            g_wizard.status.clear();
+            g_wizard.acceptAfter = Clock::now() + kCaptureDebounce;
+            SnapshotAxes();
+            return;
+        }
+    }
     if (g_wizard.stepIndex >= kSteps.size() || Clock::now() < g_wizard.acceptAfter) {
         return;
     }
@@ -371,109 +390,72 @@ void HandleSdlEvent(const SDL_Event& event) {
     }
 }
 
-void DrawSetupList() {
-    const std::vector<SetupCandidate> candidates = CollectCandidates();
-    if (candidates.empty()) {
-        return;
+std::vector<Candidate> Candidates() {
+    std::vector<Candidate> out;
+    for (const SetupCandidate& c : CollectCandidates()) {
+        out.push_back({static_cast<uint32_t>(c.id), c.name, c.incompleteMapping});
     }
-    ImGui::SeparatorText("Unrecognized controllers");
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
-    ImGui::TextDisabled(
-        "These devices have no usable gamepad mapping. Set one up by pressing "
-        "each control when asked.");
-    ImGui::PopTextWrapPos();
-    for (const auto& candidate : candidates) {
-        ImGui::PushID(static_cast<int>(candidate.id));
-        ImGui::TextUnformatted(candidate.name.c_str());
-        ImGui::SameLine();
-        if (ImGui::SmallButton(candidate.incompleteMapping ? "Fix mapping" : "Set up")) {
-            StartWizard(candidate.id);
-        }
-        if (candidate.incompleteMapping && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("SDL matched a mapping without an analog stick for this device");
-        }
-        ImGui::PopID();
-    }
+    return out;
 }
 
-void Draw() {
+void Start(uint32_t id) { StartWizard(static_cast<SDL_JoystickID>(id)); }
+
+void Draw(game_ui::Frame& input) {
     if (!g_wizard.active) {
         return;
     }
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f,
-                                   viewport->Pos.y + viewport->Size.y * 0.5f),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Appearing);
-    bool open = true;
-    if (ImGui::Begin("Controller setup", &open,
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::TextUnformatted(g_wizard.deviceName.c_str());
-        ImGui::Separator();
-        if (g_wizard.stepIndex < kSteps.size()) {
-            ImGui::Text("Step %d of %d", static_cast<int>(g_wizard.stepIndex + 1),
-                        static_cast<int>(kSteps.size()));
-            ImGui::Spacing();
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400.0f);
-            ImGui::TextUnformatted(kSteps[g_wizard.stepIndex].prompt);
-            ImGui::PopTextWrapPos();
-            ImGui::Spacing();
-            if (ImGui::Button("Skip")) {
-                g_wizard.status.clear();
-                AdvanceStep(std::nullopt);
-            }
-            ImGui::SameLine();
-            ImGui::BeginDisabled(g_wizard.stepIndex == 0);
-            if (ImGui::Button("Back")) {
-                --g_wizard.stepIndex;
-                g_wizard.bindings[g_wizard.stepIndex].reset();
-                g_wizard.status.clear();
-                g_wizard.acceptAfter = Clock::now() + kCaptureDebounce;
-                SnapshotAxes();
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) {
-                open = false;
-            }
-        } else {
-            const size_t boundCount =
-                std::count_if(g_wizard.bindings.begin(), g_wizard.bindings.end(),
-                              [](const std::optional<std::string>& b) { return b.has_value(); });
-            ImGui::Text("Captured %d of %d controls.", static_cast<int>(boundCount),
-                        static_cast<int>(kSteps.size()));
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400.0f);
-            ImGui::TextDisabled("Save applies the mapping now and remembers it for future launches.");
-            ImGui::PopTextWrapPos();
-            ImGui::Spacing();
-            ImGui::BeginDisabled(boundCount == 0);
-            if (ImGui::Button("Save")) {
+    static game_ui::ModalState modal;
+    const bool finished = g_wizard.stepIndex >= kSteps.size();
+    const size_t boundCount = static_cast<size_t>(
+        std::count_if(g_wizard.bindings.begin(), g_wizard.bindings.end(),
+                      [](const std::optional<std::string>& b) { return b.has_value(); }));
+    game_ui::ModalSpec spec;
+    spec.title = "Controller setup";
+    spec.lines.push_back(g_wizard.deviceName);
+    if (!finished) {
+        spec.lines.push_back("Step " + std::to_string(g_wizard.stepIndex + 1) + " of " + std::to_string(kSteps.size()));
+        spec.lines.push_back(kSteps[g_wizard.stepIndex].prompt);
+    } else {
+        spec.lines.push_back("Captured " + std::to_string(boundCount) + " of " + std::to_string(kSteps.size()) + " controls.");
+        spec.lines.push_back("Save applies the mapping now and remembers it for future launches.");
+    }
+    if (!g_wizard.status.empty()) {
+        spec.lines.push_back(g_wizard.status);
+    }
+    spec.buttons = {finished ? "Save" : "Skip", "Back", "Cancel"};
+    spec.defaultButton = 0;
+    spec.mouseOnly = true;
+    spec.sticky = true;
+    spec.progress = static_cast<float>(g_wizard.stepIndex) / static_cast<float>(kSteps.size());
+    spec.hint = "Enter: skip / save    Backspace: back    Esc: cancel";
+    const int result = game_ui::DrawModal(modal, input, spec);
+    if (result < 0) {
+        return;
+    }
+    if (result == 0) {
+        if (finished) {
+            if (boundCount > 0) {
                 FinishWizard();
             }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::Button("Back")) {
-                --g_wizard.stepIndex;
-                g_wizard.bindings[g_wizard.stepIndex].reset();
-                g_wizard.acceptAfter = Clock::now() + kCaptureDebounce;
-                SnapshotAxes();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) {
-                open = false;
-            }
+        } else {
+            g_wizard.status.clear();
+            AdvanceStep(std::nullopt);
         }
-        if (!g_wizard.status.empty()) {
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "%s", g_wizard.status.c_str());
+    } else if (result == 1) {
+        if (g_wizard.stepIndex > 0) {
+            --g_wizard.stepIndex;
+            g_wizard.bindings[g_wizard.stepIndex].reset();
+            g_wizard.status.clear();
+            g_wizard.acceptAfter = Clock::now() + kCaptureDebounce;
+            SnapshotAxes();
         }
-    }
-    ImGui::End();
-    if (!open && g_wizard.active) {
+    } else {
         StopWizard();
     }
+    if (!g_wizard.active) {
+        modal = game_ui::ModalState{};
+    }
 }
-
 bool IsActive() { return g_wizard.active; }
 
 } // namespace controller_mapping_wizard

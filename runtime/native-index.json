@@ -2,7 +2,7 @@
   "format": "wiicompiled-runtime-native-index",
   "formatVersion": 2,
   "extractorVersion": 2,
-  "sourceDigest": "f85017c1631e03ee5346e7294d283cb9a892606055843d829dc5d177a300580d",
+  "sourceDigest": "1778786e5cff3cffea2502d1947175a72a2aa5a588cc26cd0313a2f31cc2ab5b",
   "registrations": [
     {
       "address": "0x8012E630",
@@ -197,14 +197,6 @@
       "modOverlay": "Unspecified"
     },
     {
-      "address": "0x80169BCC",
-      "symbol": "ISFS_OpenLib_HLE_80169BCC",
-      "sourceFile": "hle/storage/nand_isfs.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
       "address": "0x8018C250",
       "symbol": "DSPCheckMailToDSP_8015d3fc",
       "sourceFile": "hle/audio/audio.cpp",
@@ -307,14 +299,6 @@
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
       "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x801938FC",
-      "symbol": "NAND_IOS_OpenBody_HLE_801938FC",
-      "sourceFile": "hle/storage/nand_isfs.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Replacement"
     },
     {
       "address": "0x801941E0",
@@ -581,14 +565,6 @@
       "modOverlay": "Unspecified"
     },
     {
-      "address": "0x801A4EC4",
-      "symbol": "OSFatal_HLE_801a4ec4",
-      "sourceFile": "hle/os/os_init.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
       "address": "0x801A5040",
       "symbol": "NANDCheck_HLE",
       "sourceFile": "hle/storage/nand_api.cpp",
@@ -834,14 +810,6 @@
       "sourceFile": "hle/os/os_reset.cpp",
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x801A961C",
-      "symbol": "OSInitAlarm_RecompModLateInit_801a961c",
-      "sourceFile": "hle/os/os_init.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
       "modOverlay": "Unspecified"
     },
     {
@@ -1733,14 +1701,6 @@
       "modOverlay": "Unspecified"
     },
     {
-      "address": "0x801D8D30",
-      "symbol": "NHTTPStartup_Reentrant_HLE_801d8d30",
-      "sourceFile": "hle/net/network_config.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
       "address": "0x801D8EC0",
       "symbol": "GX__InitTexObjCI_80170a04",
       "sourceFile": "hle/gx/gx_texture.cpp",
@@ -2266,70 +2226,6 @@
       "sourceFile": "hle/gx/gx_stubs.cpp",
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x8052F4E8",
-      "symbol": "RacedataScenario_InitScreens_8052f4e8",
-      "sourceFile": "hle/boot_race.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Wrapper"
-    },
-    {
-      "address": "0x8052F924",
-      "symbol": "RacedataScenario_InitRng_8052f924",
-      "sourceFile": "hle/boot_race.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x8055531C",
-      "symbol": "StaticRProlog_RecompModInit_8055531c",
-      "sourceFile": "hle/os/os_init.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x80590664",
-      "symbol": "KartLink_IsCPU_80590664",
-      "sourceFile": "hle/boot_race.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x805B9344",
-      "symbol": "ArgumentParser_Parse_805b9344",
-      "sourceFile": "hle/boot_race.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x80601C64",
-      "symbol": "Page_CheckActions_80601c64",
-      "sourceFile": "friend_code_keyboard.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x8061B9BC",
-      "symbol": "SectionPad_GetFirstDeactivatedPad_8061b9bc",
-      "sourceFile": "hle/boot_race.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x8072624C",
-      "symbol": "KartAIController_IsCPU_8072624c",
-      "sourceFile": "hle/boot_race.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": false,
       "modOverlay": "Unspecified"
     }
   ],
@@ -4030,27 +3926,6 @@
       }
     },
     {
-      "address": "0x80169BCC",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
       "address": "0x8018C250",
       "isPrecise": true,
       "contract": {
@@ -4308,27 +4183,6 @@
       "contract": {
         "gprReadBeforeWriteMask": 24,
         "gprPossibleWriteMask": 8,
-        "gprReturnMask": 8,
-        "fprReadBeforeWriteMask": 0,
-        "fprPossibleWriteMask": 0,
-        "fprReturnMask": 0,
-        "crReadBeforeWriteMask": 0,
-        "crPossibleWriteMask": 0,
-        "readsXerBeforeWrite": false,
-        "mayWriteXer": false,
-        "readsCtrBeforeWrite": false,
-        "mayWriteCtr": false,
-        "readsLrBeforeWrite": false,
-        "mayWriteLr": false,
-        "boundaryFlags": 0
-      }
-    },
-    {
-      "address": "0x801938FC",
-      "isPrecise": true,
-      "contract": {
-        "gprReadBeforeWriteMask": 26,
-        "gprPossibleWriteMask": 10,
         "gprReturnMask": 8,
         "fprReadBeforeWriteMask": 0,
         "fprPossibleWriteMask": 0,
@@ -4892,23 +4746,23 @@
     },
     {
       "address": "0x8019A5E0",
-      "isPrecise": false,
+      "isPrecise": true,
       "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
+        "gprReadBeforeWriteMask": 504,
+        "gprPossibleWriteMask": 8,
+        "gprReturnMask": 8,
+        "fprReadBeforeWriteMask": 0,
+        "fprPossibleWriteMask": 0,
+        "fprReturnMask": 0,
+        "crReadBeforeWriteMask": 0,
+        "crPossibleWriteMask": 0,
+        "readsXerBeforeWrite": false,
+        "mayWriteXer": false,
+        "readsCtrBeforeWrite": false,
+        "mayWriteCtr": false,
+        "readsLrBeforeWrite": false,
+        "mayWriteLr": false,
+        "boundaryFlags": 0
       }
     },
     {
@@ -5018,27 +4872,6 @@
     },
     {
       "address": "0x801A40A0",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x801A4EC4",
       "isPrecise": false,
       "contract": {
         "gprReadBeforeWriteMask": 4294967295,
@@ -5690,27 +5523,6 @@
     },
     {
       "address": "0x801A8E90",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x801A961C",
       "isPrecise": false,
       "contract": {
         "gprReadBeforeWriteMask": 4294967295,
@@ -8062,27 +7874,6 @@
       }
     },
     {
-      "address": "0x801D8D30",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
       "address": "0x801D8EC0",
       "isPrecise": false,
       "contract": {
@@ -9466,174 +9257,6 @@
         "readsLrBeforeWrite": false,
         "mayWriteLr": false,
         "boundaryFlags": 0
-      }
-    },
-    {
-      "address": "0x8052F4E8",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x8052F924",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x8055531C",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x80590664",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x805B9344",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x80601C64",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x8061B9BC",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x8072624C",
-      "isPrecise": false,
-      "contract": {
-        "gprReadBeforeWriteMask": 4294967295,
-        "gprPossibleWriteMask": 4294967295,
-        "gprReturnMask": 24,
-        "fprReadBeforeWriteMask": 4294967295,
-        "fprPossibleWriteMask": 4294967295,
-        "fprReturnMask": 2,
-        "crReadBeforeWriteMask": 255,
-        "crPossibleWriteMask": 255,
-        "readsXerBeforeWrite": true,
-        "mayWriteXer": true,
-        "readsCtrBeforeWrite": true,
-        "mayWriteCtr": true,
-        "readsLrBeforeWrite": true,
-        "mayWriteLr": true,
-        "boundaryFlags": 1
       }
     }
   ]

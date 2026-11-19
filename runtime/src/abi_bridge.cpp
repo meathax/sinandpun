@@ -491,8 +491,9 @@ void TranslatedFunctionRegistry::BuildRawDispatchTableLocked() {
     static RawDispatchHashTable table;
     slots.assign(size_t{1} << bits, RawDispatchHashSlot{0, nullptr});
     table = {slots.data(), (1u << bits) - 1u, 32u - bits};
-    // The first record put at an address wins: the generated table, then the dynamic records in
-    // address order, the precedence the sorted lookups gave.
+    // The first record put at an address wins. With a generated table the dynamic records are only the native
+    // winners; a native wrapper (REGISTER_NATIVE_WRAPPER_AS) keeps its base translation in the generated table,
+    // so the dynamic records go first or indirect jumps and tail calls would bypass the wrapper.
     const auto put = [](const RawDispatchRecord& record) {
         for (uint32_t index = RawDispatchHashIndex(table, record.address);; index = (index + 1) & table.mask) {
             RawDispatchHashSlot& slot = slots[index];
@@ -505,11 +506,11 @@ void TranslatedFunctionRegistry::BuildRawDispatchTableLocked() {
             }
         }
     };
-    for (size_t i = 0; i < generatedCount; ++i) {
-        put(generated->entries[i]);
-    }
     for (const auto& record : dynamic) {
         put(record);
+    }
+    for (size_t i = 0; i < generatedCount; ++i) {
+        put(generated->entries[i]);
     }
     rawDispatchTable_.store(&table, std::memory_order_release);
 }

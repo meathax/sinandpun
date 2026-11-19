@@ -29,6 +29,10 @@ translation:
   # cooperative scheduler can preempt them. 0x800380D8 is the OS idle function (Sin's asset loader).
   loop_poll_functions:
     - 0x800380D8
+  entry_hooks:
+    - 0x8010BC48
+    - 0x8010C1E4
+    - 0x8010C6C8
 
 output:
   # Donor contract: the runtime CMake hard-codes <workspace>/generated for

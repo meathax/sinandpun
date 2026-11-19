@@ -57,6 +57,10 @@ inline void MaybeServicePeriodicAlarms(CpuContext* ctx) {
 // (guest spin loops); yields to the host idle loop when running as the idle coroutine (os_idle.cpp).
 void GuestLoopPoll(CpuContext* ctx);
 
+// Emitted by the translator at the entry of functions in translation.entry_hooks; observes functions that are only
+// reached through indirect jumps or calls (hle/game_menu_hook.cpp).
+void GuestEntryHook(uint32_t address, CpuContext* ctx);
+
 inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
     PeriodicAlarmService::MaybeServicePeriodicAlarms(ctx);
     if (__builtin_expect(CallTrace::g_enabled, 0)) {
