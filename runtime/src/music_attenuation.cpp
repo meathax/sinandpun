@@ -12,7 +12,16 @@
 #include <mutex>
 #include <thread>
 
+// C++/WinRT is staged by the donor workspace (MKW_CPPWINRT_INCLUDE_DIR); a
+// plain LLVM-MinGW checkout does not carry it. Degrade to "media control
+// unavailable" instead of failing the build: SMTC monitoring is a QoL extra.
 #if defined(_WIN32)
+#define SIN_HAS_WINRT __has_include(<winrt/base.h>)
+#else
+#define SIN_HAS_WINRT 0
+#endif
+
+#if defined(_WIN32) && SIN_HAS_WINRT
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -176,7 +185,7 @@ bool ShouldAttenuate() noexcept {
            g_externalMediaPlaying.load(std::memory_order_acquire);
 }
 
-#if defined(_WIN32)
+#if defined(_WIN32) && SIN_HAS_WINRT
 void MonitorWindowsMediaSessions() noexcept {
     using namespace winrt::Windows::Media::Control;
     using namespace std::chrono_literals;
@@ -479,10 +488,13 @@ void MonitorMacOSAudio() noexcept {
 #endif
 
 void StartMonitor() noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) && SIN_HAS_WINRT
     // The process owns this monitor for its remaining lifetime. Keeping it
     // detached avoids shutdown ordering between WinRT and static audio state.
     std::thread(MonitorWindowsMediaSessions).detach();
+#elif defined(_WIN32)
+    g_mediaControlAvailable.store(false, std::memory_order_release);
+    g_mediaControlInitializationComplete.store(true, std::memory_order_release);
 #elif defined(__linux__)
     // Detached so there is no shutdown ordering to manage against static audio state.
     std::thread(MonitorLinuxMprisSessions).detach();

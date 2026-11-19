@@ -26,7 +26,7 @@ endif()
 set(SIN_WORKSPACE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 get_filename_component(SIN_WORKSPACE_ROOT "${SIN_WORKSPACE_ROOT}" ABSOLUTE)
 set(SIN_RUNTIME_DIR "${SIN_WORKSPACE_ROOT}/runtime")
-set(SIN_GENERATED "${SIN_WORKSPACE_ROOT}/build/generated")
+set(SIN_GENERATED "${SIN_WORKSPACE_ROOT}/generated")
 
 include("${SIN_GENERATED}/build_shards/shards.cmake")
 

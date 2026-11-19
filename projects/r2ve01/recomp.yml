@@ -27,4 +27,6 @@ translation:
   allow_unsupported_instructions: false
 
 output:
-  root: build/generated
+  # Donor contract: the runtime CMake hard-codes <workspace>/generated for
+  # data_sections_init.cpp / guest_symbol_table.cpp / build_shards/shards.cmake.
+  root: generated
