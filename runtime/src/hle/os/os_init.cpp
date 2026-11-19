@@ -412,3 +412,45 @@ PPC_NATIVE_OVERRIDE_VOID(8015E8F0, PPCDisableSpeculation_8012e654, (), ());
 
 PPC_SPR_STUB_BODY(PPCMthid4_8012e684, "PPCMthid4 called (stubbed) - Move To HID4")
 PPC_NATIVE_OVERRIDE_VOID(8015E930, PPCMthid4_8012e684, (), ());
+
+// OSInitFont (R2VE01 0x801AC710, os.a diff=0): the real routine streams the
+// IPL font from the console's EXI ROM through ReadFont/__OSReadROM, which spins
+// forever without an EXI device model (observed: main thread parked in
+// __OSReadROM, watchdog artifact base_1795081505). The ROM font is IPL data we
+// do not have, so present a valid but blank 1-sheet ANSI font (header per
+// OSFont.h, OS_FONT_SIZE_ANSI) and report success.
+extern "C" uint32_t OSInitFont_HLE_801ac710(uint32_t fontData)
+{
+    if (fontData == 0) {
+        return 0;
+    }
+    constexpr uint32_t kHeaderBytes = 0x120;
+    constexpr uint32_t kSheetBytes = 0x20000;
+    for (uint32_t i = 0; i < kHeaderBytes + kSheetBytes; i += 4) {
+        ::Memory::Write32(fontData + i, 0u);
+    }
+    ::Memory::Write16(fontData + 0x00, 0);      // fontType: ANSI
+    ::Memory::Write16(fontData + 0x02, 0x20);   // firstChar
+    ::Memory::Write16(fontData + 0x04, 0xFF);   // lastChar
+    ::Memory::Write16(fontData + 0x06, 0x20);   // invalChar
+    ::Memory::Write16(fontData + 0x08, 20);     // ascent
+    ::Memory::Write16(fontData + 0x0A, 4);      // descent
+    ::Memory::Write16(fontData + 0x0C, 12);     // width
+    ::Memory::Write16(fontData + 0x0E, 0);      // leading
+    ::Memory::Write16(fontData + 0x10, 12);     // cellWidth
+    ::Memory::Write16(fontData + 0x12, 24);     // cellHeight
+    ::Memory::Write32(fontData + 0x14, kSheetBytes);  // sheetSize
+    ::Memory::Write16(fontData + 0x18, 0);      // sheetFormat: GX_TF_I4
+    ::Memory::Write16(fontData + 0x1A, 42);     // sheetColumn
+    ::Memory::Write16(fontData + 0x1C, 21);     // sheetRow
+    ::Memory::Write16(fontData + 0x1E, 512);    // sheetWidth
+    ::Memory::Write16(fontData + 0x20, 512);    // sheetHeight
+    ::Memory::Write16(fontData + 0x22, 0x30);   // widthTable offset
+    ::Memory::Write32(fontData + 0x24, kHeaderBytes);  // sheetImage offset
+    ::Memory::Write32(fontData + 0x28, kSheetBytes);   // sheetFullSize
+    for (uint32_t c = 0; c < 0xE0; ++c) {
+        ::Memory::Write8(fontData + 0x30 + c, 12);
+    }
+    return 1;
+}
+PPC_NATIVE_OVERRIDE(801AC710, OSInitFont_HLE_801ac710, uint32_t, (uint32_t fontData), (fontData));

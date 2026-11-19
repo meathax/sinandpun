@@ -1350,6 +1350,14 @@ int RuntimeMain(int argc, char** argv) {
     InstallPosixMemoryFaultHandler();
 #endif
     InitializeProcessTranscript(argc, argv);
+    if (const char* wd = std::getenv("SIN_WATCHDOG_SECS"); wd && *wd) {
+        // Debug aid: snapshot the guest state of a spinning/stuck run without killing it.
+        const int secs = std::atoi(wd);
+        std::thread([secs]() {
+            std::this_thread::sleep_for(std::chrono::seconds(secs));
+            WriteFatalLogImpl("watchdog");
+        }).detach();
+    }
     std::signal(SIGABRT, AbortSignalHandler);
     // Install exit/terminate handlers to ensure we get crash info
     std::atexit(AtExitHandler);

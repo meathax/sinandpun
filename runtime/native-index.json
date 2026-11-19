@@ -2,7 +2,7 @@
   "format": "wiicompiled-runtime-native-index",
   "formatVersion": 2,
   "extractorVersion": 2,
-  "sourceDigest": "706dbc58aaeb2fceb4e9ec47862ee8dfb7bb152350f85c6165f238b38475d755",
+  "sourceDigest": "4538ba8b2cd1479b33a808dceae066561d4dc0cd9df0cf627fa4b50b668d9205",
   "registrations": [
     {
       "address": "0x8012B830",
@@ -848,6 +848,14 @@
       "address": "0x801AA9F0",
       "symbol": "NANDSafeOpen_HLE",
       "sourceFile": "hle/storage/nand_async.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x801AC710",
+      "symbol": "OSInitFont_HLE_801ac710",
+      "sourceFile": "hle/os/os_init.cpp",
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
       "modOverlay": "Unspecified"
@@ -5528,6 +5536,27 @@
       "isPrecise": true,
       "contract": {
         "gprReadBeforeWriteMask": 248,
+        "gprPossibleWriteMask": 8,
+        "gprReturnMask": 8,
+        "fprReadBeforeWriteMask": 0,
+        "fprPossibleWriteMask": 0,
+        "fprReturnMask": 0,
+        "crReadBeforeWriteMask": 0,
+        "crPossibleWriteMask": 0,
+        "readsXerBeforeWrite": false,
+        "mayWriteXer": false,
+        "readsCtrBeforeWrite": false,
+        "mayWriteCtr": false,
+        "readsLrBeforeWrite": false,
+        "mayWriteLr": false,
+        "boundaryFlags": 0
+      }
+    },
+    {
+      "address": "0x801AC710",
+      "isPrecise": true,
+      "contract": {
+        "gprReadBeforeWriteMask": 8,
         "gprPossibleWriteMask": 8,
         "gprReturnMask": 8,
         "fprReadBeforeWriteMask": 0,
