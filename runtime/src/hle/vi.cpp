@@ -930,7 +930,15 @@ PPC_NATIVE_OVERRIDE_VOID(801BC3B0, VIGetCurrentLine_HLE_801bac48, (CpuContext* c
 extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
-    
+
+    {
+        static std::atomic<int> s_waitLogs{0};
+        const int waitIdx = s_waitLogs.fetch_add(1);
+        if (waitIdx < 6 || waitIdx % 100 == 0) {
+            RT_LOG(RT_TAG_OS) << "[vi] VIWaitForRetrace call, fibers="
+                              << (Fiber::GuestFiberManager::IsInitialized() ? 1 : 0) << std::endl;
+        }
+    }
     if (Fiber::GuestFiberManager::IsInitialized()) {
         const int32_t irqState = OS__DisableInterrupts_801a65ac();
         uint32_t retraceCount = 0;

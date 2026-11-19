@@ -127,6 +127,13 @@ extern "C" void OS__SetCurrentContext_801a1e70(uint32_t contextAddr);
 // Fibers instead of blocking InvokeIndirectJump.
 // ============================================================================
 
+// The SDK's IdleThread (priority 31, bit 0 of RunQueueBits) is always runnable;
+// the host-side idle loop below replaces it, so it never counts as work.
+static inline uint32_t RunnablePendingMask()
+{
+    return ::Memory::Read32(kSchedulerPendingFlagAddr) & ~1u;
+}
+
 extern "C" void SelectThread_801a9c08(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
@@ -166,7 +173,7 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
         
         if (threadState == 2) { // RUNNING state
             // Check if we need to reschedule
-            const uint32_t reschedPending = ::Memory::Read32(kSchedulerPendingFlagAddr);
+            const uint32_t reschedPending = RunnablePendingMask();
             
             if (forceSwitch == 0) {
                 // Get thread priority from offset 0x2D0
@@ -213,7 +220,7 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
     }
 
     // Check if there are any runnable threads
-    uint32_t reschedPending = ::Memory::Read32(kSchedulerPendingFlagAddr);
+    uint32_t reschedPending = RunnablePendingMask();
     if (reschedPending == 0) {
         // No threads to run - enter idle loop
         TryInvokeSwitchCallback(runningContext, 0, cpu);
@@ -226,14 +233,14 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
             // Enable interrupts and idle until something becomes runnable.
             OS__EnableInterrupts_801a65c0();
 
-            while (::Memory::Read32(kSchedulerPendingFlagAddr) == 0) {
+            while (RunnablePendingMask() == 0) {
                 ProcessSleepTimers(cpu);
                 // Dolphin models DSP audio DMA as an independent 4 kHz timing
                 // event.  Poll it from the guest scheduler instead of batching
                 // completed 3 ms DMA blocks at VI retrace cadence.  A completed
                 // block wakes SoundThread and sets the scheduler pending mask.
                 Audio_HLE_Poll(cpu);
-                if (::Memory::Read32(kSchedulerPendingFlagAddr) != 0) {
+                if (RunnablePendingMask() != 0) {
                     break;
                 }
                 VI_HLE_PollRetrace(cpu);
@@ -241,14 +248,14 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
                     Fiber::GuestFiberManager::ProcessTimerEvents(cpu);
                 }
                 ProcessAlarmQueue(cpu, 8);
-                if (::Memory::Read32(kSchedulerPendingFlagAddr) != 0) {
+                if (RunnablePendingMask() != 0) {
                     break;
                 }
                 VI_HLE_WaitForNextRetracePoll();
             }
 
             OS__DisableInterrupts_801a65ac();
-            reschedPending = ::Memory::Read32(kSchedulerPendingFlagAddr);
+            reschedPending = RunnablePendingMask();
             if (reschedPending != 0) {
                 break;
             }
@@ -266,7 +273,7 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
     // deciding whether to preempt it.
 
     // Find highest priority thread
-    uint32_t pendingMask = ::Memory::Read32(kSchedulerPendingFlagAddr);
+    uint32_t pendingMask = RunnablePendingMask();
     
     if (pendingMask == 0) {
         // No runnable threads in the run queue at this point
@@ -285,8 +292,8 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
         if (nextThread == 0) {
             RT_LOG(RT_TAG_OS) << "SelectThread: ERROR - pending bit set but no thread in queue!" << std::endl;
             const uint32_t mask = ~(1u << (31 - priorityLevel));
-            ::Memory::Write32(kSchedulerPendingFlagAddr, pendingMask & mask);
-            pendingMask = ::Memory::Read32(kSchedulerPendingFlagAddr);
+            ::Memory::Write32(kSchedulerPendingFlagAddr, (pendingMask & mask) | (::Memory::Read32(kSchedulerPendingFlagAddr) & 1u));
+            pendingMask = RunnablePendingMask();
             if (pendingMask == 0) {
                 cpu->gpr[3] = 0;
                 return;
@@ -297,7 +304,7 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
         const uint16_t state = ::Memory::Read16(nextThread + kThreadStateOffset);
         if (ThreadStateIsTerminated(state) || Fiber::GuestFiberManager::IsTerminated(nextThread)) {
             RemoveThreadFromQueue(nextThread);
-            pendingMask = ::Memory::Read32(kSchedulerPendingFlagAddr);
+            pendingMask = RunnablePendingMask();
             if (pendingMask == 0) {
                 cpu->gpr[3] = 0;
                 return;
@@ -314,7 +321,7 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
     // If queue is now empty, clear the pending bit
     if (threadNext == 0) {
         const uint32_t mask = ~(1u << (31 - priorityLevel));
-        ::Memory::Write32(kSchedulerPendingFlagAddr, pendingMask & mask);
+        ::Memory::Write32(kSchedulerPendingFlagAddr, (pendingMask & mask) | (::Memory::Read32(kSchedulerPendingFlagAddr) & 1u));
     }
 
     // Clear thread's queue pointer
@@ -348,6 +355,21 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
         }
         
         // Check if target thread has a fiber
+        if (!Fiber::GuestFiberManager::HasFiber(nextThread)) {
+            // Threads made by the guest's own (translated) OSCreateThread have no
+            // fiber yet: adopt the saved OSContext (SRR0 = entry, r3 = argument,
+            // r1 = stack pointer) so the thread gets a host fiber on first dispatch.
+            const uint32_t adoptEntry = ::Memory::Read32(nextThread + 0x198u);
+            if (adoptEntry != 0) {
+                const uint32_t adoptArg = ::Memory::Read32(nextThread + 0x0Cu);
+                const uint32_t adoptSp = ::Memory::Read32(nextThread + 0x04u);
+                if (Fiber::GuestFiberManager::CreateGuestFiber(nextThread, adoptEntry, adoptArg, adoptSp)) {
+                    RT_LOG(RT_TAG_OS) << "SelectThread: adopted guest thread 0x" << std::hex << nextThread
+                              << " entry=0x" << adoptEntry << " arg=0x" << adoptArg
+                              << " sp=0x" << adoptSp << std::dec << std::endl;
+                }
+            }
+        }
         if (!Fiber::GuestFiberManager::HasFiber(nextThread)) {
             // No fiber for target thread - this can happen if the thread was created
             // by translated code that didn't go through our HLE. Just continue.

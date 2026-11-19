@@ -46,10 +46,10 @@ std::atomic<uint32_t> g_viRetracePendingCount{0};
 namespace {
 constexpr uint32_t kOSCurrentContextAddr = 0x800000d4u;
 constexpr uint32_t kOSRunningContextAddr = 0x800000e4u;  // OSGetCurrentThread reads this
-const uint32_t kThreadQueueArrayAddr = MKW_GADDR(803477b0);
-const uint32_t kSchedulerPendingFlagAddr = MKW_GADDR(80386920);
-const uint32_t kSchedulerReschedCounterAddr = MKW_GADDR(8038691c);
-const uint32_t kSchedulerIdleFlagAddr = MKW_GADDR(80386918);
+const uint32_t kThreadQueueArrayAddr = MKW_GADDR(8042A5F0);
+const uint32_t kSchedulerPendingFlagAddr = MKW_GADDR(804B22A8);
+const uint32_t kSchedulerReschedCounterAddr = MKW_GADDR(804B22A4);
+const uint32_t kSchedulerIdleFlagAddr = MKW_GADDR(804B22A0);
 
 // OSThread structure offsets
 constexpr uint32_t kThreadStateOffset = 0x2C8u;

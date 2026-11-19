@@ -53,12 +53,12 @@ const uint32_t kDefaultThreadContextAddr = MKW_GADDR(8042A2D8);
 const uint32_t kIdleThreadContextAddr = MKW_GADDR(8042A6F0);
 const uint32_t kThreadQueueArrayAddr = MKW_GADDR(8042A5F0);
 constexpr size_t kThreadQueueArrayBytes = 0x100u;
-const uint32_t kSwitchThreadCallbackPtrAddr = MKW_GADDR(80385ae0);
-const uint32_t kSchedulerReschedCounterAddr = MKW_GADDR(8038691c);
-const uint32_t kSchedulerPendingFlagAddr = MKW_GADDR(80386920);
+const uint32_t kSwitchThreadCallbackPtrAddr = MKW_GADDR(804B0BF0);
+const uint32_t kSchedulerReschedCounterAddr = MKW_GADDR(804B22A4);  // RunQueueHint (SelectThread/Resume store 1)
+const uint32_t kSchedulerPendingFlagAddr = MKW_GADDR(804B22A8)  /* RunQueueBits */;
 // RVL OS uses this as the OSDisableScheduler/OSEnableScheduler nesting count.
 // SelectThread exits early while the count is non-zero.
-const uint32_t kSchedulerIdleFlagAddr = MKW_GADDR(80386918);
+const uint32_t kSchedulerIdleFlagAddr = MKW_GADDR(804B22A0);  // Reschedule disable count
 const uint32_t kAlarmQueueAddr = MKW_GADDR(804B2220);  // Sin AlarmQueue (reloc-transfer recovered); donor 0x803868A0 is MKWii data
 
 constexpr uint32_t kThreadStateOffset = 0x2C8u;

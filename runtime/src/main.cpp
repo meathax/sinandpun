@@ -21,6 +21,7 @@
 #include <thread>
 #include <mutex>
 #include <unordered_map>
+#include <map>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -38,6 +39,7 @@
 #include <io.h>
 #include <crtdbg.h>
 #include <windows.h>
+#include <tlhelp32.h>
 #include <mmsystem.h>
 #include <dbghelp.h>
 #else
@@ -1354,8 +1356,58 @@ int RuntimeMain(int argc, char** argv) {
         // Debug aid: snapshot the guest state of a spinning/stuck run without killing it.
         const int secs = std::atoi(wd);
         std::thread([secs]() {
-            std::this_thread::sleep_for(std::chrono::seconds(secs));
-            WriteFatalLogImpl("watchdog");
+            for (int i = 0; i < 3; ++i) {
+                std::this_thread::sleep_for(std::chrono::seconds(secs));
+                WriteFatalLogImpl("watchdog");
+#if defined(_WIN32)
+                // Host-RIP sampler: which translated function is each thread in?
+                std::map<std::string, int> hist;
+                const DWORD self = GetCurrentThreadId();
+                for (int s = 0; s < 300; ++s) {
+                    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+                    if (snap == INVALID_HANDLE_VALUE) break;
+                    THREADENTRY32 te{};
+                    te.dwSize = sizeof(te);
+                    if (Thread32First(snap, &te)) {
+                        do {
+                            if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == self) continue;
+                            HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+                            if (!th) continue;
+                            if (SuspendThread(th) != static_cast<DWORD>(-1)) {
+                                CONTEXT cx{};
+                                cx.ContextFlags = CONTEXT_CONTROL;
+                                if (GetThreadContext(th, &cx)) {
+                                    auto info = FindTranslatedFunctionByHostAddress(static_cast<uintptr_t>(cx.Rip));
+                                    static const uintptr_t exeBase = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+                                    const uintptr_t rip = static_cast<uintptr_t>(cx.Rip);
+                                    const bool inExe = rip >= exeBase && rip < exeBase + 0x4000000;
+                                    char key[96];
+                                    if (!inExe) {
+                                        std::snprintf(key, sizeof key, "~ext");
+                                    } else if (info) {
+                                        std::snprintf(key, sizeof key, "tid%lu guest=0x%08X exe+0x%llX", static_cast<unsigned long>(te.th32ThreadID), info->address, static_cast<unsigned long long>(rip - exeBase));
+                                    } else {
+                                        std::snprintf(key, sizeof key, "tid%lu exe+0x%llX", static_cast<unsigned long>(te.th32ThreadID), static_cast<unsigned long long>(rip - exeBase));
+                                    }
+                                    ++hist[key];
+                                }
+                                ResumeThread(th);
+                            }
+                            CloseHandle(th);
+                        } while (Thread32Next(snap, &te));
+                    }
+                    CloseHandle(snap);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                std::vector<std::pair<int, std::string>> rows;
+                for (auto& kv : hist) rows.emplace_back(kv.second, kv.first);
+                std::sort(rows.rbegin(), rows.rend());
+                for (size_t r = 0; r < rows.size() && r < 40; ++r) {
+                    std::fprintf(stderr, "[watchdog] sample %d x %s\n", rows[r].first, rows[r].second.c_str());
+                }
+                std::fflush(stderr);
+#endif
+            }
         }).detach();
     }
     std::signal(SIGABRT, AbortSignalHandler);

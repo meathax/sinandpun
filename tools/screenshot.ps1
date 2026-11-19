@@ -8,32 +8,27 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class Win32 {
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
     public struct RECT { public int Left, Top, Right, Bottom; }
 }
 "@
 New-Item -ItemType Directory -Force (Split-Path $OutFile) | Out-Null
 $proc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $proc) {
-    # Fall back to the primary screen when the game window is gone.
-    $b = New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
-    $g = [System.Drawing.Graphics]::FromImage($b)
-    $g.CopyFromScreen(0, 0, 0, 0, $b.Size)
-    $b.Save($OutFile, [System.Drawing.Imaging.ImageFormat]::Png)
-    $g.Dispose(); $b.Dispose()
-    Write-Output "window-not-found: saved primary screen to $OutFile"
-    exit 1
-}
-[Win32]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 400
+if (-not $proc) { Write-Output "window-not-found"; exit 1 }
+$h = $proc.MainWindowHandle
 $rect = New-Object Win32+RECT
-[Win32]::GetWindowRect($proc.MainWindowHandle, [ref]$rect) | Out-Null
-$w = $rect.Right - $rect.Left; $h = $rect.Bottom - $rect.Top
-if ($w -lt 8 -or $h -lt 8) { $w = 1280; $h = 720 }
-$b = New-Object System.Drawing.Bitmap($w, $h)
+[Win32]::GetWindowRect($h, [ref]$rect) | Out-Null
+$w = $rect.Right - $rect.Left; $ht = $rect.Bottom - $rect.Top
+# Composited capture (works behind other windows and for GPU swapchains); flag 2 = PW_RENDERFULLCONTENT.
+$b = New-Object System.Drawing.Bitmap($w, $ht)
 $g = [System.Drawing.Graphics]::FromImage($b)
-$g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $b.Size)
+$hdc = $g.GetHdc()
+$ok = [Win32]::PrintWindow($h, $hdc, 2)
+$g.ReleaseHdc($hdc)
+$g.Dispose()
 $b.Save($OutFile, [System.Drawing.Imaging.ImageFormat]::Png)
-$g.Dispose(); $b.Dispose()
-Write-Output "saved $OutFile ($w x $h)"
+$b.Dispose()
+Write-Output "saved $OutFile ($w x $ht) printwindow=$ok"
