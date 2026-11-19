@@ -263,8 +263,12 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
   if (passInfo.resolveTarget) {
     const auto& dstSize = passInfo.resolveTarget->size;
     const bool needsConversion = tex_copy_conv::needs_conversion(passInfo.resolveFormat);
-    const bool needsScaling = dstSize.width != static_cast<uint32_t>(passInfo.resolveRect.width) ||
-                              dstSize.height != static_cast<uint32_t>(passInfo.resolveRect.height);
+    // A destination texture larger than the copy source is a partial update of its top-left corner (the GX destination
+    // width is only the row stride), not an upscale.
+    const bool partialDst = dstSize.width > static_cast<uint32_t>(passInfo.resolveRect.width) &&
+                            dstSize.height > static_cast<uint32_t>(passInfo.resolveRect.height);
+    const bool needsScaling = !partialDst && (dstSize.width != static_cast<uint32_t>(passInfo.resolveRect.width) ||
+                              dstSize.height != static_cast<uint32_t>(passInfo.resolveRect.height));
     const bool isDepth = gx::is_depth_format(passInfo.resolveFormat);
     if (isDepth && passInfo.msaaSamples > 1) {
       Log.fatal("Depth tex copies from multisampled EFB targets are not supported");
@@ -278,13 +282,16 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
         // Filter taps must land on exact source rows.
         .sampleFilter = needsScaling && !passInfo.resolveCopyFilterActive ? tex_copy_conv::SampleFilter::Linear
                                                                            : tex_copy_conv::SampleFilter::Nearest,
+        .partialDst = partialDst,
+        .dstRectW = static_cast<uint32_t>(passInfo.resolveRect.width),
+        .dstRectH = static_cast<uint32_t>(passInfo.resolveRect.height),
     };
     const bool needsOpaqueAlpha = !isDepth && !gx::efb_has_alpha(convReq.srcFmt);
     const bool sameFormat =
         passInfo.resolveTarget->format == passInfo.colorAttachments[SceneColorAttachmentIndex].format;
     if (needsConversion) {
       tex_copy_conv::run(cmd, convReq);
-    } else if (needsScaling || needsOpaqueAlpha || !sameFormat || passInfo.resolveCopyFilterActive) {
+    } else if (needsScaling || partialDst || needsOpaqueAlpha || !sameFormat || passInfo.resolveCopyFilterActive) {
       tex_copy_conv::blit(cmd, convReq);
     } else {
       const webgpu::gpu_prof::Zone zone{cmd, "EFB copy"};

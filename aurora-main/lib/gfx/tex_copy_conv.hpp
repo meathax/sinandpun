@@ -30,6 +30,11 @@ struct ConvRequest {
   Range uniformRange;        // Uniforms
   TextureHandle dst;         // Destination texture
   SampleFilter sampleFilter = SampleFilter::Nearest;
+  // Partial copy: write only dst pixels [0,dstRectW)x[0,dstRectH) 1:1 and keep the rest of the texture (GX copies into a
+  // larger texture only update its top-left region; the destination width just sets the row stride).
+  bool partialDst = false;
+  uint32_t dstRectW = 0;
+  uint32_t dstRectH = 0;
 };
 
 bool needs_conversion(GXTexFmt fmt);

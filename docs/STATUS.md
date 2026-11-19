@@ -1,6 +1,6 @@
 # Sin & Punishment: Star Successor recomp - status
 
-Last updated 2026-11-19 (end of the M0/M1/M2 session). Source of truth for the plan: `docs/PLAN-NEXT.md`.
+Last updated 2026-11-20 (M3 stage modules working for stages 0-5; M4 code written, in-game verification pending). Source of truth for the plan: `docs/PLAN-NEXT.md`.
 
 ## Milestones
 
@@ -9,9 +9,9 @@ Last updated 2026-11-19 (end of the M0/M1/M2 session). Source of truth for the p
 | M0 | Commit current work | DONE | commits `5479e53`, `8120dca`, `98f875d`, `7b8e3f4`; `git status` clean of source |
 | M1 | Real guest WPAD connects the virtual remote | DONE | log: `Virtual Wii Remote + Nunchuk connected to the game (gamepad)`; guest handshake: EEPROM cal reads, extension init (0xA400F0/FB), Nunchuk ID `00 00 A4 20 00 00`, IR block writes, report mode 0x33 then 0x37, continuous 0x37 reports (`[bt] in id=0x37`) |
 | M2 | First real frame | DONE | `build/screenshots/m2-first-frame.png`: 49,750 colours, 80.7% non-black, real title screen (Sin & Punishment: Star Successor logo + background); `[dvd] read ...` lines (fonts, texture.arc, comdat.arc, titdat.arc, stream/title.brstm, s01dat20.arc) |
-| M3 | Stage modules (RSO loader + code-set switching) | NOT STARTED | translator emits stg00..07 trees but they are not wired into the runtime |
-| M4 | Dual-analog aiming + setup UI | PARTIAL | pointer synthesis + scripted test input (`SIN_VREMOTE_SCRIPT`) verified numerically (see below); in-game reticle direction, feel tuning and the Controller UI are NOT done |
-| M5 | Full playthrough validation | NOT STARTED | |
+| M3 | Stage modules (RSO loader + code-set switching) | PARTIAL | all 8 modules prelinked at MEM2 window 0x97DC0000, translated per module (`tools/module_shards.py`), `RSOLinkListFixed`/`RSOUnLinkList` natives in `hle/os/os_rso.cpp`; stages 0-5 ran 17k-19k frames each with gameplay screenshots (`build/screenshots/stage*.png`); stages 6,7 and A->B->A swaps: see stage table |
+| M4 | Dual-analog aiming + setup UI | CODE WRITTEN | aim curves/deadzones, Classic Controller + pointer schemes, keyboard/mouse/gamepad remap, tabbed settings overlay (`settings_overlay.cpp`, `controls_menu.cpp`, `input_map.h`, `aim_input.cpp`); `mkw_controls_tests` passes; stick direction verified in game earlier; Classic extension, mouse pointer, menu navigation NOT verified in game |
+| M5 | Full playthrough validation | IN PROGRESS | top-left rectangle fixed (GXSetViewport native); audio mixer produces PCM; see checklist |
 
 ## What was wrong, in order (all recorded in the lessons DB)
 
@@ -64,7 +64,7 @@ virtual remote deterministically. Log lines `[bt] pointer cam=(x,y) stick R=.. L
 * `SIN_CALLPROF=1` (with CALLTRACE) prints the hottest call targets every 10 s (`[prof]`, `[prof-game]`).
 * `SIN_TRACE_ARGS=hex+hex` logs r3..r6/lr on entry to listed targets (200 hits each).
 * `SIN_WATCHDOG_SECS=N` writes a crash-style snapshot and host-RIP samples every N s (3 times).
-* `SIN_VIRTUAL_REMOTE=1` forces the virtual remote; `SIN_VREMOTE_SCRIPT=...` scripted input; `SIN_GX_TEST_RED=1`
+* `SIN_GX_COPYLOG=<frame>` (+ `SIN_GX_COPYLOG_EVERY=<n>`) logs texture copies, viewport, scissor and draw state for 3 frames.`n* `SIN_AUTOSTAGE=<0..7>` redirects the stage the game loads (after the menu run; the game stage id to module map is not identity: 3->stg05, 5->stg03). `SIN_AUDIO_LOG=1` logs AX/AI mixer stats per second. `SIN_DUMP_ON=<hex>` + `SIN_DUMP_EXIT=1` snapshot memory at first entry of a traced target and exit.`n* `SIN_VIRTUAL_REMOTE=1` forces the virtual remote; `SIN_VREMOTE_SCRIPT=...` scripted input; `SIN_GX_TEST_RED=1`
   is an unreliable renderer probe (see lesson).
 * `tools/run_game.ps1 -Env "A=1,B=2"` (ONE quoted string; `-Env` is split on commas), `tools/xref_up.py`,
   `tools/callees.py`, `tools/gx_retarget_report.py`, `tools/find_sc_funcs.py`, `tools/thread_dump.py`,
@@ -80,6 +80,12 @@ dotnet $t translate-recursive 0x80006310 --project projects/r2ve01/recomp.yml --
 dotnet $t generate-data-init --project projects/r2ve01/recomp.yml
 dotnet $t emit-build-shards --project projects/r2ve01/recomp.yml
 cmake --build build/native --parallel 30
+
+# stage modules (after changing tools/rso_link.py, module maps or the translator): for each stgNN
+python tools/rso_link.py orig/R2VE01/files/stgNN.rso orig/R2VE01/sys/main.dol orig/R2VE01/files/gs2.sel 0x97DC0000 build/modules/stgNN
+python tools/module_seeds.py stgNN --write --prune-jt   # then keep only text-range + farjump_ map entries
+dotnet $t translate-recursive 0x80006310 --project projects/r2ve01/stgNN.yml --threads 12 --output-metadata build/generated-stgNN/base_translation_output.json
+python tools/module_coverage.py ; python tools/module_shards.py ; then the full chain above
 ```
 
 Point `dvd_root` in `UserData/Config.toml` at the extracted disc (`orig/R2VE01/files`). License: GPL-3 (forked from

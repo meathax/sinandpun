@@ -727,7 +727,7 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
   const std::array colorAttachments{
       wgpu::RenderPassColorAttachment{
           .view = req.dst->attachmentTextureView,
-          .loadOp = wgpu::LoadOp::Clear,
+          .loadOp = req.partialDst ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear,
           .storeOp = wgpu::StoreOp::Store,
           .clearValue = {0.0, 0.0, 0.0, 0.0},
       },
@@ -741,6 +741,10 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
   const auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
   pass.SetPipeline(pipeline);
   pass.SetBindGroup(0, bindGroup);
+  if (req.partialDst) {
+    pass.SetViewport(0.f, 0.f, static_cast<float>(req.dstRectW), static_cast<float>(req.dstRectH), 0.f, 1.f);
+    pass.SetScissorRect(0, 0, req.dstRectW, req.dstRectH);
+  }
   pass.Draw(3);
   pass.End();
 }
