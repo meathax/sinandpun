@@ -12,9 +12,12 @@ public class Win32 {
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     public struct RECT { public int Left, Top, Right, Bottom; }
 }
 "@
+# Without this the capture is DPI-virtualised (e.g. 698 instead of 872 wide at 125% scaling) and crops the window.
+[Win32]::SetProcessDPIAware() | Out-Null
 New-Item -ItemType Directory -Force (Split-Path $OutFile) | Out-Null
 $proc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 if (-not $proc) { Write-Output "window-not-found"; exit 1 }
