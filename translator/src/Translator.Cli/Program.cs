@@ -165,16 +165,20 @@ if (HandleCommandLineOptions(command, tail) is { } commandLineExitCode)
     return commandLineExitCode;
 }
 
-// A configured flat module is validated by the manifest loader, but the image,
-// discovery, data-init and dispatch pipelines do not consume it yet. Fail before
-// any output-producing command can publish a misleading DOL-only result.
+// A configured flat module is validated by the manifest loader, and
+// translate-recursive now carries the module image into the guest space
+// (discovery reaches module functions through the manifest's function map).
+// The data-init and shard pipelines still describe the DOL/REL shape only,
+// so they stay guarded until per-module output spaces land (stg00-07 share
+// the 0x80800000 window and need their own output roots and code sets).
 if (project?.Inputs.Module is { } unsupportedModule &&
-    command is "generate-data-init" or "translate-recursive" or "translate-mod" or
+    command is "generate-data-init" or "translate-mod" or
         "emit-build-shards" or "emit-native-index" or "emit-base-manifest")
 {
     Console.Error.WriteLine(
-        $"[translator] {command} cannot run with inputs.module: pre-linked flat module images " +
-        "are not yet supported by the translation/build pipeline. " +
+        $"[translator] {command} cannot run with inputs.module yet: the output-space design for " +
+        "the shared 0x80800000 window (per-module output roots + runtime code-set switching) " +
+        "is still pending. " +
         $"Configured module: {unsupportedModule.Path} @ 0x{unsupportedModule.LoadAddress:X8}. " +
         "No output was written.");
     return 2;
@@ -3870,7 +3874,21 @@ ProgramImage LoadImage()
         $"(entry 0x{dol.EntryPoint:X8}).");
 
     var relImage = relFile.Value?.BuildImage(loadedProject.Inputs.Rel!.LoadAddress);
-    return new ProgramImageBuilder().Build(dol, relImage, loadedProject.Memory.Base, loadedProject.Memory.Size);
+    FlatModuleImage? moduleImage = null;
+    if (loadedProject.Inputs.Module is { } module)
+    {
+        var moduleBytes = File.ReadAllBytes(module.Path);
+        moduleImage = new FlatModuleImage(module.Path, module.LoadAddress, moduleBytes);
+        Console.WriteLine(
+            $"[translator] Module image: {module.Path} @ 0x{module.LoadAddress:X8} " +
+            $"({moduleBytes.Length:N0} bytes, sha256-pinned in the manifest).");
+    }
+    return new ProgramImageBuilder().Build(
+        dol,
+        relImage,
+        moduleImage,
+        loadedProject.Memory.Base,
+        loadedProject.Memory.Size);
 }
 
 DolFile LoadDol()

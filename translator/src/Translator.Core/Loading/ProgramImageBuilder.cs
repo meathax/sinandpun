@@ -17,6 +17,7 @@ public sealed class ProgramImageBuilder
     public ProgramImage Build(
         DolFile dol,
         RelImage? rel = null,
+        FlatModuleImage? module = null,
         uint ramBase = MemoryLayout.RamBase,
         int ramSize = MemoryLayout.RamSize)
     {
@@ -72,9 +73,32 @@ public sealed class ProgramImageBuilder
             relRange = rel.Range;
         }
 
-        var usedRange = rel is null ? dol.MemoryRange : AddressRange.Union(dol.MemoryRange, rel.Range);
+        var moduleRange = new AddressRange(0, 0);
+        if (module is not null)
+        {
+            var moduleOffset = checked((int)(module.BaseAddress - ramBase));
+            var moduleEnd = moduleOffset + module.Data.Length;
+            if (moduleOffset < 0 || moduleEnd > ram.Length)
+            {
+                throw new InvalidOperationException(
+                    $"Module image '{module.Path}' spills outside RAM window " +
+                    $"(offset {moduleOffset}, end {moduleEnd})");
+            }
+
+            // The flat module overlays the RAM window at its base exactly like
+            // the guest loader would place it; DOL/REL ranges never overlap it.
+            module.Data.CopyTo(ram, moduleOffset);
+            moduleRange = module.Range;
+        }
+
+        var usedRanges = new[] { dol.MemoryRange, relRange, moduleRange }
+            .Where(static r => r.End > r.Start)
+            .ToArray();
+        var usedRange = usedRanges.Length == 0
+            ? dol.MemoryRange
+            : usedRanges.Aggregate(static (a, b) => AddressRange.Union(a, b));
 
         var sha = ChecksumUtilities.Sha256Hex(ram);
-        return new ProgramImage(ram, usedRange, dol.MemoryRange, relRange, sha, ramBase);
+        return new ProgramImage(ram, usedRange, dol.MemoryRange, relRange, moduleRange, sha, ramBase);
     }
 }

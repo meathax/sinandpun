@@ -181,6 +181,13 @@ bool ProcessAlarmQueue(CpuContext* cpu, int maxToProcess)
                 const uint32_t fireLo = ::Memory::Read32(alarm + kAlarmFireTimeLoOffset);
                 const uint64_t fireTime = (static_cast<uint64_t>(fireHi) << 32) | fireLo;
                 const uint32_t handler = ::Memory::Read32(alarm + kAlarmHandlerOffset);
+                static std::atomic<int> s_dueLog{0};
+                if (s_dueLog.fetch_add(1) < 8) {
+                    RT_LOG(RT_TAG_OS) << "[alarm] due check: alarm=0x" << std::hex << alarm
+                              << " handler=0x" << handler
+                              << " now=0x" << now << " fire=0x" << fireTime << std::dec
+                              << (now < fireTime ? " (not due)" : " (FIRING)") << std::endl;
+                }
                 if (now < fireTime) {
                     break;
                 }

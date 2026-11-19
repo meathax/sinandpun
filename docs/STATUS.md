@@ -1,4 +1,84 @@
-# Status (2026-11-19)
+# Status (2026-11-19, evening)
+
+## LIVE: the recomp RUNS (exit 0, sustained loop)
+
+The boot loop became a RUNNING loop: the game executes its full init chain
+(DOL -> OSInit -> main -> KPAD/G3D/GX/AX/SND -> aurora GX+audio HLE ->
+engine periodic alarm -> FIRST GUEST THREAD CONTEXT SWITCH to the worker
+entry 0x80280CC0) and then ticks its scheduler/decrementer loop for the
+full 120 s observation window, exiting cleanly via window close (code 0).
+No crash artifacts for the run.
+
+Current investigation: the game ticks but has not engaged the render path.
+Capped alarm-due diagnostics added to os_alarm.cpp to determine whether the
+engine's periodic alarm reaches its fire time (guest/host time base) or
+whether a thread-queue waker is missing.
+
+## Boot-blocker ledger (all fixed, in order, evidence-backed)
+VI TV-mode MMIO -> VIGetTvFormat/VIGetScanMode natives; OSInit assert complex
+-> __OSInIPL planted from OSGetResetCode native; SYSCONF synthesized; OSBootInfo
+header + retail console type; GX fatal stubs eliminated (205); WPADInit boundary
+HLE; GXInit/PADInit/PADRead restored at SDK-verified addresses; alarm HLE
+retarget (queue 0x804B2220, __OSTimeToSystemTime 0x801B0D60, InsertAlarm
+0x801A6CF0); scheduler OSSaveContext 0x801A8800.
+
+## Static evidence (committed)
+- main.dol translates: 11,169 functions, 0 unsupported insns (generated/)
+- stg00-07 linked flat @ 0x80800000 (tools/rso_link.py), 0 unresolved imports
+- SDK naming: 2,451 functions + 363 data + 905 globals + 36 layout via the
+  final Wii SDK archives (0x4302_145) -> tools/sdk_*.txt maps
+- Translator module-image support in progress (FlatModuleImage + builder)
+- Test baseline: 767/0/8 green
+
+## Next
+- Resolve the render-path stall (alarm diagnostics in flight)
+- Module output-space design (8 modules share 0x80800000: per-module roots
+  + runtime code-set switching), RSO loader xref
+- Dual-analog aim (THE feature) at the host-owned input boundary
+- Playthrough validation vs original
+
+## Known gaps
+- Dormant MKW_GUEST_FUNC donor sites (ax_effects, network_config, os_init
+  801A961C/8055531C) - retarget as their subsystems activate
+- 164 GADDRs pending (tools/retarget_pending_gaddr.txt)
+- __OSDBJump bla 0x60 gap; 4 extabindex relocs per stg module (benign)
+
+The retargeted exe EXECUTES translated Sin code. Confirmed working:
+embedded DOL sections, SDA bases (r13/r2), OSReport HLE printing the game's
+full Revolution OS banner chain (Kernel/Console/NAND/NWC24, MEM1 Arena
+0x804ba960 - matches the Facts table), OSInit -> OSInterruptInit/EXIInit/
+SIInit natives, OS message natives (0x801AD2E0/340/410/4F0).
+
+Boot loop, fixed in order:
+1. VI MMIO read 0xCC00206C (VIGetTvFormat, Feb-2009 SDK reads the TV-mode
+   register directly) -> native HLE at 0x801BC440; SISetSamplingRate 0x801B8830.
+2. OSFatal("Failed to register network shutdown function") ->
+   OSRegisterShutdownFunction native (success-stub) at 0x801AE130.
+
+Each crash artifact names its own fix (symbolized backchain + mem1.bin
+strings); iteration cost ~3 minutes. Run:
+  build/native/WiiCompiled.exe with UserData/Config.toml [paths] dvd_root =
+  'D:/Arcade/AI/aCORES/Sin/orig/R2VE01' (portable.txt staged).
+
+## Static evidence (all committed)
+- main.dol translates: 11,169 functions, 0 unsupported insns (generated/)
+- stg00-07 linked flat @ 0x80800000 (tools/rso_link.py), 0 unresolved imports
+- SDK naming: 2,451 functions + 363 data + 905 globals + 36 layout via the
+  final Wii SDK archives (0x4302_145) -> tools/sdk_*.txt maps
+- Natives retargeted: 264 registrations + 29 globals rewired, 288 disabled
+  (SIN_DISABLED_*), raw registrations fixed via tools/sin_rawregs.py
+- Test baseline: 767/0/8 green
+
+## Next
+- Continue boot loop to first pixel (title)
+- Module translation support (Program.cs guard), RSO loader placement
+- Dual-analog aim (THE feature), controller setup UI, playthrough validation
+
+## Known gaps
+- GXSetVtxDesc case-label sub-natives, KPAD/THPPlayer/AX internals unresolved
+- DVD queue/context bases + 164 GADDRs pending (tools/retarget_pending_gaddr.txt)
+- __OSDBJump bla 0x60 gap (debugger stub)
+- 4 missing extabindex relocs per stg module (CW exception tables, benign)
 
 | Step | State |
 |---|---|
