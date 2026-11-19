@@ -252,4 +252,4 @@ extern "C" void GX__Flush_8016e654() {
     GX_DEFER_CALL0(GX__Flush_8016e654);
     GXFlush();
 }
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(8016e654, GX__Flush_8016e654, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D6BB0, GX__Flush_8016e654, (), ()); // Sin GXFlush (sdk_name_map, diff=0)

@@ -118,7 +118,7 @@ extern "C" void GX__SetProjection_8017301c(uint32_t ma, uint32_t pt) {
     GxWorker::Run([mtx = std::to_array(m), pt]() mutable { GXSetProjection(mtx.data(), (GXProjectionType)pt); });
     UpdateProjectionVectorFromMatrix(m, (GXProjectionType)pt);
 }
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(8017301c, GX__SetProjection_8017301c, (uint32_t ma, uint32_t pt), (ma, pt));
+PPC_NATIVE_OVERRIDE_VOID(801DAFE0, GX__SetProjection_8017301c, (uint32_t ma, uint32_t pt), (ma, pt)); // Sin GXSetProjection (sdk_name_map, diff=0)
 
 extern "C" void GX__SetProjectionv_80173080(uint32_t pa) {
     const uint32_t* raw=(const uint32_t*)GuestToHostPtr(pa, 28); float v[7];
