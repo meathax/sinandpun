@@ -34,7 +34,7 @@ extern "C" void GX__SetDrawSync_8016ed08(uint32_t token) {
 }
 
 extern "C" void GX__SetDrawSync_8016e9fc(uint32_t token) { GX__SetDrawSync_8016ed08(token); }
-PPC_NATIVE_OVERRIDE_VOID(8016e9fc, GX__SetDrawSync_8016e9fc, (uint32_t token), (token));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8016e9fc, GX__SetDrawSync_8016e9fc, (uint32_t token), (token));
 
 extern "C" void GX__FinishInterruptHandler_8016ed94() {
     try {
@@ -43,27 +43,27 @@ extern "C" void GX__FinishInterruptHandler_8016ed94() {
         Memory::Write8(kGxDrawDoneFlagAddr, 1);
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(8016ed94, GX__FinishInterruptHandler_8016ed94, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D71D0, GX__FinishInterruptHandler_8016ed94, (), ());
 
 extern "C" void GX__DrawDone_8016eab0() {
     GX_SYNC_INLINE();
     try { Memory::Write8(kGxDrawDoneFlagAddr, 0); } catch (...) {}
     GXDrawDone(); GX__FinishInterruptHandler_8016ed94();
 }
-PPC_NATIVE_OVERRIDE_VOID(8016eab0, GX__DrawDone_8016eab0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(804B2568, GX__DrawDone_8016eab0, (), ());
 
 extern "C" void GX__PixModeSync_8016eb70() {
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write16(gd + 2, 0); } catch (...) {}
     GxWorker::Run([] { GXPixModeSync(); });
 }
-PPC_NATIVE_OVERRIDE_VOID(8016eb70, GX__PixModeSync_8016eb70, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D6F40, GX__PixModeSync_8016eb70, (), ());
 
 // ============================================================================
 // Hardware Revision / Thread Query - No-ops
 // ============================================================================
 
 extern "C" void __GX__InitRevisionBits_8016b720() {}
-PPC_NATIVE_OVERRIDE_VOID(8016b720, __GX__InitRevisionBits_8016b720, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D4090, __GX__InitRevisionBits_8016b720, (), ());
 
 // ============================================================================
 // Texture State Management - Aurora handles internally
@@ -73,19 +73,19 @@ extern "C" void __GX__SetSUTexRegs_801712f0() {
     GxWorker::Run([] { __GXSetSUTexRegs(); });
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write16(gd + 2, 0); } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801712f0, __GX__SetSUTexRegs_801712f0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D9740, __GX__SetSUTexRegs_801712f0, (), ());
 
 extern "C" void __GX__SetTmemConfig_80171458(uint32_t mode) {
     // TMEM layout configuration - Aurora manages internally
     (void)mode;
 }
-PPC_NATIVE_OVERRIDE_VOID(80171458, __GX__SetTmemConfig_80171458, (uint32_t mode), (mode));
+PPC_NATIVE_OVERRIDE_VOID(801D98B0, __GX__SetTmemConfig_80171458, (uint32_t mode), (mode));
 
 extern "C" void __GX__FlushTextureState_80171c28() {
     // BP texture state flush - Aurora handles via API
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write16(gd + 2, 0); } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(80171c28, __GX__FlushTextureState_80171c28, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801DA090, __GX__FlushTextureState_80171c28, (), ());
 
 // ============================================================================
 // Copy Configuration - No-ops for features Aurora doesn't use
@@ -101,7 +101,7 @@ extern "C" void GX__SetDispCopyFrame2Field_8016f5f8(uint32_t f) {
         }
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(8016f5f8, GX__SetDispCopyFrame2Field_8016f5f8, (uint32_t f), (f));
+PPC_NATIVE_OVERRIDE_VOID(801D7A90, GX__SetDispCopyFrame2Field_8016f5f8, (uint32_t f), (f));
 
 extern "C" void GX__SetCopyClamp_8016f618(uint32_t c) {
     GxWorker::Run([c] { GXSetCopyClamp(static_cast<GXFBClamp>(c)); });
@@ -114,7 +114,7 @@ extern "C" void GX__SetCopyClamp_8016f618(uint32_t c) {
         }
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(8016f618, GX__SetCopyClamp_8016f618, (uint32_t c), (c));
+PPC_NATIVE_OVERRIDE_VOID(801D7AB0, GX__SetCopyClamp_8016f618, (uint32_t c), (c));
 
 extern "C" void GX__ClearBoundingBox_8016fecc() {
     GxWorker::Run([] { GXClearBoundingBox(); });
@@ -123,7 +123,7 @@ extern "C" void GX__ClearBoundingBox_8016fecc() {
         if (gd) Memory::Write16(gd + 2, 0);
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(8016fecc, GX__ClearBoundingBox_8016fecc, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D8310, GX__ClearBoundingBox_8016fecc, (), ());
 
 // ============================================================================
 // FIFO/State Management - No-ops
@@ -132,9 +132,9 @@ PPC_NATIVE_OVERRIDE_VOID(8016fecc, GX__ClearBoundingBox_8016fecc, (), ());
 extern "C" void GX__SetDirtyState_8016ee78() {
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write32(gd + 0x5FCu, 0); } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(8016ee78, GX__SetDirtyState_8016ee78, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D72C0, GX__SetDirtyState_8016ee78, (), ());
 
 extern "C" void GX__ResetWriteGatherPipe_8016e6b0() {
     // WPAR reset - not needed on host
 }
-PPC_NATIVE_OVERRIDE_VOID(8016e6b0, GX__ResetWriteGatherPipe_8016e6b0, (), ());
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8016e6b0, GX__ResetWriteGatherPipe_8016e6b0, (), ());

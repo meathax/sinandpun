@@ -11,4 +11,4 @@ extern "C" uint32_t Stub_8002001C(uint32_t ctx, int code)
     return 0;
 }
 
-PPC_NATIVE_OVERRIDE(8002001C, Stub_8002001C, uint32_t, (uint32_t ctx, int code), (ctx, code));
+SIN_DISABLED_NATIVE_OVERRIDE(8002001C, Stub_8002001C, uint32_t, (uint32_t ctx, int code), (ctx, code));

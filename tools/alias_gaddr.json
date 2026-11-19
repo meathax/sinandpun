@@ -1,0 +1,20 @@
+{
+  "_comment": "Donor GADDR constants (unnamed in the MKWii map) -> SDK symbol names, verified by disassembly/reloc diagnostics 2026-11-19. Keys are the donor PAL addresses as they appear in runtime sources.",
+  "80386b38": "IsInitialized",
+  "80386ba8": "CurrTvMode",
+  "80386be4": "retraceCount",
+  "80386bb8": "PreCB",
+  "80386bb4": "PostCB",
+  "80386ba0": "NextBufAddr",
+  "80350890": "CurrBufAddr",
+  "80386bc0": "retraceQueue",
+  "80386664": "Canceling",
+  "80386668": "ResumeFromHere",
+  "80386670": "PausingFlag",
+  "803866a8": "CancelAllSyncComplete",
+  "803866f0": "CurrCommand",
+  "803866a0": "DVDInitialized",
+  "80386720": "Prepared",
+  "80343230": "WaitingQueue",
+  "803434e0": "CurrDiskID"
+}

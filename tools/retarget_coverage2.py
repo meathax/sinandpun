@@ -71,13 +71,58 @@ def norm(name: str) -> str:
     return low
 
 
+def lookup_maps():
+    """Build (exact, fallback) SDK lookups.
+
+    exact:    lowercase full name -> entry. Trusted.
+    fallback: normalized name -> entry, but ONLY when that normalized key
+    collapses to one distinct source name; generic suffixes (AIInit/DSPInit/
+    GXInit all -> 'init') make a key ambiguous and it is dropped.
+    """
+    raw = []  # (addr, name, source)
+    for path, columns in ((ROOT / "tools/sdk_name_map.txt", 3),
+                          (ROOT / "tools/sdk_data_map.txt", 3),
+                          (ROOT / "tools/sdk_globals_map.txt", 2),
+                          (ROOT / "tools/sdk_layout_map.txt", 2)):
+        for line in path.read_text().splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split("\t")
+            raw.append((parts[0], parts[1], path.name))
+    exact = {}
+    for addr, name, src in raw:
+        exact.setdefault(name.lower(), (addr, name, src))
+    by_norm = {}
+    for addr, name, src in raw:
+        by_norm.setdefault(norm(name), set()).add(name.lower())
+    fallback = {}
+    for key, sources in by_norm.items():
+        if len(sources) == 1:
+            src = sources.pop()
+            for addr, name, s in raw:
+                if name.lower() == src:
+                    fallback[key] = (addr, name, s)
+                    break
+    return exact, fallback
+
+
+def resolve_name(name, exact, fallback):
+    dm = cw_demangle(name) or name
+    # Rule 1: exact (also handles donor "__Lib::Fn" -> SDK "__LibFn").
+    candidates = [dm, name]
+    m = re.match(r"^__(\w+)::(\w+)$", dm)
+    if m:
+        candidates.insert(0, f"__{m.group(1)}{m.group(2)}")
+    for c in candidates:
+        hit = exact.get(c.lower())
+        if hit:
+            return hit
+    # Rule 2: normalized fallback (ambiguity-filtered).
+    return fallback.get(norm(name))
+
+
 def main():
-    sdk = {}
-    for line in (ROOT / "tools/sdk_name_map.txt").read_text().splitlines():
-        if line.startswith("#") or not line.strip():
-            continue
-        addr, name, lib = line.split("\t")[:3]
-        sdk.setdefault(norm(name), (addr, name, lib))
+    exact, fallback = lookup_maps()
 
     donor = {}
     for line in (ROOT / "reference/Wiicompiled/projects/mkwii/MAP.txt").read_text(
@@ -85,6 +130,14 @@ def main():
         m = MAP_LINE.match(line.strip())
         if m:
             donor.setdefault(int(m.group(1), 16), m.group(2))
+
+    # Donor constants the MKWii map does not name, aliased to SDK symbols by
+    # source-level semantic (verified per constant, see tools/alias_gaddr.json).
+    alias = json.loads((ROOT / "tools/alias_gaddr.json").read_text())
+    for a, sdkname in alias.items():
+        if a.startswith("_"):
+            continue
+        donor.setdefault(int(a, 16), str(sdkname))
 
     index = json.loads((ROOT / "runtime/native-index.json").read_text())
     regs = {int(r["address"], 16): r["symbol"] for r in index["registrations"]}
@@ -103,13 +156,30 @@ def main():
             if not name:
                 unnamed.append((a, table[a]))
                 continue
-            hit = sdk.get(norm(name))
+            hit = resolve_name(name, exact, fallback)
             if hit:
                 ok.append((a, name, hit[0]))
             else:
                 miss.append((a, name))
         out[label] = (ok, miss, unnamed)
-        print(f"{label}: {len(table)} needed, {len(ok)} resolved, "
+
+    # Collisions: two donor identities resolving to the same Sin address prove
+    # at least one resolution wrong. Disable BOTH (drop from the resolved set)
+    # so the retarget never wires a native to an ambiguous target.
+    sizes = {"registrations": len(regs), "gaddr": len(gaddr)}
+    for label in ("registrations", "gaddr"):
+        ok, miss, unnamed = out[label]
+        by_sin = {}
+        for a, name, sin in ok:
+            by_sin.setdefault(sin.upper(), []).append((a, name))
+        dropped = {sin for sin, lst in by_sin.items() if len(lst) > 1}
+        if dropped:
+            print(f"{label}: dropping {len(dropped)} colliding Sin addresses:")
+            for sin in sorted(dropped):
+                for a, name in by_sin[sin]:
+                    print(f"    {a:08X} {name} -> {sin}")
+        out[label] = ([row for row in ok if row[2].upper() not in dropped], miss, unnamed)
+        print(f"{label}: {sizes[label]} needed, {len(out[label][0])} resolved, "
               f"{len(miss)} unmatched, {len(unnamed)} unnamed-in-donor")
         for a, n in miss[:15]:
             print(f"    miss {a:08X} {n}")
@@ -117,7 +187,7 @@ def main():
     (ROOT / "tools/retarget_resolved.json").write_text(json.dumps({
         label: [f"{a:08X}\t{n}\t{sin}" for a, n, sin in v[0]] for label, v in out.items()}, indent=1))
     print("\nwrote tools/retarget_resolved.json")
-    print(f"SDK map: {len(sdk)} normalized names")
+    print(f"SDK names: {len(exact)} exact, {len(fallback)} unambiguous-normalized")
 
 
 if __name__ == "__main__":

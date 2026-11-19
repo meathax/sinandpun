@@ -162,7 +162,7 @@ extern "C" void TaskThread_run_HLE_80242d7c(CpuContext* ctx) {
             cpu->gpr[3] = taskThread + kTaskMessageQueueOffset;
             cpu->gpr[4] = outMsgPtr;
             cpu->gpr[5] = 1; // OS_MESSAGE_BLOCK
-            InvokeIndirectCpu(MKW_GADDR(801A7424), cpu); // OSReceiveMessage
+            InvokeIndirectCpu(MKW_GADDR(801AD410), cpu); // OSReceiveMessage
         }
 
         const uint32_t job = Memory::Read32(outMsgPtr);
@@ -198,7 +198,7 @@ extern "C" void TaskThread_run_HLE_80242d7c(CpuContext* ctx) {
                     cpu->gpr[3] = doneQueue;
                     cpu->gpr[4] = token;
                     cpu->gpr[5] = 0; // OS_MESSAGE_NOBLOCK
-                    InvokeIndirectCpu(MKW_GADDR(801A735C), cpu); // OSSendMessage
+                    InvokeIndirectCpu(MKW_GADDR(801AD340), cpu); // OSSendMessage
                 }
             }
         }
@@ -206,4 +206,4 @@ extern "C" void TaskThread_run_HLE_80242d7c(CpuContext* ctx) {
         ClearTaskJob(taskThread, job);
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(80242D7C, TaskThread_run_HLE_80242d7c, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(80242D7C, TaskThread_run_HLE_80242d7c, (CpuContext* ctx), (ctx));

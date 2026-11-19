@@ -53,7 +53,7 @@ extern "C" void PPCHalt_8012E5A4()
     std::exit(EXIT_FAILURE);
 }
 
-PPC_NATIVE_OVERRIDE_VOID(8012E5A4, PPCHalt_8012E5A4, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E7F0, PPCHalt_8012E5A4, (), ());
 
 // 0x801A2660 -> OS::Panic
 extern "C" void OS__Panic_801A2660_Cpu(CpuContext* ctx)
@@ -116,7 +116,7 @@ extern "C" void OS__Panic_801A2660_Cpu(CpuContext* ctx)
     std::exit(EXIT_FAILURE);
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801A2660, OS__Panic_801A2660_Cpu, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801A8E90, OS__Panic_801A2660_Cpu, (CpuContext* ctx), (ctx));
 
 // 0x801A8A80 -> OSResetSystem
 extern "C" uint32_t OSResetSystem()
@@ -133,7 +133,7 @@ extern "C" uint32_t OSResetSystem()
     return 0; // unreachable, but keeps the signature consistent with callers
 }
 
-PPC_NATIVE_OVERRIDE(801A8A80, OSResetSystem, uint32_t, (), ());
+PPC_NATIVE_OVERRIDE(801AEA40, OSResetSystem, uint32_t, (), ());
 
 // 0x801AE58C -> exit(int status)
 extern "C" uint32_t Exit_801AE58C(int status)
@@ -153,4 +153,4 @@ extern "C" uint32_t Exit_801AE58C(int status)
     return static_cast<uint32_t>(status);
 }
 
-PPC_NATIVE_OVERRIDE(801AE58C, Exit_801AE58C, uint32_t, (int status), (status));
+SIN_DISABLED_NATIVE_OVERRIDE(801AE58C, Exit_801AE58C, uint32_t, (int status), (status));

@@ -210,7 +210,7 @@ void UnlockAllThreadMutexes(CpuContext* cpu, uint32_t threadPtr)
     }
     CpuContextScope scope(cpu);
     cpu->gpr[3] = threadPtr;
-    InvokeIndirectCpu(MKW_GADDR(801A8088), cpu); // __OSUnlockAllMutex
+    InvokeIndirectCpu(MKW_GADDR(801ADF50), cpu); // __OSUnlockAllMutex
 }
 
 // Shared tail of OSExitThread/OSCancelThread: clears context, delists if detached, marks
@@ -305,7 +305,7 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
             cpu->gpr[3] = threadPtr;
             cpu->gpr[4] = entryFunc;
             cpu->gpr[5] = alignedStack - 8;
-            InvokeIndirectCpu(MKW_GADDR(801A20BC), cpu); // OSInitContext
+            InvokeIndirectCpu(MKW_GADDR(801A8A00), cpu); // OSInitContext
         }
 
         if (IsThpVideoDecoderEntry(entryFunc)) {
@@ -319,7 +319,7 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
 
         }
 
-        ::Memory::Write32(threadPtr + 0x84u, MKW_GADDR(801AA0F0)); // LR = OSExitThread
+        ::Memory::Write32(threadPtr + 0x84u, MKW_GADDR(801B00B0)); // LR = OSExitThread
         ::Memory::Write32(threadPtr + 0x0Cu, entryArg);    // r3 = argument
 
         // Stack info
@@ -392,7 +392,7 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
         cpu->gpr[3] = 0; // Return failure
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801A9E84, OSCreateThread_HLE_801a9e84, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801A9E84, OSCreateThread_HLE_801a9e84, (CpuContext* ctx), (ctx));
 
 extern "C" void OSExitThread_HLE_801aa0f0(CpuContext* ctx)
 {
@@ -418,7 +418,7 @@ extern "C" void OSExitThread_HLE_801aa0f0(CpuContext* ctx)
 
     OS__RestoreInterrupts_801a65d4(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801AA0F0, OSExitThread_HLE_801aa0f0, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801AA0F0, OSExitThread_HLE_801aa0f0, (CpuContext* ctx), (ctx));
 
 extern "C" void OSCancelThread_HLE_801aa1d4(CpuContext* ctx)
 {
@@ -460,7 +460,7 @@ extern "C" void OSCancelThread_HLE_801aa1d4(CpuContext* ctx)
 
     OS__RestoreInterrupts_801a65d4(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801AA1D4, OSCancelThread_HLE_801aa1d4, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801AA1D4, OSCancelThread_HLE_801aa1d4, (CpuContext* ctx), (ctx));
 
 extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
 {
@@ -519,7 +519,7 @@ extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
     OS__RestoreInterrupts_801a65d4(irqState);
     cpu->gpr[3] = result;
 }
-PPC_NATIVE_OVERRIDE_VOID(801AA3AC, OSJoinThread_HLE_801aa3ac, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801AA3AC, OSJoinThread_HLE_801aa3ac, (CpuContext* ctx), (ctx));
 
 extern "C" void OSDetachThread_HLE_801aa4ec(CpuContext* ctx)
 {
@@ -549,7 +549,7 @@ extern "C" void OSDetachThread_HLE_801aa4ec(CpuContext* ctx)
 
     OS__RestoreInterrupts_801a65d4(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801AA4EC, OSDetachThread_HLE_801aa4ec, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801AA4EC, OSDetachThread_HLE_801aa4ec, (CpuContext* ctx), (ctx));
 
 extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
 {
@@ -605,7 +605,7 @@ extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
 
     OS__RestoreInterrupts_801a65d4(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801AA6A8, OSSuspendThread_HLE_801aa6a8, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801AA6A8, OSSuspendThread_HLE_801aa6a8, (CpuContext* ctx), (ctx));
 
 // OSResumeThread (0x801aa58c)
 // Resumes a suspended thread, making it eligible for scheduling.
@@ -708,4 +708,4 @@ extern "C" void OSResumeThread_HLE_801aa58c(CpuContext* ctx)
     
     OS__RestoreInterrupts_801a65d4(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801AA58C, OSResumeThread_HLE_801aa58c, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801AA58C, OSResumeThread_HLE_801aa58c, (CpuContext* ctx), (ctx));

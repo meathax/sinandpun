@@ -57,7 +57,7 @@ extern "C" void SCGetBtDeviceInfoArray_HLE(CpuContext* ctx) {
         BluetoothSysconf::SetReturn(ctx, 0);
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1ED0, SCGetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1ED0, SCGetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 // WUD writes the list back after reconciling it with the controller's link
 // keys, and WPAD whenever a channel's remote changes. The virtual remotes are
@@ -65,7 +65,7 @@ PPC_NATIVE_OVERRIDE_VOID(801B1ED0, SCGetBtDeviceInfoArray_HLE, (CpuContext* ctx)
 extern "C" void SCSetBtDeviceInfoArray_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, 1);
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1EDC, SCSetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1EDC, SCSetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 // Remotes paired with 1+2 on the game's own sync screens. The virtual remotes
 // are all registered, so the list is always empty.
@@ -78,22 +78,22 @@ extern "C" void SCGetBtCmpDevInfoArray_HLE(CpuContext* ctx) {
         BluetoothSysconf::SetReturn(ctx, 0);
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1EE8, SCGetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1EE8, SCGetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void SCSetBtCmpDevInfoArray_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, 1);
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1EF4, SCSetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1EF4, SCSetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void SCGetBtDpdSensibility_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, static_cast<uint32_t>(std::clamp(RuntimeConfigFile::WiiIrSensitivity(), 1, 5)));
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1F00, SCGetBtDpdSensibility_HLE, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801B6C00, SCGetBtDpdSensibility_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void SCGetWpadMotorMode_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, RuntimeConfigFile::WiiRumbleEnabled() ? 1u : 0u);
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1F68, SCGetWpadMotorMode_HLE, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801B6C70, SCGetWpadMotorMode_HLE, (CpuContext* ctx), (ctx));
 
 // The Home Menu's vibration switch, saved by WPADSaveConfig.
 extern "C" void SCSetWpadMotorMode_HLE(CpuContext* ctx) {
@@ -103,17 +103,17 @@ extern "C" void SCSetWpadMotorMode_HLE(CpuContext* ctx) {
     }
     BluetoothSysconf::SetReturn(ctx, 1);
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1FBC, SCSetWpadMotorMode_HLE, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1FBC, SCSetWpadMotorMode_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void SCGetWpadSensorBarPosition_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, RuntimeConfigFile::WiiSensorBarAbove() ? 1u : 0u);
 }
-PPC_NATIVE_OVERRIDE_VOID(801B1FC4, SCGetWpadSensorBarPosition_HLE, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801B6CE0, SCGetWpadSensorBarPosition_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void SCGetWpadSpeakerVolume_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, static_cast<uint32_t>(std::clamp(RuntimeConfigFile::WiiSpeakerVolume(), 0, 0x7F)));
 }
-PPC_NATIVE_OVERRIDE_VOID(801B2018, SCGetWpadSpeakerVolume_HLE, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801B6D40, SCGetWpadSpeakerVolume_HLE, (CpuContext* ctx), (ctx));
 
 // The Home Menu's speaker volume, saved by WPADSaveConfig.
 extern "C" void SCSetWpadSpeakerVolume_HLE(CpuContext* ctx) {
@@ -123,4 +123,4 @@ extern "C" void SCSetWpadSpeakerVolume_HLE(CpuContext* ctx) {
     }
     BluetoothSysconf::SetReturn(ctx, 1);
 }
-PPC_NATIVE_OVERRIDE_VOID(801B206C, SCSetWpadSpeakerVolume_HLE, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B206C, SCSetWpadSpeakerVolume_HLE, (CpuContext* ctx), (ctx));

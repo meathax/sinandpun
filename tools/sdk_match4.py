@@ -79,7 +79,12 @@ def elf_functions(lib_path):
             if rel is not None:
                 entsz = rel[9] or 12
                 for i in range(rel[5] // entsz):
-                    r_offset, _ = struct.unpack_from(">II", body, rel[4] + i * entsz)
+                    r_offset, r_info = struct.unpack_from(">II", body, rel[4] + i * entsz)
+                    r_type = r_info & 0xFF
+                    # CW 16-bit relocs (4/5/6/109) address the halfword
+                    # operand, so r_offset lands 2 past the word: align down.
+                    if r_type in (4, 5, 6, 109):
+                        r_offset &= ~3
                     masked.add(r_offset - tbase)
             for i in range(symtab[5] // 16):
                 st_name, st_value, st_size, st_info, _o, st_shndx = \

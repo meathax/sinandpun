@@ -233,13 +233,13 @@ extern "C" uint32_t SetInterruptMask_801a66e0(uint32_t mask, uint32_t enable)
     return 0;
 }
 
-PPC_NATIVE_OVERRIDE(801A65AC, OS__DisableInterrupts_801a65ac, int32_t, (), ());
-PPC_NATIVE_OVERRIDE(801A65C0, OS__EnableInterrupts_801a65c0, int32_t, (), ());
-PPC_NATIVE_OVERRIDE(801A65D4, OS__RestoreInterrupts_801a65d4, int32_t, (int32_t level), (level));
-PPC_NATIVE_OVERRIDE(801A661C, OS____InterruptInit_801a661c, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
-PPC_NATIVE_OVERRIDE(801A66E0, SetInterruptMask_801a66e0, uint32_t, (uint32_t mask, uint32_t enable), (mask, enable));
-PPC_NATIVE_OVERRIDE(801A00E0, OS__ExceptionInit_801a00e0, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20), (r3, r4, r5, r6, r7, r8, r20));
-PPC_NATIVE_OVERRIDE(80168FA0, EXIInit_80168fa0, uint32_t, (), ());
+PPC_NATIVE_OVERRIDE(801ACAF0, OS__DisableInterrupts_801a65ac, int32_t, (), ());
+PPC_NATIVE_OVERRIDE(801ACB10, OS__EnableInterrupts_801a65c0, int32_t, (), ());
+PPC_NATIVE_OVERRIDE(801ACB30, OS__RestoreInterrupts_801a65d4, int32_t, (int32_t level), (level));
+PPC_NATIVE_OVERRIDE(801ACB90, OS____InterruptInit_801a661c, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
+PPC_NATIVE_OVERRIDE(801ACC60, SetInterruptMask_801a66e0, uint32_t, (uint32_t mask, uint32_t enable), (mask, enable));
+SIN_DISABLED_NATIVE_OVERRIDE(801A00E0, OS__ExceptionInit_801a00e0, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20), (r3, r4, r5, r6, r7, r8, r20));
+PPC_NATIVE_OVERRIDE(80197100, EXIInit_80168fa0, uint32_t, (), ());
 REGISTER_NATIVE_FUNCTION(0x801A65F8, __OSSetInterruptHandler_801a65f8_hle);
 REGISTER_NATIVE_FUNCTION(0x801A69BC, __OSUnmaskInterrupts_801a69bc_hle);
 
@@ -272,7 +272,7 @@ extern "C" uint32_t OS____MaskInterrupts_801a693c(uint32_t mask, uint32_t unmask
     return old_mask;
 }
 
-PPC_NATIVE_OVERRIDE(801A693C, OS____MaskInterrupts_801a693c, uint32_t, (uint32_t mask, uint32_t unmask), (mask, unmask));
+PPC_NATIVE_OVERRIDE(801ACEC0, OS____MaskInterrupts_801a693c, uint32_t, (uint32_t mask, uint32_t unmask), (mask, unmask));
 
 // ----------------------------------------------------------------------------
 // EXISelect / EXIDeselect - HLE Stubs (0x801689d0 / 0x80168b00)
@@ -309,8 +309,8 @@ extern "C" uint32_t EXISelect_801689d0(uint32_t channel, uint32_t device, uint32
 EXI_CHANNEL_STUB(EXIDeselect_80168b00, 10, "channel=")
 
 // Register the functions
-PPC_NATIVE_OVERRIDE(801689D0, EXISelect_801689d0, uint32_t, (uint32_t channel, uint32_t device, uint32_t frequency), (channel, device, frequency));
-PPC_NATIVE_OVERRIDE(80168B00, EXIDeselect_80168b00, uint32_t, (uint32_t channel), (channel));
+PPC_NATIVE_OVERRIDE(80196B20, EXISelect_801689d0, uint32_t, (uint32_t channel, uint32_t device, uint32_t frequency), (channel, device, frequency));
+PPC_NATIVE_OVERRIDE(80196C50, EXIDeselect_80168b00, uint32_t, (uint32_t channel), (channel));
 
 // ----------------------------------------------------------------------------
 // SetExiInterruptMask (0x80167e78): stubbed no-op, our fake EXI devices need no interrupt masking.
@@ -324,7 +324,7 @@ extern "C" void SetExiInterruptMask_80167e78(uint32_t channel, uint32_t exi_stru
 }
 
 // Register the function
-PPC_NATIVE_OVERRIDE_VOID(80167E78, SetExiInterruptMask_80167e78, (uint32_t channel, uint32_t exi_struct_ptr), (channel, exi_struct_ptr));
+PPC_NATIVE_OVERRIDE_VOID(80195F90, SetExiInterruptMask_80167e78, (uint32_t channel, uint32_t exi_struct_ptr), (channel, exi_struct_ptr));
 
 // ----------------------------------------------------------------------------
 // EXI Transaction Stubs (Imm, Dma, Sync, Unlock)
@@ -439,12 +439,12 @@ extern "C" uint32_t OSSetPowerCallback_801ab75c(CpuContext* ctx)
 }
 
 // Register the function
-PPC_NATIVE_OVERRIDE(801AB75C, OSSetPowerCallback_801ab75c, uint32_t, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE(801AB75C, OSSetPowerCallback_801ab75c, uint32_t, (CpuContext* ctx), (ctx));
 
-PPC_NATIVE_OVERRIDE(80167F68, EXIImm_80167f68, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
-PPC_NATIVE_OVERRIDE(80168288, EXIDma_80168288, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
-PPC_NATIVE_OVERRIDE(80168380, EXISync_80168380, uint32_t, (uint32_t channel), (channel));
-PPC_NATIVE_OVERRIDE(80169260, EXIUnlock_80169260, uint32_t, (uint32_t channel), (channel));
+PPC_NATIVE_OVERRIDE(80196080, EXIImm_80167f68, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
+PPC_NATIVE_OVERRIDE(801963B0, EXIDma_80168288, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
+PPC_NATIVE_OVERRIDE(801964B0, EXISync_80168380, uint32_t, (uint32_t channel), (channel));
+PPC_NATIVE_OVERRIDE(801973D0, EXIUnlock_80169260, uint32_t, (uint32_t channel), (channel));
 
 // ----------------------------------------------------------------------------
 // IPC Register Access Stubs (0x80193020 write / 0x80193010 read): Broadway-IOS MMIO,
@@ -474,8 +474,8 @@ extern "C" uint32_t IPCReadReg_80193010(uint32_t index)
 }
 
 // Register the functions
-PPC_NATIVE_OVERRIDE_VOID(80193020, IPCWriteReg_80193020, (uint32_t index, uint32_t value), (index, value));
-PPC_NATIVE_OVERRIDE(80193010, IPCReadReg_80193010, uint32_t, (uint32_t index), (index));
+PPC_NATIVE_OVERRIDE_VOID(801993E0, IPCWriteReg_80193020, (uint32_t index, uint32_t value), (index, value));
+PPC_NATIVE_OVERRIDE(801993D0, IPCReadReg_80193010, uint32_t, (uint32_t index), (index));
 
 // ----------------------------------------------------------------------------
 // IPCCltInit (0x80193478): hardware parts (interrupt handler, MMIO) are stubbed, but we still
@@ -487,7 +487,7 @@ extern "C" int32_t IPCCltInit_80193478(CpuContext* ctx)
     RT_LOG(RT_TAG_OS) << "IPCCltInit_80193478 called: calling IPCInit for buffer setup" << std::endl;
     
     // Sets 0x803867EC/F0/E8 (IPC buffer lo/hi + init flag) from __OSGetIPCBufferLo/Hi.
-    InvokeIndirectCpu(MKW_GADDR(80192F7C), ctx);
+    InvokeIndirectCpu(MKW_GADDR(80199330), ctx);
 
     // Advance the buffer lo pointer by 0x1000 (iosHeap size), matching real IPCCltInit.
     const uint32_t kIpcBufferLoGlobal = MKW_GADDR(803867EC);
@@ -502,4 +502,4 @@ extern "C" int32_t IPCCltInit_80193478(CpuContext* ctx)
     return 0; // Success
 }
 
-PPC_NATIVE_OVERRIDE(80193478, IPCCltInit_80193478, int32_t, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE(80199860, IPCCltInit_80193478, int32_t, (CpuContext* ctx), (ctx));

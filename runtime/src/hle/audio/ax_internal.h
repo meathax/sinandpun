@@ -44,8 +44,8 @@ const uint32_t kAxDramMmemAddr = MKW_GADDR(802F8200);
 constexpr uint32_t kAxDramLength = 64u;
 constexpr uint32_t kAxDramDspAddr = 3282u;
 const uint32_t kAxInitCallback = MKW_GADDR(80126948);
-const uint32_t kAxResumeCallback = MKW_GADDR(80126954);
-const uint32_t kAxDoneCallback = MKW_GADDR(801269A8);
+const uint32_t kAxResumeCallback = MKW_GADDR(8015C0F0);
+const uint32_t kAxDoneCallback = MKW_GADDR(8016000C);
 const uint32_t kAxRequestCallback = MKW_GADDR(801269B8);
 
 extern uint32_t g_axTaskPtr;

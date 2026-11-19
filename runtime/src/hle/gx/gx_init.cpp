@@ -83,7 +83,7 @@ extern "C" uint32_t GX__Init_8016b850(uint32_t fifoBase, uint32_t fifoSize)
 
     return kFifoObjAddr;
 }
-PPC_NATIVE_OVERRIDE(8016b850, GX__Init_8016b850, uint32_t, (uint32_t fifoBase, uint32_t fifoSize), (fifoBase, fifoSize));
+SIN_DISABLED_NATIVE_OVERRIDE(8016b850, GX__Init_8016b850, uint32_t, (uint32_t fifoBase, uint32_t fifoSize), (fifoBase, fifoSize));
 
 // ============================================================================
 // FIFO Management
@@ -92,22 +92,22 @@ PPC_NATIVE_OVERRIDE(8016b850, GX__Init_8016b850, uint32_t, (uint32_t fifoBase, u
 extern "C" void GX__InitFifoBase_8016c7c8(uint32_t fa, uint32_t ba, uint32_t s) { GXInitFifoBase((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj)), GuestToHostPtr(ba, s), s); }
 
 extern "C" void GX__SetCPUFifo_8016c94c(uint32_t fa) { GX_SYNC_INLINE(); GXSetCPUFifo((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj))); }
-PPC_NATIVE_OVERRIDE_VOID(8016c94c, GX__SetCPUFifo_8016c94c, (uint32_t fa), (fa));
+PPC_NATIVE_OVERRIDE_VOID(801D5280, GX__SetCPUFifo_8016c94c, (uint32_t fa), (fa));
 
 extern "C" void GX__SetGPFifo_8016cb2c(uint32_t fa) { GX_SYNC_INLINE(); GXSetGPFifo((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj))); }
-PPC_NATIVE_OVERRIDE_VOID(8016cb2c, GX__SetGPFifo_8016cb2c, (uint32_t fa), (fa));
+PPC_NATIVE_OVERRIDE_VOID(801D5460, GX__SetGPFifo_8016cb2c, (uint32_t fa), (fa));
 
 extern "C" void __GX__SaveFifo_8016cdbc(uint32_t fa) { GX_SYNC_INLINE(); GXSaveCPUFifo((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj))); }
-PPC_NATIVE_OVERRIDE_VOID(8016cdbc, __GX__SaveFifo_8016cdbc, (uint32_t fa), (fa));
+PPC_NATIVE_OVERRIDE_VOID(801D56F0, __GX__SaveFifo_8016cdbc, (uint32_t fa), (fa));
 
 extern "C" void GX__GetCPUFifo_8016cf10(uint32_t fa) { GX_SYNC_INLINE(); auto* d=(GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj)); auto* s=GXGetCPUFifo(); if(d&&s) std::memcpy(d,s,sizeof(GXFifoObj)); }
-PPC_NATIVE_OVERRIDE_VOID(8016cf10, GX__GetCPUFifo_8016cf10, (uint32_t fa), (fa));
+PPC_NATIVE_OVERRIDE_VOID(801D5800, GX__GetCPUFifo_8016cf10, (uint32_t fa), (fa));
 
 extern "C" void __GX__FifoInit_8016d180()
 {
     constexpr uint32_t kCpInterruptId = 0x11u;
     constexpr uint32_t kCpInterruptMask = 0x4000u;
-    const uint32_t kCpInterruptHandlerAddr = MKW_GADDR(8016c668);
+    const uint32_t kCpInterruptHandlerAddr = MKW_GADDR(801D4F90);
     const uint32_t kGxCurrentThreadPtrAddr = MKW_GADDR(803867c4);
     const uint32_t kGxThreadQueueAddr = MKW_GADDR(803867c0);
     const uint32_t kCpuFifoObjAddr = MKW_GADDR(80343de4);
@@ -142,8 +142,8 @@ extern "C" void __GX__PEInit_8016ee14()
     constexpr uint32_t kPeFinishInterruptId = 0x13u;
     constexpr uint32_t kPeTokenInterruptMask = 0x1000u;
     constexpr uint32_t kPeFinishInterruptMask = 0x2000u;
-    const uint32_t kPeTokenHandlerAddr = MKW_GADDR(8016eccc);
-    const uint32_t kPeFinishHandlerAddr = MKW_GADDR(8016ed94);
+    const uint32_t kPeTokenHandlerAddr = MKW_GADDR(801D70F0);
+    const uint32_t kPeFinishHandlerAddr = MKW_GADDR(801D71D0);
     const uint32_t kPeThreadQueueAddr = MKW_GADDR(803867d0);
 
     __OSSetInterruptHandler_801a65f8_hle(kPeTokenInterruptId, kPeTokenHandlerAddr);
@@ -160,7 +160,7 @@ extern "C" void __GX__PEInit_8016ee14()
         }
     } catch (const ::Memory::AccessViolation&) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(8016ee14, __GX__PEInit_8016ee14, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D7250, __GX__PEInit_8016ee14, (), ());
 
 // ============================================================================
 // Display List Recording
@@ -196,7 +196,7 @@ extern "C" void GX__BeginDisplayList_80172e00(uint32_t la, uint32_t s) {
         GX__SetCPUFifo_8016c94c(MKW_GADDR(80344090));
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(80172e00, GX__BeginDisplayList_80172e00, (uint32_t la, uint32_t s), (la, s));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(80172e00, GX__BeginDisplayList_80172e00, (uint32_t la, uint32_t s), (la, s));
 
 static void EndDisplayListInline() {
     if (g_dlInline) {
@@ -242,7 +242,7 @@ extern "C" uint32_t GX__EndDisplayList_80172eb4() {
         return 0;
     }
 }
-PPC_NATIVE_OVERRIDE(80172EB4, GX__EndDisplayList_80172eb4, uint32_t, (), ());
+SIN_DISABLED_NATIVE_OVERRIDE(80172EB4, GX__EndDisplayList_80172eb4, uint32_t, (), ());
 
 // ============================================================================
 // Flush
@@ -252,4 +252,4 @@ extern "C" void GX__Flush_8016e654() {
     GX_DEFER_CALL0(GX__Flush_8016e654);
     GXFlush();
 }
-PPC_NATIVE_OVERRIDE_VOID(8016e654, GX__Flush_8016e654, (), ());
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8016e654, GX__Flush_8016e654, (), ());

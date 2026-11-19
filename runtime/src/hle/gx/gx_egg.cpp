@@ -68,8 +68,8 @@ static void EGG__DrawGX__SetVtxState_HLE(uint32_t state) {
     default: break;
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(8021b344, EGG__DrawGX__SetVtxState_HLE, (uint32_t state), (state));
-PPC_NATIVE_OVERRIDE_VOID(8021b688, EGG__DrawGX__SetVtxState_HLE, (uint32_t state), (state));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8021b344, EGG__DrawGX__SetVtxState_HLE, (uint32_t state), (state));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8021b688, EGG__DrawGX__SetVtxState_HLE, (uint32_t state), (state));
 
 extern "C" void EGG__LightTexture__SetupTevFinish_HLE_8022e2bc(CpuContext* ctx) {
     const uint32_t self = ctx->gpr[3];
@@ -114,7 +114,7 @@ extern "C" void EGG__LightTexture__SetupTevFinish_HLE_8022e2bc(CpuContext* ctx) 
 
     Memory::Write8(self + 0x74, 2);
 }
-PPC_NATIVE_OVERRIDE_VOID(8022e2bc, EGG__LightTexture__SetupTevFinish_HLE_8022e2bc, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8022e2bc, EGG__LightTexture__SetupTevFinish_HLE_8022e2bc, (CpuContext* ctx), (ctx));
 
 // ============================================================================
 // EGG::AsyncDisplay
@@ -125,4 +125,4 @@ extern "C" void EGG__AsyncDisplay__endRender_HLE_8020ff9c(CpuContext* ctx) {
     InvokeIndirectCpu(MKW_GADDR(80219FB4), ctx);
     InvokeIndirectCpu(MKW_GADDR(8016ED50), ctx);
 }
-PPC_NATIVE_OVERRIDE_VOID(8020FF9C, EGG__AsyncDisplay__endRender_HLE_8020ff9c, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8020FF9C, EGG__AsyncDisplay__endRender_HLE_8020ff9c, (CpuContext* ctx), (ctx));

@@ -87,7 +87,7 @@ extern "C" void GKI_delay_HLE_801301b4()
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801301B4, GKI_delay_HLE_801301b4, (), ());
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801301B4, GKI_delay_HLE_801301b4, (), ());
 
 // Serial Interface (SI) - GameCube controller ports; stubbed since we don't emulate the MMIO.
 
@@ -116,7 +116,7 @@ extern "C" uint32_t HLE_VIGetTvFormat_801bacd8()
 }
 
 REGISTER_NATIVE_FUNCTION(0x801B2DE0, SIInit_801b2de0);
-PPC_NATIVE_OVERRIDE_VOID(801B3ACC, HLE_SISetSamplingRate_801b3acc, (uint32_t msec), (msec));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B3ACC, HLE_SISetSamplingRate_801b3acc, (uint32_t msec), (msec));
 
 // OS____InitMemoryProtection (0x801A7DFC): real version touches MMU/MMIO we don't emulate;
 // no-op and return success so boot doesn't stall.
@@ -127,7 +127,7 @@ extern "C" uint32_t OS____InitMemoryProtection_801a7dfc(uint32_t r3, uint32_t r4
     return 0;
 }
 
-PPC_NATIVE_OVERRIDE(801A7DFC, OS____InitMemoryProtection_801a7dfc, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
+PPC_NATIVE_OVERRIDE(801ADC90, OS____InitMemoryProtection_801a7dfc, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
 
 // OSGetConsoleType (0x8019f33c): standard Wii = 0x12, NDEV (expanded MEM2) = 0x10000012;
 // MKWii uses the NDEV result to enable its extra-memory heap path.
@@ -148,7 +148,7 @@ extern "C" uint32_t OS__GetConsoleType_8019f33c(uint32_t /*r4*/, uint32_t /*r5*/
 }
 
 // Register the function
-PPC_NATIVE_OVERRIDE(8019F33C, OS__GetConsoleType_8019f33c, uint32_t, (uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r31), (r4, r5, r6, r7, r8, r31));
+PPC_NATIVE_OVERRIDE(801A58E0, OS__GetConsoleType_8019f33c, uint32_t, (uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r31), (r4, r5, r6, r7, r8, r31));
 
 // OSGetResetCode (0x801a8a50): real version reads MMIO 0xCC003024; we always report
 // Cold Boot (0).
@@ -164,7 +164,7 @@ extern "C" uint32_t OSGetResetCode_801a8a50()
 }
 
 // Register the function
-PPC_NATIVE_OVERRIDE(801A8A50, OSGetResetCode_801a8a50, uint32_t, (), ());
+PPC_NATIVE_OVERRIDE(801AEA10, OSGetResetCode_801a8a50, uint32_t, (), ());
 
 // __OSInitSTM (0x801AB848): real version opens /dev/stm/* handles. We stub it by writing
 // fake handles and the success flag into the SDA (r13) block so OSResetSystem's checks pass.
@@ -201,7 +201,7 @@ extern "C" uint32_t __OSInitSTM_HLE_801ab848(CpuContext* ctx)
 }
 
 // Register the function
-PPC_NATIVE_OVERRIDE(801AB848, __OSInitSTM_HLE_801ab848, uint32_t, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE(801B1800, __OSInitSTM_HLE_801ab848, uint32_t, (CpuContext* ctx), (ctx));
 
 
 extern "C" void OS____PSInit_801a04a0()
@@ -209,7 +209,7 @@ extern "C" void OS____PSInit_801a04a0()
     RT_LOG(RT_TAG_OS) << "OS____PSInit_801a04a0 called (stubbed)" << std::endl;
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801A04A0, OS____PSInit_801a04a0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801A6B50, OS____PSInit_801a04a0, (), ());
 
 
 
@@ -218,7 +218,7 @@ extern "C" void __init_hardware_80006348()
     RT_LOG(RT_TAG_OS) << "__init_hardware_80006348 called (stubbed)" << std::endl;
 }
 
-PPC_NATIVE_OVERRIDE_VOID(80006348,__init_hardware_80006348, (), ());
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(80006348,__init_hardware_80006348, (), ());
 
 
 // PPC SPR (Special Purpose Register) access stubs; these registers don't exist on x86 so
@@ -230,10 +230,10 @@ PPC_NATIVE_OVERRIDE_VOID(80006348,__init_hardware_80006348, (), ());
     extern "C" void name() { RT_LOG(RT_TAG_OS) << message << std::endl; }
 
 PPC_SPR_STUB_BODY(PPCMfhid0_8012e574, "PPCMfhid0 called (stubbed) - Move From HID0")
-PPC_NATIVE_OVERRIDE_VOID(8012e574, PPCMfhid0_8012e574, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E790, PPCMfhid0_8012e574, (), ());
 
 PPC_SPR_STUB_BODY(PPCMthid0_8012e57c, "PPCMthid0 called (stubbed) - Move To HID0")
-PPC_NATIVE_OVERRIDE_VOID(8012e57c, PPCMthid0_8012e57c, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E7A0, PPCMthid0_8012e57c, (), ());
 
 extern "C" void PPCMtdec_8012e594()
 {
@@ -246,7 +246,7 @@ extern "C" void PPCMtdec_8012e594()
     // AsyncDisplay's pacing alarm by multiple retraces.
     OS_HLE_ProcessAlarms(32);
 }
-PPC_NATIVE_OVERRIDE_VOID(8012E594, PPCMtdec_8012e594, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E7D0, PPCMtdec_8012e594, (), ());
 
 extern "C" void PPCSync_8012e59c()
 {
@@ -254,25 +254,25 @@ extern "C" void PPCSync_8012e59c()
     // and the runtime's own cross-thread state uses C++ atomics, so there is no
     // guest-visible reordering for this barrier to prevent.
 }
-PPC_NATIVE_OVERRIDE_VOID(8012e59c, PPCSync_8012e59c, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E7E0, PPCSync_8012e59c, (), ());
 
 PPC_SPR_STUB_BODY(PPCMtmmcr0_8012e5b8, "PPCMtmmcr0 called (stubbed) - Move To MMCR0")
-PPC_NATIVE_OVERRIDE_VOID(8012e5b8, PPCMtmmcr0_8012e5b8, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E810, PPCMtmmcr0_8012e5b8, (), ());
 
 PPC_SPR_STUB_BODY(PPCMtmmcr1_8012e5c0, "PPCMtmmcr1 called (stubbed) - Move To MMCR1")
-PPC_NATIVE_OVERRIDE_VOID(8012e5c0, PPCMtmmcr1_8012e5c0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E820, PPCMtmmcr1_8012e5c0, (), ());
 
 PPC_SPR_STUB_BODY(PPCMtpmc1_8012e5c8, "PPCMtpmc1 called (stubbed) - Move To PMC1")
-PPC_NATIVE_OVERRIDE_VOID(8012e5c8, PPCMtpmc1_8012e5c8, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E830, PPCMtpmc1_8012e5c8, (), ());
 
 PPC_SPR_STUB_BODY(PPCMtpmc2_8012e5d0, "PPCMtpmc2 called (stubbed) - Move To PMC2")
-PPC_NATIVE_OVERRIDE_VOID(8012e5d0, PPCMtpmc2_8012e5d0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E840, PPCMtpmc2_8012e5d0, (), ());
 
 PPC_SPR_STUB_BODY(PPCMtpmc3_8012e5d8, "PPCMtpmc3 called (stubbed) - Move To PMC3")
-PPC_NATIVE_OVERRIDE_VOID(8012e5d8, PPCMtpmc3_8012e5d8, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E850, PPCMtpmc3_8012e5d8, (), ());
 
 PPC_SPR_STUB_BODY(PPCMtpmc4_8012e5e0, "PPCMtpmc4 called (stubbed) - Move To PMC4")
-PPC_NATIVE_OVERRIDE_VOID(8012e5e0, PPCMtpmc4_8012e5e0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E860, PPCMtpmc4_8012e5e0, (), ());
 
 extern "C" uint32_t PPCMfhid2_8012e630_impl()
 {
@@ -301,18 +301,18 @@ extern "C" void PPCMthid2_8012e638(CpuContext* ctx)
         RT_LOG(RT_TAG_OS) << "PPCMthid2 set HID2=0x" << std::hex << cpu->hid2 << std::dec << std::endl;
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(8012e638, PPCMthid2_8012e638, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(8015E8D0, PPCMthid2_8012e638, (CpuContext* ctx), (ctx));
 
 PPC_SPR_STUB_BODY(PPCMfwpar_8012e640,
                   "PPCMfwpar called (stubbed) - Move From Write Pipe Address Register")
-PPC_NATIVE_OVERRIDE_VOID(8012e640, PPCMfwpar_8012e640, (), ());
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(8012e640, PPCMfwpar_8012e640, (), ());
 
 PPC_SPR_STUB_BODY(PPCMtwpar_8012e64c,
                   "PPCMtwpar called (stubbed) - Move To Write Pipe Address Register")
-PPC_NATIVE_OVERRIDE_VOID(8012e64c, PPCMtwpar_8012e64c, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E8E0, PPCMtwpar_8012e64c, (), ());
 
 PPC_SPR_STUB_BODY(PPCDisableSpeculation_8012e654, "PPCDisableSpeculation called (stubbed)")
-PPC_NATIVE_OVERRIDE_VOID(8012e654, PPCDisableSpeculation_8012e654, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E8F0, PPCDisableSpeculation_8012e654, (), ());
 
 PPC_SPR_STUB_BODY(PPCMthid4_8012e684, "PPCMthid4 called (stubbed) - Move To HID4")
-PPC_NATIVE_OVERRIDE_VOID(8012e684, PPCMthid4_8012e684, (), ());
+PPC_NATIVE_OVERRIDE_VOID(8015E930, PPCMthid4_8012e684, (), ());
