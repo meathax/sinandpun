@@ -194,6 +194,12 @@ bool ProcessAlarmQueue(CpuContext* cpu, int maxToProcess)
 
                 handledAny = true;
 
+                static std::atomic<int> s_fireLog{0};
+                if (s_fireLog.fetch_add(1) < 24) {
+                    RT_LOG(RT_TAG_OS) << "[alarm] FIRING alarm=0x" << std::hex << alarm
+                              << " handler=0x" << handler << std::dec << std::endl;
+                }
+
                 const uint32_t next = ::Memory::Read32(alarm + kAlarmNextOffset);
 
                 ::Memory::Write32(queueBase, next);

@@ -20,6 +20,9 @@
 // PPCMtdec catches it, restores the interrupted CPU state and resumes.
 struct DecrementerExceptionReturn {};
 extern thread_local int g_decrementerCallbackDepth;
+// Guest address of the OSContext the simulated decrementer exception was
+// raised with (0 outside the simulation). Set by PPCMtdec.
+extern thread_local uint32_t g_simulatedDecrementerContext;
 
 namespace OsHleInternal {
 

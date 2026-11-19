@@ -345,22 +345,50 @@ private:
 class CompositeHost final : public Bluetooth::RemoteHost {
 public:
     bool IsAttached(size_t slot) const override {
-        if (slot == 0 && UseVirtual()) return true;
+        if (slot == 0 && UseVirtual()) {
+            static int s_budget = 8;
+            if (RtLogBudget(s_budget)) {
+                RT_LOG(RT_TAG_BT) << "IsAttached slot=0 -> true (virtual)" << std::endl;
+            }
+            return true;
+        }
         return Wiimote::Host().IsAttached(slot);
     }
 
     bool ConsumeWake(size_t slot) override {
-        if (slot == 0 && UseVirtual()) return m_wake.exchange(false);
+        if (slot == 0 && UseVirtual()) {
+            const bool woke = m_wake.exchange(false);
+            static int s_budget = 8;
+            if (RtLogBudget(s_budget)) {
+                RT_LOG(RT_TAG_BT) << "ConsumeWake slot=0 -> " << (woke ? "true" : "false") << std::endl;
+            }
+            return woke;
+        }
         return Wiimote::Host().ConsumeWake(slot);
     }
 
     bool PopInputReport(size_t slot, std::vector<uint8_t>& report) override {
-        if (slot == 0 && UseVirtual()) return m_remote.Pop(report);
+        if (slot == 0 && UseVirtual()) {
+            const bool got = m_remote.Pop(report);
+            static int s_budget = 100;
+            if (got && RtLogBudget(s_budget)) {
+                RT_LOGF(RT_TAG_BT, "in  id=0x%02X size=%u\n", report.empty() ? 0 : report[0],
+                        static_cast<unsigned>(report.size()));
+            }
+            return got;
+        }
         return Wiimote::Host().PopInputReport(slot, report);
     }
 
     void SendOutputReport(size_t slot, const uint8_t* report, size_t size) override {
         if (slot == 0 && UseVirtual()) {
+            static int s_budget = 160;
+            if (RtLogBudget(s_budget)) {
+                RT_LOGF(RT_TAG_BT, "out id=0x%02X size=%u b1..6=%02X %02X %02X %02X %02X %02X\n",
+                        size != 0 ? report[0] : 0, static_cast<unsigned>(size),
+                        size > 1 ? report[1] : 0, size > 2 ? report[2] : 0, size > 3 ? report[3] : 0,
+                        size > 4 ? report[4] : 0, size > 5 ? report[5] : 0, size > 6 ? report[6] : 0);
+            }
             m_remote.Output(report, size);
             return;
         }

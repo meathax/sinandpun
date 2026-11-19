@@ -101,6 +101,22 @@ extern "C" void OS__LoadContext_801a1f58(CpuContext* ctx)
         // Validate SRR0 (the jump target, at 0x198) before mutating any other state.
         uint32_t srr0 = ::Memory::Read32(guestContextAddr + 0x198u);
 
+        // The simulated decrementer exception (PPCMtdec) ends with the real
+        // handler's OSLoadContext(ctx) - the rfi back to the interrupted
+        // execution. That interrupted state lives in PPCMtdec's host snapshot:
+        // the simulation never writes the true interrupted PC into the
+        // guest-memory OSContext, so its SRR0 is stale (whatever a previous
+        // OSSaveContext left there) and may name a function interior that the
+        // dispatcher cannot enter. Restoring the snapshot is the faithful rfi.
+        // A LoadContext for a DIFFERENT context (a real thread switch made by
+        // the handler) still takes the normal path below.
+        if (g_decrementerCallbackDepth > 0 && guestContextAddr == g_simulatedDecrementerContext) {
+            RT_LOG(RT_TAG_OS) << "OS__LoadContext: simulated-decrementer rfi to the interrupted "
+                      "execution (guest SRR0 0x" << std::hex << srr0 << " is stale, ignored)"
+                      << std::dec << std::endl;
+            throw DecrementerExceptionReturn{};
+        }
+
         // Validate the jump target exists in our translated function registry
         if (srr0 == 0) {
             // An empty context (raw .bss, never saved into) means "nothing to

@@ -24,6 +24,7 @@
 #define RT_TAG_NAND "nand"
 #define RT_TAG_RIIVOLUTION "riivolution"
 #define RT_TAG_VI "vi"
+#define RT_TAG_BT "bt"
 
 // Stream form:  RT_LOG(RT_TAG_OS) << "OSCreateThread failed" << std::endl;
 #define RT_LOG(tag) (std::cerr << "[" tag "] ")
@@ -31,6 +32,13 @@
 // printf form:  RT_LOGF(RT_TAG_GX, "invalid GXTexObj @0x%08X\n", addr);
 // `tag` and the format string must both be literals; they are concatenated.
 #define RT_LOGF(tag, ...) std::fprintf(stderr, "[" tag "] " __VA_ARGS__)
+
+// Debug logging budget: true while `remaining` is positive. Each call site
+// owns its counter (`static int s_budget = N;`), so only the first N events
+// are logged. Approximate under concurrency, which is fine for diagnostics.
+inline bool RtLogBudget(int& remaining) {
+    return remaining-- > 0;
+}
 
 // Shared epilogue for the `catch (const Memory::AccessViolation& e)` handlers
 // spread across the HLE. `who` is the guest function or operation that faulted;

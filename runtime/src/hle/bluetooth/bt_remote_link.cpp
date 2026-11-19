@@ -2,6 +2,7 @@
 
 #include "bluetooth/bt_bytes.h"
 #include "bluetooth/bt_sdp.h"
+#include "runtime_log.h"
 
 #include <algorithm>
 #include <iostream>
@@ -95,6 +96,12 @@ void RemoteLink::Tick(uint64_t nowUs) {
             event.insert(event.end(), addr.begin(), addr.end());
             // Class of device 0x002504: peripheral, joystick.
             event.insert(event.end(), {0x04, 0x25, 0x00, 0x01});
+            // [bt] boot diagnostic: the emulated remote pages the guest.
+            static int s_pageLog = 8;
+            if (RtLogBudget(s_pageLog)) {
+                RT_LOGF(RT_TAG_BT, "paging guest with connection request (slot %u)\n",
+                        static_cast<unsigned>(m_slot));
+            }
             m_controller.QueueEvent(std::move(event));
             m_baseband = Baseband::Requesting;
             m_stateSinceUs = nowUs;
@@ -111,6 +118,10 @@ void RemoteLink::Tick(uint64_t nowUs) {
             return;
         }
         if (!m_guestInitiated) {
+            // A reconnecting remote opens its own HID channels (control, then
+            // interrupt), as Dolphin's emulated remote does. The guest
+            // answers result 0x3 (security block) only when it does not know
+            // the device: that was the missing BT.DINF entry, not this flow.
             const Channel* control = FindByPsm(kPsmHidControl);
             if (control == nullptr) {
                 RequestChannel(kPsmHidControl, nowUs);
@@ -260,6 +271,14 @@ uint8_t RemoteLink::NextIdent() {
 }
 
 void RemoteLink::SendSignal(uint8_t code, uint8_t ident, const std::vector<uint8_t>& data) {
+    {
+        // [bt] boot diagnostic: L2CAP signalling traffic, both directions.
+        static int s_sigTxLog = 64;
+        if (RtLogBudget(s_sigTxLog)) {
+            RT_LOGF(RT_TAG_BT, "l2cap tx signal code=0x%02X ident=%u len=%u\n",
+                    code, ident, static_cast<unsigned>(data.size()));
+        }
+    }
     std::vector<uint8_t> frame;
     frame.reserve(8 + data.size());
     PutLe16(frame, static_cast<uint16_t>(4 + data.size()));
@@ -327,6 +346,14 @@ void RemoteLink::HandleSignalling(const uint8_t* data, size_t size) {
         const uint8_t code = data[0];
         const uint8_t ident = data[1];
         const uint16_t length = Le16(data + 2);
+        {
+            // [bt] boot diagnostic: L2CAP signalling traffic, both directions.
+            static int s_sigLog = 64;
+            if (RtLogBudget(s_sigLog)) {
+                RT_LOGF(RT_TAG_BT, "l2cap rx signal code=0x%02X ident=%u len=%u\n",
+                        code, ident, length);
+            }
+        }
         if (static_cast<size_t>(length) + 4 > size) {
             return;
         }

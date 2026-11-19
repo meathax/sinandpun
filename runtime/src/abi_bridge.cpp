@@ -14,6 +14,7 @@
 #include <vector>
 #include "guest_function_imports.h"
 #include "guest_small_data.h"
+#include "hle_stubs.h"
 #include "runtime_log.h"
 
 // Nothing reads CpuContext by offset; these asserts just canary accidental field reordering
@@ -644,4 +645,69 @@ void Record(uint32_t target) {
     std::fprintf(file, "%u %08X\n", counter.fetch_add(1) + 1, target);
     std::fflush(file);
 }
+
+static std::vector<uint32_t>& WatchedTargets() {
+    static std::vector<uint32_t> targets = [] {
+        std::vector<uint32_t> out;
+        if (const char* v = std::getenv("SIN_TRACE_ARGS")) {
+            const char* p = v;
+            while (*p) {
+                char* end = nullptr;
+                const unsigned long value = std::strtoul(p, &end, 16);
+                if (end == p) { ++p; continue; }
+                out.push_back(static_cast<uint32_t>(value));
+                p = end;
+            }
+        }
+        return out;
+    }();
+    return targets;
+}
+
+bool g_argsEnabled = !WatchedTargets().empty();
+
+void RecordArgs(uint32_t target, const CpuContext* ctx) {
+    static std::atomic<int> hits[64];
+    const auto& watched = WatchedTargets();
+    for (size_t i = 0; i < watched.size() && i < 64; ++i) {
+        if (watched[i] == target && hits[i].fetch_add(1) < 200) {
+            std::fprintf(stderr, "[trace] %08X r3=%08X r4=%08X r5=%08X r6=%08X lr=%08X\n", target,
+                         ctx->gpr[3], ctx->gpr[4], ctx->gpr[5], ctx->gpr[6], ctx->lr);
+        }
+    }
+}
 } // namespace CallTrace
+
+// ---------------------------------------------------------------------------
+// Periodic alarm service from the guest-call path (see dispatch.h). The
+// deferred variant runs alarm handlers on a private copy of the current
+// register file - interrupt semantics - and keeps guest thread switches
+// deferred, so it is safe to call mid-translation.
+// ---------------------------------------------------------------------------
+namespace PeriodicAlarmService {
+
+int64_t ServiceIntervalUs() {
+    static const int64_t interval = [] {
+        // Tunable for diagnosis; 1 ms keeps ~2 ms BTE ticks within jitter.
+        const char* v = std::getenv("SIN_ALARM_PUMP_US");
+        const int64_t parsed = v ? std::atoll(v) : 0;
+        return parsed > 0 ? parsed : 1000;
+    }();
+    return interval;
+}
+
+void MaybeServiceAlarms(CpuContext* ctx) {
+    (void)ctx;
+    using namespace std::chrono;
+    static std::atomic<int64_t> s_nextDueUs{0};
+    const int64_t nowUs = duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
+    if (nowUs < s_nextDueUs.load(std::memory_order_relaxed)) {
+        return;
+    }
+    // Publish the next deadline before servicing so re-entrant calls made by
+    // the alarm handlers themselves do not stampede the pump.
+    s_nextDueUs.store(nowUs + ServiceIntervalUs(), std::memory_order_relaxed);
+    OS_HLE_ProcessAlarmsDeferred(8);
+}
+
+} // namespace PeriodicAlarmService

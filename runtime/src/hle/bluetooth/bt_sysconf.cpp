@@ -57,7 +57,12 @@ extern "C" void SCGetBtDeviceInfoArray_HLE(CpuContext* ctx) {
         BluetoothSysconf::SetReturn(ctx, 0);
     }
 }
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1ED0, SCGetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
+// Sin address evidence: main.dol 0x801B6BC0 is the unique 12-byte thunk
+// "addi r4,0,0x461; addi r5,0,0x1C; b SCFindByteArrayItem" (the sc.a symbol
+// SCGetBtDeviceInfoArray is exactly that thunk); item 0x1C = BT.DINF, size
+// 0x461. Cross-checked: the Set twin at 0x801B6BD0 is what WUDUpdateSCSetting
+// (0x801D1D50) calls to write the reconciled list back.
+PPC_NATIVE_OVERRIDE_VOID(801B6BC0, SCGetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 // WUD writes the list back after reconciling it with the controller's link
 // keys, and WPAD whenever a channel's remote changes. The virtual remotes are
@@ -65,7 +70,8 @@ SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1ED0, SCGetBtDeviceInfoArray_HLE, (CpuCont
 extern "C" void SCSetBtDeviceInfoArray_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, 1);
 }
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1EDC, SCSetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
+// 0x801B6BD0: "addi r4,0,0x461; addi r5,0,0x1C; b SCReplaceByteArrayItem".
+PPC_NATIVE_OVERRIDE_VOID(801B6BD0, SCSetBtDeviceInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 // Remotes paired with 1+2 on the game's own sync screens. The virtual remotes
 // are all registered, so the list is always empty.
@@ -78,12 +84,14 @@ extern "C" void SCGetBtCmpDevInfoArray_HLE(CpuContext* ctx) {
         BluetoothSysconf::SetReturn(ctx, 0);
     }
 }
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1EE8, SCGetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
+// 0x801B6BE0: "addi r4,0,0x205; addi r5,0,0x1D; b SCFindByteArrayItem".
+PPC_NATIVE_OVERRIDE_VOID(801B6BE0, SCGetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void SCSetBtCmpDevInfoArray_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, 1);
 }
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B1EF4, SCSetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
+// 0x801B6BF0: "addi r4,0,0x205; addi r5,0,0x1D; b SCReplaceByteArrayItem".
+PPC_NATIVE_OVERRIDE_VOID(801B6BF0, SCSetBtCmpDevInfoArray_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void SCGetBtDpdSensibility_HLE(CpuContext* ctx) {
     BluetoothSysconf::SetReturn(ctx, static_cast<uint32_t>(std::clamp(RuntimeConfigFile::WiiIrSensitivity(), 1, 5)));

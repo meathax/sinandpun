@@ -96,6 +96,14 @@ bool Deliver(Device& device, uint64_t nowUs) {
     bool delivered = false;
     std::vector<uint8_t> packet;
     if (device.eventRead.active && controller.PopEvent(packet)) {
+        {
+            // [bt] boot diagnostic: events handed to the guest.
+            static int s_eventLog = 400;
+            if (RtLogBudget(s_eventLog)) {
+                RT_LOGF(RT_TAG_BT, "deliver event code=0x%02X size=%u\n",
+                        packet.empty() ? 0 : packet[0], static_cast<unsigned>(packet.size()));
+            }
+        }
         Complete(device.eventRead, packet);
         delivered = true;
     }
@@ -129,6 +137,14 @@ bool Transfer(uint32_t cmd, uint32_t numIn, uint32_t numOut, uint32_t vectorPtr,
     Device& device = Dev();
     Bluetooth::Controller& controller = ControllerFor(device);
     const uint64_t nowUs = NowUs();
+    {
+        // [bt] boot diagnostic: every ioctl/ioctlv the guest issues.
+        static int s_ioctlLog = 400;
+        if (RtLogBudget(s_ioctlLog)) {
+            RT_LOGF(RT_TAG_BT, "ioctlv cmd=%u in=%u out=%u%s\n",
+                    cmd, numIn, numOut, async ? " async" : " sync");
+        }
+    }
     try {
         if (cmd == kCtrlMsg && numIn == 6 && numOut == 1) {
             const auto requestType = RuntimeHle::ReadIoVector(vectorPtr, 0);

@@ -290,6 +290,7 @@ PPC_SPR_STUB_BODY(PPCMthid0_8012e57c, "PPCMthid0 called (stubbed) - Move To HID0
 PPC_NATIVE_OVERRIDE_VOID(8015E7A0, PPCMthid0_8012e57c, (), ());
 
 thread_local int g_decrementerCallbackDepth = 0;
+thread_local uint32_t g_simulatedDecrementerContext = 0;
 
 extern "C" void PPCMtdec_8012e594()
 {
@@ -325,18 +326,22 @@ extern "C" void PPCMtdec_8012e594()
             const CpuContext interrupted = *cpu;
             cpu->gpr[3] = 8u;
             cpu->gpr[4] = currentContext;
+            g_simulatedDecrementerContext = currentContext;
             ++callbackDepth;
             try {
                 MKW_GUEST_FUNC(801A7160)(cpu);
             } catch (const DecrementerExceptionReturn&) {
                 // rfi to the interrupted context: restore the caller's CPU state.
                 *cpu = interrupted;
+                g_simulatedDecrementerContext = 0;
                 --callbackDepth;
                 return;
             } catch (...) {
+                g_simulatedDecrementerContext = 0;
                 --callbackDepth;
                 throw;
             }
+            g_simulatedDecrementerContext = 0;
             --callbackDepth;
             SelectThread_801a9c08(cpu);
         }

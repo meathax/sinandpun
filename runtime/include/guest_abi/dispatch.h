@@ -27,11 +27,39 @@ uint32_t FilterScnRendererPathMaskOption(uint32_t pathMask) noexcept;
 namespace CallTrace {
 extern bool g_enabled;  // SIN_CALLTRACE=1: log every first-seen call target in execution order
 void Record(uint32_t target);
+// SIN_TRACE_ARGS=0x801D0C00,0x80164494: log r3..r6 on every entry to these targets (first 200 hits each).
+extern bool g_argsEnabled;
+void RecordArgs(uint32_t target, const CpuContext* ctx);
 } // namespace CallTrace
 
+// Periodic alarm service on the guest-call path. On hardware the decrementer
+// interrupt keeps firing no matter which code is running, so OS alarms (the
+// BTE Bluetooth task's timer, audio pacing, anything) keep being serviced even
+// while a guest thread busy-polls. The translated runtime has no preemptive
+// timer, so a spinning guest loop starved every alarm pump that only ran from
+// the scheduler idle path (observed: WPADInit -> BTA_Init polling
+// BTA_DmIsDeviceUp forever while the BTE periodic alarm never fired).
+// ApplyRuntimeCallOptions is the safe "between instructions" point: it runs on
+// the guest's host thread for every bridged call, so servicing due alarms
+// here has the same effect as a timer interrupt.
+namespace PeriodicAlarmService {
+void MaybeServiceAlarms(CpuContext* ctx);
+// One relaxed atomic per bridged call; a real clock read only every 1024th.
+inline void MaybeServicePeriodicAlarms(CpuContext* ctx) {
+    static std::atomic<uint64_t> s_gate{0};
+    if (__builtin_expect((s_gate.fetch_add(1, std::memory_order_relaxed) & 0x3FFu) == 0, 0)) {
+        MaybeServiceAlarms(ctx);
+    }
+}
+} // namespace PeriodicAlarmService
+
 inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
+    PeriodicAlarmService::MaybeServicePeriodicAlarms(ctx);
     if (__builtin_expect(CallTrace::g_enabled, 0)) {
         CallTrace::Record(target);
+    }
+    if (__builtin_expect(CallTrace::g_argsEnabled, 0)) {
+        CallTrace::RecordArgs(target, ctx);
     }
     if (::GuestRegion::Is<0x8023BD38u>(target)) {
         // ScnRenderer::createPath receives the post-processing path mask in r4.

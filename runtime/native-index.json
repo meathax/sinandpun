@@ -2,7 +2,7 @@
   "format": "wiicompiled-runtime-native-index",
   "formatVersion": 2,
   "extractorVersion": 2,
-  "sourceDigest": "128b09b5a6cd4bf777105aaecf747b9c8609b8f7b45af1e977ada7ddcf96c3ae",
+  "sourceDigest": "8f328f2bb5a968df74a0a2d44162b96ac9688ef3fed1da1dd4e08cd0097c8778",
   "registrations": [
     {
       "address": "0x8012B830",
@@ -1088,6 +1088,38 @@
       "address": "0x801B69E0",
       "symbol": "SCGetEuRgb60Mode_HLE",
       "sourceFile": "hle/sc.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x801B6BC0",
+      "symbol": "SCGetBtDeviceInfoArray_HLE",
+      "sourceFile": "hle/bluetooth/bt_sysconf.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x801B6BD0",
+      "symbol": "SCSetBtDeviceInfoArray_HLE",
+      "sourceFile": "hle/bluetooth/bt_sysconf.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x801B6BE0",
+      "symbol": "SCGetBtCmpDevInfoArray_HLE",
+      "sourceFile": "hle/bluetooth/bt_sysconf.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x801B6BF0",
+      "symbol": "SCSetBtCmpDevInfoArray_HLE",
+      "sourceFile": "hle/bluetooth/bt_sysconf.cpp",
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
       "modOverlay": "Unspecified"
@@ -6172,6 +6204,90 @@
         "readsLrBeforeWrite": false,
         "mayWriteLr": false,
         "boundaryFlags": 0
+      }
+    },
+    {
+      "address": "0x801B6BC0",
+      "isPrecise": false,
+      "contract": {
+        "gprReadBeforeWriteMask": 4294967295,
+        "gprPossibleWriteMask": 4294967295,
+        "gprReturnMask": 24,
+        "fprReadBeforeWriteMask": 4294967295,
+        "fprPossibleWriteMask": 4294967295,
+        "fprReturnMask": 2,
+        "crReadBeforeWriteMask": 255,
+        "crPossibleWriteMask": 255,
+        "readsXerBeforeWrite": true,
+        "mayWriteXer": true,
+        "readsCtrBeforeWrite": true,
+        "mayWriteCtr": true,
+        "readsLrBeforeWrite": true,
+        "mayWriteLr": true,
+        "boundaryFlags": 1
+      }
+    },
+    {
+      "address": "0x801B6BD0",
+      "isPrecise": false,
+      "contract": {
+        "gprReadBeforeWriteMask": 4294967295,
+        "gprPossibleWriteMask": 4294967295,
+        "gprReturnMask": 24,
+        "fprReadBeforeWriteMask": 4294967295,
+        "fprPossibleWriteMask": 4294967295,
+        "fprReturnMask": 2,
+        "crReadBeforeWriteMask": 255,
+        "crPossibleWriteMask": 255,
+        "readsXerBeforeWrite": true,
+        "mayWriteXer": true,
+        "readsCtrBeforeWrite": true,
+        "mayWriteCtr": true,
+        "readsLrBeforeWrite": true,
+        "mayWriteLr": true,
+        "boundaryFlags": 1
+      }
+    },
+    {
+      "address": "0x801B6BE0",
+      "isPrecise": false,
+      "contract": {
+        "gprReadBeforeWriteMask": 4294967295,
+        "gprPossibleWriteMask": 4294967295,
+        "gprReturnMask": 24,
+        "fprReadBeforeWriteMask": 4294967295,
+        "fprPossibleWriteMask": 4294967295,
+        "fprReturnMask": 2,
+        "crReadBeforeWriteMask": 255,
+        "crPossibleWriteMask": 255,
+        "readsXerBeforeWrite": true,
+        "mayWriteXer": true,
+        "readsCtrBeforeWrite": true,
+        "mayWriteCtr": true,
+        "readsLrBeforeWrite": true,
+        "mayWriteLr": true,
+        "boundaryFlags": 1
+      }
+    },
+    {
+      "address": "0x801B6BF0",
+      "isPrecise": false,
+      "contract": {
+        "gprReadBeforeWriteMask": 4294967295,
+        "gprPossibleWriteMask": 4294967295,
+        "gprReturnMask": 24,
+        "fprReadBeforeWriteMask": 4294967295,
+        "fprPossibleWriteMask": 4294967295,
+        "fprReturnMask": 2,
+        "crReadBeforeWriteMask": 255,
+        "crPossibleWriteMask": 255,
+        "readsXerBeforeWrite": true,
+        "mayWriteXer": true,
+        "readsCtrBeforeWrite": true,
+        "mayWriteCtr": true,
+        "readsLrBeforeWrite": true,
+        "mayWriteLr": true,
+        "boundaryFlags": 1
       }
     },
     {

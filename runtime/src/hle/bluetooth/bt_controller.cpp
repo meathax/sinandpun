@@ -2,6 +2,7 @@
 
 #include "bluetooth/bt_bytes.h"
 #include "bluetooth/bt_remote_link.h"
+#include "runtime_log.h"
 
 #include <algorithm>
 #include <cstring>
@@ -246,6 +247,14 @@ void Controller::ExecuteCommand(const uint8_t* packet, size_t size, uint64_t now
         return;
     }
     const uint8_t* p = packet + 3;
+    {
+        // [bt] boot diagnostic: every HCI command the guest sends, in order.
+        static int s_hciLog = 300;
+        if (RtLogBudget(s_hciLog)) {
+            RT_LOGF(RT_TAG_BT, "hci cmd ogf=0x%02X ocf=0x%03X (opcode 0x%04X) len=%u\n",
+                    opcode >> 10, opcode & 0x3FF, opcode, static_cast<unsigned>(length));
+        }
+    }
     switch (opcode >> 10) {
     case kOgfLinkControl: HandleLinkControl(opcode, p, length, nowUs); break;
     case kOgfLinkPolicy: HandleLinkPolicy(opcode, p, length); break;
@@ -843,6 +852,14 @@ void Controller::ReceiveAcl(const uint8_t* packet, size_t size, uint64_t nowUs) 
     if (size < 4) return;
     const uint16_t header = Le16(packet);
     const uint16_t length = Le16(packet + 2);
+    {
+        // [bt] boot diagnostic: raw ACL data from the guest.
+        static int s_aclRxLog = 64;
+        if (RtLogBudget(s_aclRxLog)) {
+            RT_LOGF(RT_TAG_BT, "acl rx handle=0x%03X pb=0x%X len=%u\n",
+                    header & 0x0FFFu, (header >> 12) & 0x3u, length);
+        }
+    }
     if (length != size - 4) {
         std::cerr << "[bluetooth] dropped malformed ACL packet" << std::endl;
         return;

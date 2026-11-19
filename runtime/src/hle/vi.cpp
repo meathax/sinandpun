@@ -230,8 +230,7 @@ void WriteGuestStateLocked() {
         Memory::Write16(kViXfbWidthAddr, static_cast<uint16_t>(g_vi.xfbWidth));
         Memory::Write16(kViXfbHeightAddr, static_cast<uint16_t>(g_vi.xfbHeight));
         Memory::Write32(kViRetraceCountAddr, g_vi.retraceCount);
-        Memory::Write32(kViPreRetraceCallback, g_vi.preRetraceCallback);
-        Memory::Write32(kViPostRetraceCallback, g_vi.postRetraceCallback);
+        // Pre/post retrace callbacks live in guest memory (the guest's own VISetPre/PostRetraceCallback store them there); never overwrite.
         // Write PENDING frame buffer to guest memory so SDK code sees the queued value
         Memory::Write32(kViNextFrameBufferAddr, g_vi.pendingNextFrameBuffer);
         Memory::Write32(kViNextFrameBufferHwAddr, g_vi.pendingNextFrameBuffer);
@@ -308,8 +307,8 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         currentFb = g_vi.currentFrameBuffer;
         g_vi.lastRetrace = retraceStamp;
         retraceValue = g_vi.retraceCount;
-        preCb = g_vi.preRetraceCallback;
-        postCb = g_vi.postRetraceCallback;
+        preCb = Memory::Read32(kViPreRetraceCallback);
+        postCb = Memory::Read32(kViPostRetraceCallback);
         hasXfbReady = g_vi.hasValidXfb;
         readyXfb = g_vi.readyXfb;
         isBlack = g_vi.black;
@@ -343,8 +342,8 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         if (postCb) {
             // Guard: only invoke callback if sSystem is initialized
             // The callback dereferences sSystem which must be non-null
-            uint32_t sSystemPtr = Memory::Read32(kEggSSystemAddr);
-            if (sSystemPtr != 0) {
+            // (The donor's EGG sSystem guard was a Mario Kart Wii address; Sin has no EGG.)
+            {
                 InvokeIndirectCpu(postCb, ctx);
             }
         }
@@ -934,8 +933,8 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
     {
         static std::atomic<int> s_waitLogs{0};
         const int waitIdx = s_waitLogs.fetch_add(1);
-        if (waitIdx < 3) {
-            RT_LOG(RT_TAG_OS) << "[vi] VIWaitForRetrace call, fibers="
+        if (waitIdx < 3 || waitIdx % 300 == 0) {
+            RT_LOG(RT_TAG_OS) << "[vi] VIWaitForRetrace call #" << waitIdx << ", fibers="
                               << (Fiber::GuestFiberManager::IsInitialized() ? 1 : 0) << std::endl;
         }
     }
