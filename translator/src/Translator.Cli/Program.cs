@@ -165,6 +165,21 @@ if (HandleCommandLineOptions(command, tail) is { } commandLineExitCode)
     return commandLineExitCode;
 }
 
+// A configured flat module is validated by the manifest loader, but the image,
+// discovery, data-init and dispatch pipelines do not consume it yet. Fail before
+// any output-producing command can publish a misleading DOL-only result.
+if (project?.Inputs.Module is { } unsupportedModule &&
+    command is "generate-data-init" or "translate-recursive" or "translate-mod" or
+        "emit-build-shards" or "emit-native-index" or "emit-base-manifest")
+{
+    Console.Error.WriteLine(
+        $"[translator] {command} cannot run with inputs.module: pre-linked flat module images " +
+        "are not yet supported by the translation/build pipeline. " +
+        $"Configured module: {unsupportedModule.Path} @ 0x{unsupportedModule.LoadAddress:X8}. " +
+        "No output was written.");
+    return 2;
+}
+
 return command switch
 {
     "help" or "--help" or "-h" or "-?" => ShowGlobalHelp(),
@@ -415,6 +430,9 @@ int RunInfo()
         Console.WriteLine(project.Inputs.Rel is null
             ? "REL     : none"
             : $"REL     : {project.Inputs.Rel.Path} @ 0x{project.Inputs.Rel.LoadAddress:X8}");
+        Console.WriteLine(project.Inputs.Module is null
+            ? "Module  : none"
+            : $"Module  : {project.Inputs.Module.Path} @ 0x{project.Inputs.Module.LoadAddress:X8} (validated input; translation not yet supported)");
     }
     return 0;
 }

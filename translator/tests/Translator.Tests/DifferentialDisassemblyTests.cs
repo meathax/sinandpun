@@ -10,18 +10,17 @@ namespace Translator.Tests;
 
 public class DifferentialDisassemblyTests
 {
-    [Theory]
+    [LlvmOracleTheory]
+    [Trait("Category", "LlvmOracle")]
     [InlineData(0x7C032800u, 0x80000000u, "cmpw")]
     [InlineData(0x41820010u, 0x80000000u, "beq")]
     [InlineData(0x3C608038u, 0x80000000u, "lis")]
     [InlineData(0x6063F780u, 0x80000004u, "ori")]
     [InlineData(0x7C0903A6u, 0x80000000u, "mtctr")]
-    public void DecoderMnemonicMatchesDolphinOracle(uint opcode, uint address, string expectedMnemonic)
+    public void DecoderMnemonicMatchesLlvmOracle(uint opcode, uint address, string expectedMnemonic)
     {
-        if (!LlvmDisassemblerOracle.IsAvailable())
-        {
-            return;
-        }
+        Assert.True(LlvmDisassemblerOracle.IsAvailable(),
+            "LLVM oracle was requested but llvm-mc-18/llvm-objdump-18 are unavailable.");
 
         var oracle = LlvmDisassemblerOracle.Disassemble(opcode, address);
         var decoded = PpcDecoder.Decode(address, opcode);

@@ -11,14 +11,15 @@ namespace Translator.Tests;
 
 public sealed class RegionalRetroRewindTests
 {
-    [Theory]
+    [DonorIntegrationTheory]
+    [Trait("Category", "DonorIntegration")]
     [InlineData("mkwii", "RMCP01", "P", 0x800ED6E8u, 0x80601C60u, 0x4BD977A4u)]
     [InlineData("mkwii-ntsc-u", "RMCE01", "E", 0x800ED648u, 0x805DD380u, 0x4BDB7D04u)]
     [InlineData("mkwii-ntsc-j", "RMCJ01", "J", 0x800ED608u, 0x806013D4u, 0x4BD979B0u)]
     public void RetailProfileUsesMatchingRegionAndSuppressesItsBootstrap(
         string directory, string gameId, string region, uint hook, uint integritySite, uint expectedBranch)
     {
-        var root = ProjectPathsForTests.FindRepositoryRoot();
+        var root = ProjectPathsForTests.FindDonorRepositoryRoot();
         var source = File.ReadAllText(Path.Combine(root, "projects", directory, "recomp.yml"));
         var expectedDolHash = Regex.Match(source, @"sha256: ([0-9a-f]{64})").Groups[1].Value;
         var scratch = Path.Combine(Path.GetTempPath(), $"retro-profile-{Guid.NewGuid():N}");
@@ -63,7 +64,8 @@ public sealed class RegionalRetroRewindTests
             Assert.Throws<InvalidDataException>(() => RetroWfcBootstrapSuppressor.Suppress(chunk, 0x800ED6E8u));
     }
 
-    [Theory]
+    [DonorIntegrationTheory]
+    [Trait("Category", "DonorIntegration")]
     [InlineData("RMCP01")]
     [InlineData("RMCE01")]
     [InlineData("RMCJ01")]
@@ -102,7 +104,8 @@ public sealed class RegionalRetroRewindTests
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
-    [Theory]
+    [DonorIntegrationTheory]
+    [Trait("Category", "DonorIntegration")]
     [InlineData("https://rwfc.net/api/wfc/payload?g=RMCED00")]
     [InlineData("https://rwfc.net/api/wfc/payload?g=RMCJD00")]
     public void OnlyExactRegionalDownloadEndpointsAreAccepted(string uri)

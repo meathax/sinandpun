@@ -79,18 +79,16 @@ public class KamekPulFileTests
         Assert.Throws<ArgumentOutOfRangeException>(() => KamekPpcEncoding.EncodeBranch(0x8053369C, 0x8053369D, link: false));
     }
 
-    [Theory]
+    [DonorIntegrationTheory]
+    [Trait("Category", "DonorIntegration")]
     [InlineData("P", 0x800ED6E8u)]
     [InlineData("E", 0x800ED648u)]
     [InlineData("J", 0x800ED608u)]
     public void ParsesBundledRetroRewindCodePulWhenPresent(string region, uint bootstrapHook)
     {
-        var repoRoot = ProjectPathsForTests.FindRepositoryRoot();
+        var repoRoot = ProjectPathsForTests.FindDonorRepositoryRoot();
         var codePul = Path.Combine(repoRoot, "PulsarPacks", "completed", "RetroRewind", "RetroRewind6", "Binaries", "Code.pul");
-        if (!File.Exists(codePul))
-        {
-            return;
-        }
+        Assert.True(File.Exists(codePul), $"Donor Code.pul fixture is missing: {codePul}");
 
         var pul = KamekPulFile.Load(codePul);
         var chunk = pul.SelectRegion(region);
@@ -158,23 +156,4 @@ public class KamekPulFileTests
 
     private static void WriteU32(byte[] data, int offset, uint value) =>
         BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(offset, 4), value);
-}
-
-internal static class ProjectPathsForTests
-{
-    public static string FindRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "translator", "Translator.sln")) &&
-                File.Exists(Path.Combine(dir.FullName, "projects", "mkwii", "recomp.yml")))
-            {
-                return dir.FullName;
-            }
-            dir = dir.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not find repository root.");
-    }
 }

@@ -54,7 +54,9 @@ public class RetroWfcPayloadLoweringTests
         Assert.Equal("moduleFunction", pointer.TargetKind);
     }
 
-    [Theory]
+#if DONOR_INTEGRATION
+    [DonorIntegrationTheory]
+    [Trait("Category", "DonorIntegration")]
     [InlineData("RMCP01", "P", "RMCPD00")]
     [InlineData("RMCE01", "E", "RMCED00")]
     [InlineData("RMCJ01", "J", "RMCJD00")]
@@ -90,6 +92,8 @@ public class RetroWfcPayloadLoweringTests
         Assert.All(result.LoweringPlan.StaticPointers, pointer => Assert.NotNull(pointer.TargetAddress));
         Assert.NotEmpty(result.Summary.InitializationCallbacks);
     }
+
+#endif
 
     private static BaseManifest TestManifest() =>
         new(

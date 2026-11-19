@@ -133,14 +133,12 @@ public sealed class GenericProjectTests
         }
     }
 
-    [Fact]
+    [ExternalDolFact]
+    [Trait("Category", "ExternalDol")]
     public void ExternalGenericDolParsesAndTranslatesWhenConfigured()
     {
-        var path = Environment.GetEnvironmentVariable("RECOMP_GENERIC_DOL");
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-        {
-            return;
-        }
+        var path = Environment.GetEnvironmentVariable("RECOMP_GENERIC_DOL")!;
+        Assert.True(File.Exists(path), $"Configured external DOL is missing: {path}");
 
         var dol = DolFile.Load(path);
         var image = new ProgramImageBuilder().Build(dol);

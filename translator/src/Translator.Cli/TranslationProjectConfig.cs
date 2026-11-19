@@ -85,7 +85,7 @@ internal sealed class TranslationProjectConfig
         }
 
         ProjectRelInput? module = null;
-        if (dto.Inputs?.Module is { Path.Length: > 0 } moduleDto)
+        if (dto.Inputs?.Module is { } moduleDto)
         {
             var moduleInput = ResolveInput(workspaceRoot, moduleDto, "inputs.module");
             module = new ProjectRelInput(
@@ -151,7 +151,7 @@ internal sealed class TranslationProjectConfig
             workspaceRoot,
             identity,
             memory,
-            new ProjectInputs(dol, rel),
+            new ProjectInputs(dol, rel, module),
             translation,
             runtime,
             output,
@@ -219,6 +219,10 @@ internal sealed class TranslationProjectConfig
         if (Inputs.Rel is not null)
         {
             ValidateInput(Inputs.Rel, "REL");
+        }
+        if (Inputs.Module is not null)
+        {
+            ValidateInput(Inputs.Module, "module");
         }
         if (Translation.FunctionMapPath is { } functionMapPath && !File.Exists(functionMapPath))
         {

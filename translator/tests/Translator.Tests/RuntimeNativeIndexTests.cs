@@ -113,10 +113,11 @@ public sealed class RuntimeNativeIndexTests
         }
     }
 
-    [Fact]
+    [DonorIntegrationFact]
+    [Trait("Category", "DonorIntegration")]
     public void SerializedRepositoryIndexRoundTripsExactly()
     {
-        var sources = Path.Combine(ProjectPathsForTests.FindRepositoryRoot(), "runtime", "src");
+        var sources = Path.Combine(ProjectPathsForTests.FindDonorRepositoryRoot(), "runtime", "src");
         var built = RuntimeNativeIndexBuilder.Build(sources);
         Assert.NotEmpty(built.Registrations);
         Assert.Contains(built.Registrations, static entry => entry.ModOverlay == NativeModOverlay.Wrapper);
@@ -140,10 +141,11 @@ public sealed class RuntimeNativeIndexTests
     }
 
     // A wrapper that calls through with MKW_GUEST_FUNC would silently drop the mod overlay it promises to run.
-    [Fact]
+    [DonorIntegrationFact]
+    [Trait("Category", "DonorIntegration")]
     public void RepositoryWrapperNativesCallThroughToTheNextTranslation()
     {
-        var sources = Path.Combine(ProjectPathsForTests.FindRepositoryRoot(), "runtime", "src");
+        var sources = Path.Combine(ProjectPathsForTests.FindDonorRepositoryRoot(), "runtime", "src");
         var wrappers = RuntimeNativeIndexBuilder.Build(sources).Registrations
             .Where(static entry => entry.ModOverlay == NativeModOverlay.Wrapper)
             .ToArray();

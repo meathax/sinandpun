@@ -77,10 +77,11 @@ public sealed class GuestAddressTableTests
     }
 
     // Every address the runtime registers must have a counterpart, or a regional build cannot place it.
-    [Fact]
+    [DonorIntegrationFact]
+    [Trait("Category", "DonorIntegration")]
     public void RepositoryMapCoversEveryRuntimeRegistration()
     {
-        var root = ProjectPathsForTests.FindRepositoryRoot();
+        var root = ProjectPathsForTests.FindDonorRepositoryRoot();
         var sources = Path.Combine(root, "runtime", "src");
         var table = GuestAddressTable.Load(GuestAddressTable.DefaultPath(sources));
         var index = RuntimeNativeIndexBuilder.Build(sources);
@@ -90,12 +91,13 @@ public sealed class GuestAddressTableTests
     }
 
     // Every function both MAPs name uniquely, and every verified data address, must port exactly.
-    [Theory]
+    [DonorIntegrationTheory]
+    [Trait("Category", "DonorIntegration")]
     [InlineData(GuestRegion.NtscU, "mkwii-ntsc-u")]
     [InlineData(GuestRegion.NtscJ, "mkwii-ntsc-j")]
     public void RepositoryMapAgreesWithRegionMapsAndDataAnchors(GuestRegion region, string project)
     {
-        var root = ProjectPathsForTests.FindRepositoryRoot();
+        var root = ProjectPathsForTests.FindDonorRepositoryRoot();
         var table = GuestAddressTable.Load(GuestAddressTable.DefaultPath(Path.Combine(root, "runtime", "src")));
         var pal = UniqueNames(Path.Combine(root, "projects", "mkwii", "MAP.txt"));
         var target = UniqueNames(Path.Combine(root, "projects", project, "MAP.txt"));
@@ -120,10 +122,11 @@ public sealed class GuestAddressTableTests
     }
 
     // Guest functions the runtime calls directly must be real functions in every region.
-    [Fact]
+    [DonorIntegrationFact]
+    [Trait("Category", "DonorIntegration")]
     public void RuntimeGuestCallsAreFunctionEntriesInEveryRegion()
     {
-        var root = ProjectPathsForTests.FindRepositoryRoot();
+        var root = ProjectPathsForTests.FindDonorRepositoryRoot();
         var table = GuestAddressTable.Load(GuestAddressTable.DefaultPath(Path.Combine(root, "runtime", "src")));
         var thirdParty = $"{Path.DirectorySeparatorChar}third_party{Path.DirectorySeparatorChar}";
         var calls = Directory.EnumerateFiles(Path.Combine(root, "runtime"), "*.*", SearchOption.AllDirectories)
