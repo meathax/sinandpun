@@ -369,9 +369,19 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
         return;
     }
     
-    // Fallback to blocking InvokeIndirectJump (original behavior)
-    cpu->gpr[3] = nextThread;
-    OS__LoadContext_801a1f58(cpu);
+    // Fallback to blocking InvokeIndirectJump (original behavior).
+    // An empty target context (SRR0 never saved - e.g. the raw .bss default
+    // thread before anyone switched into it) means there is nothing to
+    // resume: stay on the current execution rather than "switching" into
+    // zeros. OS__LoadContext itself logs and returns in that case.
+    const uint32_t targetSrr0 = ::Memory::Read32(nextThread + 0x198u);
+    if (targetSrr0 != 0) {
+        cpu->gpr[3] = nextThread;
+        OS__LoadContext_801a1f58(cpu);
+    } else {
+        RT_LOG(RT_TAG_OS) << "SelectThread: target 0x" << std::hex << nextThread
+                  << " has no saved context; continuing current execution." << std::dec << std::endl;
+    }
 }
 
 PPC_NATIVE_OVERRIDE_VOID(801AFBB0, SelectThread_801a9c08, (CpuContext* ctx), (ctx));

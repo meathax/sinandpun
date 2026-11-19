@@ -100,12 +100,18 @@ extern "C" [[noreturn]] void OS__LoadContext_801a1f58(CpuContext* ctx)
     try {
         // Validate SRR0 (the jump target, at 0x198) before mutating any other state.
         uint32_t srr0 = ::Memory::Read32(guestContextAddr + 0x198u);
-        
+
         // Validate the jump target exists in our translated function registry
         if (srr0 == 0) {
-            RT_LOG(RT_TAG_OS) << "OS__LoadContext: FATAL - SRR0 (jump target) is NULL!" << std::endl;
-            std::fflush(stderr);
-            std::abort();
+            // An empty context (raw .bss, never saved into) means "nothing to
+            // resume": the scheduler picked the default thread before anyone
+            // saved a context on it. Stay on the current execution instead of
+            // aborting - the caller's spin continues, which is exactly what a
+            // real OS does when the only runnable "thread" is the caller.
+            RT_LOG(RT_TAG_OS) << "OS__LoadContext: context 0x" << std::hex << guestContextAddr
+                      << " has SRR0=0 (never saved); staying on current execution."
+                      << std::dec << std::endl;
+            return;
         }
 
         // ---- Load GPRs ----
