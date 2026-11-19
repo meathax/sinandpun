@@ -120,6 +120,33 @@ extern "C" uint32_t HLE_VIGetTvFormat_801bc440()
 }
 PPC_NATIVE_OVERRIDE(801BC440, HLE_VIGetTvFormat_801bc440, uint32_t, (), ());
 
+// OSRegisterShutdownFunction (R2VE01 0x801AE130): the game's OSInit registers
+// the NWC24 shutdown hook and OSFatals when the call fails ("Failed to
+// register network shutdown function"). The host owns shutdown, so accept
+// every registration and report success.
+extern "C" uint32_t HLE_OSRegisterShutdownFunction_801ae130(uint32_t info, uint32_t priority)
+{
+    RT_LOG(RT_TAG_OS) << "HLE_OSRegisterShutdownFunction_801ae130 called: info=0x" << std::hex << info
+                      << " priority=" << std::dec << priority << ": Stubbed success." << std::endl;
+    return 1;
+}
+PPC_NATIVE_OVERRIDE(801AE130, HLE_OSRegisterShutdownFunction_801ae130, uint32_t, (uint32_t info, uint32_t priority), (info, priority));
+
+// __OSInitNet (R2VE01 0x801B26B0): OSInit's network-system init. The
+// translated body registers the NWC24 shutdown function and OSInit then
+// VERIFIES completion via marker bytes in the boot-info area (asserts at
+// OSInit source lines 1153/1171 expect 0x81 at 0x8000315C/D, message "Failed
+// to register network shutdown function. %d"). The runtime owns connectivity,
+// so the guest net init writes the expected markers and returns.
+extern "C" void HLE___OSInitNet_801b26b0()
+{
+    Memory::Write8(0x8000315Cu, 0x81u);
+    Memory::Write8(0x8000315Du, 0x81u);
+    RT_LOG(RT_TAG_OS) << "HLE___OSInitNet_801b26b0 called: network subsystem init skipped "
+                      << "(boot markers 0x8000315C/D written)." << std::endl;
+}
+PPC_NATIVE_OVERRIDE_VOID(801B26B0, HLE___OSInitNet_801b26b0, (), ());
+
 REGISTER_NATIVE_FUNCTION(0x801B7AF0, SIInit_801b2de0);
 PPC_NATIVE_OVERRIDE_VOID(801B8830, HLE_SISetSamplingRate_801b8830, (uint32_t msec), (msec));
 
@@ -134,22 +161,19 @@ extern "C" uint32_t OS____InitMemoryProtection_801a7dfc(uint32_t r3, uint32_t r4
 
 PPC_NATIVE_OVERRIDE(801ADC90, OS____InitMemoryProtection_801a7dfc, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
 
-// OSGetConsoleType (0x8019f33c): standard Wii = 0x12, NDEV (expanded MEM2) = 0x10000012;
-// MKWii uses the NDEV result to enable its extra-memory heap path.
+// OSGetConsoleType (R2VE01 0x801A58E0): always report the standard retail Wii
+// (0x12). The donor returned NDEV (0x10000012) for MKWii's expanded-MEM2 heap
+// path, which sent Sin's OSInit down the dev-unit network registration path
+// and into OSFatal("Failed to register network shutdown function"). 1:1 retail
+// behavior: type 0x12, 24 MB MEM1 + 64 MB MEM2.
 extern "C" uint32_t OS__GetConsoleType_8019f33c(uint32_t /*r4*/, uint32_t /*r5*/, uint32_t /*r6*/,
                                                 uint32_t /*r7*/, uint32_t /*r8*/, uint32_t /*r31*/)
 {
-    constexpr uint32_t kRetailMem2Size = 64u * 1024u * 1024u;
-    const uint32_t physicalMem2Size = Memory::Read32(0x80003118u);
-    const uint32_t consoleType =
-        physicalMem2Size == kRetailMem2Size ? 0x00000012u : 0x10000012u;
     static std::atomic<bool> logged{false};
     if (!logged.exchange(true)) {
-        RT_LOG(RT_TAG_OS) << "OSGetConsoleType: MEM2="
-                  << (physicalMem2Size / (1024u * 1024u))
-                  << " MB, returning 0x" << std::hex << consoleType << std::dec << std::endl;
+        RT_LOG(RT_TAG_OS) << "OSGetConsoleType: returning retail 0x12" << std::endl;
     }
-    return consoleType;
+    return 0x00000012u;
 }
 
 // Register the function
