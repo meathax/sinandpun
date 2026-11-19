@@ -304,13 +304,23 @@ extern "C" void PPCMtdec_8012e594()
     // bookkeeping, time-slice preemption and a conditional OSLoadContext
     // (0x801A8880) switch. Raw decrementer waits (mtdec; spin) rely on that
     // state machine to observe their wake condition, so the set-point invokes
-    // the callback with the current thread context. If it switches, execution
-    // resumes in the new thread; otherwise the callback returns and the spin
-    // continues.
-    CpuContext* cpu = &GetPersistentCpuContext();
-    cpu->gpr[3] = ::Memory::Read32(0x800000E4u);  // __OSCurrentContext
-    MKW_GUEST_FUNC(801A7160)(cpu);
-    SelectThread_801a9c08(cpu);
+    // the callback with the current thread context. The callback's own path
+    // re-reaches mtdec (its timer bookkeeping), so an in-flight guard keeps
+    // the simulation from recursing: nested set-points only pump alarms.
+    static thread_local int callbackDepth = 0;
+    if (callbackDepth == 0) {
+        CpuContext* cpu = &GetPersistentCpuContext();
+        cpu->gpr[3] = ::Memory::Read32(0x800000E4u);  // __OSCurrentContext
+        ++callbackDepth;
+        try {
+            MKW_GUEST_FUNC(801A7160)(cpu);
+        } catch (...) {
+            --callbackDepth;
+            throw;
+        }
+        --callbackDepth;
+        SelectThread_801a9c08(cpu);
+    }
 }
 PPC_NATIVE_OVERRIDE_VOID(8015E7D0, PPCMtdec_8012e594, (), ());
 
