@@ -200,7 +200,7 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
             const uint16_t modeFlags = ::Memory::Read16(runningContext + 0x1A2u);
             if ((modeFlags & 0x0002u) == 0) {
                 cpu->gpr[3] = runningContext;
-                MKW_GUEST_FUNC(801A1ED8)(cpu);
+                MKW_GUEST_FUNC(801A8800)(cpu);  // Sin OSSaveContext (donor 0x801A1ED8 = their OS::SaveContext)
                 if (cpu->gpr[3] != 0) {
                     cpu->gpr[3] = 0;
                     return;
