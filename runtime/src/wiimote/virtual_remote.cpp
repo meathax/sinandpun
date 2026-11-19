@@ -12,8 +12,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -70,6 +72,7 @@ public:
         BuildEeprom();
         m_pointer = DualAnalog::PointerState{};
         m_pointerStamp = Clock::now();
+        m_scriptStart = Clock::now();
     }
 
     void Output(const uint8_t* report, size_t size) {
@@ -227,9 +230,117 @@ private:
         }
     }
 
+    // ---- Deterministic test input (SIN_VREMOTE_SCRIPT) -------------------------------------------
+    // Segments separated by ';', each "seconds[:buttons[:rx,ry[:lx,ly]]]" with buttons joined by '+'
+    // (A B 1 2 PLUS MINUS HOME UP DOWN LEFT RIGHT C Z) and stick values in -1..1 (right stick = pointer,
+    // left stick = Nunchuk). Time runs from when the virtual remote connects to the game. When set, the
+    // gamepad is ignored so a run needs no human. A "loop" segment makes the script restart at the end.
+    struct ScriptSegment {
+        float seconds = 0;
+        uint16_t buttons = 0;
+        bool c = false, z = false;
+        float rx = 0, ry = 0, lx = 0, ly = 0;
+    };
+
+    static std::vector<std::string> Split(const std::string& text, char sep) {
+        std::vector<std::string> out;
+        size_t a = 0;
+        while (a <= text.size()) {
+            size_t b = text.find(sep, a);
+            if (b == std::string::npos) b = text.size();
+            out.push_back(text.substr(a, b - a));
+            a = b + 1;
+        }
+        return out;
+    }
+
+    static const std::vector<ScriptSegment>& Script(bool& loop) {
+        static bool s_loop = false;
+        static const std::vector<ScriptSegment> segments = [] {
+            std::vector<ScriptSegment> out;
+            const char* env = std::getenv("SIN_VREMOTE_SCRIPT");
+            if (!env || !*env) return out;
+            // '|' is accepted for ';' and '/' for ',' so the script survives shells and env lists that split on those.
+            std::string text(env);
+            for (char& ch : text) {
+                if (ch == '|') ch = ';';
+                else if (ch == '/') ch = ',';
+            }
+            for (const std::string& seg : Split(text, ';')) {
+                if (seg == "loop") { s_loop = true; continue; }
+                if (seg.empty()) continue;
+                const std::vector<std::string> parts = Split(seg, ':');
+                ScriptSegment s;
+                s.seconds = static_cast<float>(std::atof(parts[0].c_str()));
+                if (parts.size() > 1) {
+                    for (const std::string& name : Split(parts[1], '+')) {
+                        if (name == "A") s.buttons |= kBtnA;
+                        else if (name == "B") s.buttons |= kBtnB;
+                        else if (name == "1") s.buttons |= kBtnOne;
+                        else if (name == "2") s.buttons |= kBtnTwo;
+                        else if (name == "PLUS") s.buttons |= kBtnPlus;
+                        else if (name == "MINUS") s.buttons |= kBtnMinus;
+                        else if (name == "HOME") s.buttons |= kBtnHome;
+                        else if (name == "UP") s.buttons |= kBtnUp;
+                        else if (name == "DOWN") s.buttons |= kBtnDown;
+                        else if (name == "LEFT") s.buttons |= kBtnLeft;
+                        else if (name == "RIGHT") s.buttons |= kBtnRight;
+                        else if (name == "C") s.c = true;
+                        else if (name == "Z") s.z = true;
+                    }
+                }
+                auto pair = [](const std::string& v, float& x, float& y) {
+                    const std::vector<std::string> xy = Split(v, ',');
+                    if (xy.size() == 2) {
+                        x = static_cast<float>(std::atof(xy[0].c_str()));
+                        y = static_cast<float>(std::atof(xy[1].c_str()));
+                    }
+                };
+                if (parts.size() > 2) pair(parts[2], s.rx, s.ry);
+                if (parts.size() > 3) pair(parts[3], s.lx, s.ly);
+                out.push_back(s);
+            }
+            if (!out.empty()) {
+                RT_LOGF(RT_TAG_BT, "SIN_VREMOTE_SCRIPT active: %u segment(s), loop=%d (gamepad ignored)\n",
+                        static_cast<unsigned>(out.size()), s_loop ? 1 : 0);
+            }
+            return out;
+        }();
+        loop = s_loop;
+        return segments;
+    }
+
+    // Returns true and fills `in` when a script is active.
+    bool ScriptedInput(Input& in) {
+        bool loop = false;
+        const auto& segments = Script(loop);
+        if (segments.empty()) return false;
+        float total = 0;
+        for (const auto& s : segments) total += s.seconds;
+        float at = std::chrono::duration<float>(Clock::now() - m_scriptStart).count();
+        if (loop && total > 0) at = std::fmod(at, total);
+        float acc = 0;
+        for (const auto& s : segments) {
+            if (at < acc + s.seconds) {
+                in.buttons = s.buttons;
+                in.c = s.c;
+                in.z = s.z;
+                const DualAnalog::NunchukState nun = DualAnalog::NunchukFromStick(s.lx, s.ly);
+                in.sx = nun.x;
+                in.sy = nun.y;
+                in.rx = s.rx;
+                in.ry = s.ry;
+                return true;
+            }
+            acc += s.seconds;
+        }
+        return true; // script finished: everything released
+    }
+
     // Gamepad -> remote/nunchuk state. Called with the mutex held.
     Input ReadInput() {
         Input in;
+        if (ScriptedInput(in)) return in;
         if (InputBindings::InputBlocked()) return in;
         SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
         if (!pad) return in;
@@ -299,6 +410,23 @@ private:
         m_pointerStamp = now;
         // Stick right moves the pointer right, which moves the sensor bar left in the camera.
         DualAnalog::Advance(m_pointer, m_config, -in.rx, -in.ry, dt);
+        {
+            static int s_tick = 0;
+            static int s_budget = 2000;
+            static float s_lastRx = 9, s_lastRy = 9;
+            static uint16_t s_lastButtons = 0xFFFF;
+            const bool changed = std::fabs(in.rx - s_lastRx) > 0.05f || std::fabs(in.ry - s_lastRy) > 0.05f ||
+                                 in.buttons != s_lastButtons;
+            if (changed) {
+                s_lastRx = in.rx;
+                s_lastRy = in.ry;
+                s_lastButtons = in.buttons;
+            }
+            if ((changed || (++s_tick % 100) == 0 || (changed && false)) && RtLogBudget(s_budget)) {
+                RT_LOGF(RT_TAG_BT, "pointer cam=(%.0f,%.0f) stick R=(%.2f,%.2f) L=(0x%02X,0x%02X) buttons=0x%04X\n",
+                        m_pointer.x, m_pointer.y, in.rx, in.ry, in.sx, in.sy, in.buttons);
+            }
+        }
 
         static const struct { uint8_t id; size_t size; } kSizes[] = {
             {0x30, 3}, {0x31, 6}, {0x32, 11}, {0x33, 18}, {0x34, 22}, {0x35, 22}, {0x36, 22}, {0x37, 22}, {0x3D, 22}};
@@ -334,6 +462,7 @@ private:
     std::deque<Report> m_pending;
     Clock::time_point m_nextReport;
     Clock::time_point m_pointerStamp;
+    Clock::time_point m_scriptStart = Clock::now();
     std::array<uint8_t, 0x100> m_ext{};
     std::array<uint8_t, 0x100> m_ir{};
     std::array<uint8_t, 0x20> m_zero{};
