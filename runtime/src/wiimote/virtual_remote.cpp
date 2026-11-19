@@ -1,7 +1,11 @@
 #include "virtual_remote.h"
 
+#include "aim_input.h"
+#include "aim_settings.h"
 #include "dual_analog.h"
 #include "input_bindings.h"
+#include "input_map.h"
+#include "runtime_config.h"
 #include "runtime_log.h"
 #include "wiimote_host.h"
 
@@ -32,17 +36,16 @@ constexpr uint16_t kBtnLeft = 0x0100, kBtnRight = 0x0200, kBtnDown = 0x0400, kBt
 constexpr uint16_t kBtnTwo = 0x0001, kBtnOne = 0x0002, kBtnB = 0x0004, kBtnA = 0x0008, kBtnMinus = 0x0010,
                    kBtnHome = 0x0080;
 
+// Classic Controller button bytes (active low on the wire): byte 4 then byte 5 of the 6-byte report.
+constexpr uint8_t kClDRight = 0x80, kClDDown = 0x40, kClL = 0x20, kClMinus = 0x10, kClHome = 0x08, kClPlus = 0x04,
+                  kClR = 0x02;
+constexpr uint8_t kClZL = 0x80, kClB = 0x40, kClY = 0x20, kClA = 0x10, kClX = 0x08, kClZR = 0x04, kClDLeft = 0x02,
+                  kClDUp = 0x01;
+
 constexpr uint32_t kSpaceEeprom = 0;
 constexpr uint32_t kRegSpeaker = 0xA20000, kRegExtension = 0xA40000, kRegIr = 0xB00000;
 constexpr size_t kEepromSize = 0x1700;
 constexpr auto kReportInterval = std::chrono::milliseconds(10);
-
-float Axis(SDL_Gamepad* pad, SDL_GamepadAxis axis) {
-    const int16_t raw = SDL_GetGamepadAxis(pad, axis);
-    return raw < 0 ? static_cast<float>(raw) / 32768.0f : static_cast<float>(raw) / 32767.0f;
-}
-
-bool Held(SDL_Gamepad* pad, SDL_GamepadButton button) { return SDL_GetGamepadButton(pad, button); }
 
 // Sum-based calibration checksum used by the Wii Remote EEPROM and Nunchuk.
 void Checksum(uint8_t* data, size_t length, size_t checksumBytes) {
@@ -54,10 +57,19 @@ void Checksum(uint8_t* data, size_t length, size_t checksumBytes) {
 
 class VirtualWiimote {
 public:
-    VirtualWiimote() { ResetState(); }
+    VirtualWiimote() {
+        AimInput::Install();
+        ResetState();
+    }
 
     void ResetState() {
         std::lock_guard<std::mutex> lock(m_mutex);
+        m_settingsLoaded = false;
+        RefreshSettings();
+        m_scheme = m_settings.scheme;
+        m_arbiter = InputMap::Arbiter{};
+        m_classicFilter = DualAnalog::StickFilter{};
+        m_prevRecenter = false;
         m_leds = 0;
         m_mode = 0;
         m_continuous = false;
@@ -71,6 +83,7 @@ public:
         m_eeprom.fill(0);
         BuildEeprom();
         m_pointer = DualAnalog::PointerState{};
+        DualAnalog::Recenter(m_pointer, m_config);
         m_pointerStamp = Clock::now();
         m_scriptStart = Clock::now();
     }
@@ -119,12 +132,27 @@ public:
     }
 
 private:
+    // Everything one poll of the controls produces. Sticks use the SDL convention (+y down).
     struct Input {
-        uint16_t buttons = 0;
-        bool c = false, z = false;
-        uint8_t sx = 0x80, sy = 0x80;
-        float rx = 0, ry = 0;
+        uint16_t buttons = 0;          // Wii Remote core buttons (pointer scheme)
+        bool c = false, z = false;     // Nunchuk buttons (pointer scheme)
+        uint8_t sx = 0x80, sy = 0x80;  // Nunchuk stick (pointer scheme)
+        uint8_t cl4 = 0, cl5 = 0;      // Classic Controller pressed masks (classic scheme)
+        float lt = 0, rt = 0;          // Classic analog L / R
+        float lx = 0, ly = 0;          // move stick after deadzone
+        float rx = 0, ry = 0;          // aim stick, raw
+        bool precision = false, recenter = false;
+        bool blocked = false, scripted = false;
     };
+
+    void RefreshSettings() {
+        const uint32_t generation = AimSettings::Generation();
+        if (m_settingsLoaded && generation == m_settingsGeneration) return;
+        m_settings = AimSettings::Get();
+        m_config = m_settings.aim;
+        m_settingsGeneration = generation;
+        m_settingsLoaded = true;
+    }
 
     void Ack(uint8_t id, uint8_t error = 0) {
         Report r{0x22, 0, 0, id, error};
@@ -154,6 +182,21 @@ private:
         Checksum(accel, sizeof accel, 1);
         std::memcpy(&m_eeprom[0x16], accel, sizeof accel);
         std::memcpy(&m_eeprom[0x20], accel, sizeof accel);
+        if (m_scheme == AimSettings::Scheme::Classic) {
+            // Classic Controller calibration (8-bit scale: 6-bit left stick << 2, 5-bit right stick << 3).
+            // UNVERIFIED against the game's WPAD/KPAD calibration handling.
+            uint8_t classic[16] = {0xFC, 0x04, 0x80,  // left X max/min/center
+                                   0xFC, 0x04, 0x80,  // left Y
+                                   0xF8, 0x08, 0x80,  // right X
+                                   0xF8, 0x08, 0x80,  // right Y
+                                   0x00, 0x00, 0x00, 0x00};
+            Checksum(classic, sizeof classic, 2);
+            std::memcpy(&m_ext[0x20], classic, sizeof classic);
+            std::memcpy(&m_ext[0x30], classic, sizeof classic);
+            static const uint8_t id[6] = {0x00, 0x00, 0xA4, 0x20, 0x01, 0x01};
+            std::memcpy(&m_ext[0xFA], id, sizeof id);
+            return;
+        }
         // Nunchuk calibration lives in the extension register block.
         uint8_t nunchuk[16] = {0x80, 0x80, 0x80, 0x00, // accel zero
                                0xB3, 0xB3, 0xB3, 0x00, // accel one g
@@ -328,44 +371,110 @@ private:
                 const DualAnalog::NunchukState nun = DualAnalog::NunchukFromStick(s.lx, s.ly);
                 in.sx = nun.x;
                 in.sy = nun.y;
+                in.lx = s.lx;
+                in.ly = -s.ly;
                 in.rx = s.rx;
                 in.ry = s.ry;
+                in.scripted = true;
+                const auto cl = [&](uint16_t wii, uint8_t& mask, uint8_t bit) { if (s.buttons & wii) mask |= bit; };
+                cl(kBtnA, in.cl5, kClA);
+                cl(kBtnB, in.cl5, kClB);
+                cl(kBtnOne, in.cl5, kClX);
+                cl(kBtnTwo, in.cl5, kClY);
+                cl(kBtnUp, in.cl5, kClDUp);
+                cl(kBtnLeft, in.cl5, kClDLeft);
+                cl(kBtnDown, in.cl4, kClDDown);
+                cl(kBtnRight, in.cl4, kClDRight);
+                cl(kBtnPlus, in.cl4, kClPlus);
+                cl(kBtnMinus, in.cl4, kClMinus);
+                cl(kBtnHome, in.cl4, kClHome);
+                if (s.c) in.cl4 |= kClL;
+                if (s.z) in.cl5 |= kClZL;
                 return true;
             }
             acc += s.seconds;
         }
+        in.scripted = true;
         return true; // script finished: everything released
     }
 
-    // Gamepad -> remote/nunchuk state. Called with the mutex held.
+    // Bindings (gamepad, keyboard, mouse) -> remote state. Called with the mutex held; side-effect free.
     Input ReadInput() {
+        using AimSettings::Action;
         Input in;
         if (ScriptedInput(in)) return in;
-        if (InputBindings::InputBlocked()) return in;
-        SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
-        if (!pad) return in;
-        auto set = [&](bool down, uint16_t bit) { if (down) in.buttons |= bit; };
-        set(Held(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT), kBtnLeft);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT), kBtnRight);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_DPAD_DOWN), kBtnDown);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_DPAD_UP), kBtnUp);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_START), kBtnPlus);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_BACK), kBtnMinus);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_GUIDE), kBtnHome);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_WEST), kBtnOne);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_NORTH), kBtnTwo);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_SOUTH), kBtnA);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_EAST), kBtnA);
-        set(Axis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.4f, kBtnB);
-        set(Held(pad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER), kBtnB);
-        in.c = Held(pad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-        in.z = Axis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 0.4f;
-        const DualAnalog::NunchukState nun =
-            DualAnalog::NunchukFromStick(Axis(pad, SDL_GAMEPAD_AXIS_LEFTX), -Axis(pad, SDL_GAMEPAD_AXIS_LEFTY));
-        in.sx = nun.x;
-        in.sy = nun.y;
-        in.rx = Axis(pad, SDL_GAMEPAD_AXIS_RIGHTX);
-        in.ry = Axis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
+        if (InputBindings::InputBlocked() || !AimInput::Focused()) {
+            in.blocked = true;
+            return in;
+        }
+        RefreshSettings();
+        const InputMap::RawSample raw = AimInput::Sample();
+        auto val = [&](Action a) {
+            const size_t i = static_cast<size_t>(a);
+            return std::max(InputMap::SlotsValue(m_settings.bindings.pad[i], raw),
+                            InputMap::SlotsValue(m_settings.bindings.kbm[i], raw));
+        };
+        auto down = [&](Action a) { return val(a) >= 0.5f; };
+        auto vec = [&](Action left, Action right, Action up, Action downA, float& x, float& y) {
+            x = val(right) - val(left);
+            y = val(downA) - val(up);
+            const float m = std::sqrt(x * x + y * y);
+            if (m > 1.0f) {
+                x /= m;
+                y /= m;
+            }
+        };
+        const bool fire = down(Action::Fire), lock = down(Action::LockOn), jump = down(Action::Jump),
+                   evade = down(Action::Evade), confirm = down(Action::Confirm), cancel = down(Action::Cancel),
+                   pause = down(Action::Pause), minus = down(Action::Minus), home = down(Action::Home),
+                   bx = down(Action::ButtonX), by = down(Action::ButtonY), du = down(Action::DpadUp),
+                   dd = down(Action::DpadDown), dl = down(Action::DpadLeft), dr = down(Action::DpadRight);
+        float mx = 0, my = 0;
+        vec(Action::MoveLeft, Action::MoveRight, Action::MoveUp, Action::MoveDown, mx, my);
+        DualAnalog::ApplyDeadzone(mx, my, m_config.leftDeadzone);
+        in.lx = mx;
+        in.ly = my;
+        vec(Action::AimLeft, Action::AimRight, Action::AimUp, Action::AimDown, in.rx, in.ry);
+        in.precision = down(Action::Precision);
+        in.recenter = down(Action::Recenter);
+        if (m_scheme == AimSettings::Scheme::Pointer) {
+            auto set = [&](bool on, uint16_t bit) { if (on) in.buttons |= bit; };
+            set(fire || cancel, kBtnB);
+            set(lock || confirm, kBtnA);
+            set(pause, kBtnPlus);
+            set(minus, kBtnMinus);
+            set(home, kBtnHome);
+            set(bx, kBtnOne);
+            set(by, kBtnTwo);
+            set(du, kBtnUp);
+            set(dd, kBtnDown);
+            set(dl, kBtnLeft);
+            set(dr, kBtnRight);
+            in.c = jump;
+            in.z = evade;
+            const DualAnalog::NunchukState nun = DualAnalog::NunchukFromStick(mx, -my, 0.0f);
+            in.sx = nun.x;
+            in.sy = nun.y;
+        } else {
+            auto set = [&](bool on, uint8_t& mask, uint8_t bit) { if (on) mask |= bit; };
+            set(jump, in.cl4, kClL);
+            set(fire, in.cl4, kClR);
+            set(evade, in.cl5, kClZL);
+            set(lock, in.cl5, kClZR);
+            set(confirm, in.cl5, kClA);
+            set(cancel, in.cl5, kClB);
+            set(bx, in.cl5, kClX);
+            set(by, in.cl5, kClY);
+            set(pause, in.cl4, kClPlus);
+            set(minus, in.cl4, kClMinus);
+            set(home, in.cl4, kClHome);
+            set(du, in.cl5, kClDUp);
+            set(dl, in.cl5, kClDLeft);
+            set(dd, in.cl4, kClDDown);
+            set(dr, in.cl4, kClDRight);
+            in.lt = val(Action::Jump);
+            in.rt = val(Action::Fire);
+        }
         return in;
     }
 
@@ -394,7 +503,23 @@ private:
         }
     }
 
-    void BuildNunchuk(uint8_t* out, const Input& in) {
+    void BuildExtension(uint8_t* out, const Input& in, float aimX, float aimYDown) {
+        if (m_scheme == AimSettings::Scheme::Classic) {
+            // 6-byte Classic Controller report: 6-bit left stick, 5-bit right stick and analog L/R.
+            const uint8_t lx = DualAnalog::QuantizeStick(in.lx, 32, 31);
+            const uint8_t ly = DualAnalog::QuantizeStick(-in.ly, 32, 31);
+            const uint8_t rx = DualAnalog::QuantizeStick(aimX, 16, 15);
+            const uint8_t ry = DualAnalog::QuantizeStick(-aimYDown, 16, 15);
+            const uint8_t lt = static_cast<uint8_t>(std::lround(std::clamp(in.lt, 0.f, 1.f) * 31.f));
+            const uint8_t rt = static_cast<uint8_t>(std::lround(std::clamp(in.rt, 0.f, 1.f) * 31.f));
+            out[0] = static_cast<uint8_t>(((rx >> 3) & 3) << 6 | (lx & 0x3F));
+            out[1] = static_cast<uint8_t>(((rx >> 1) & 3) << 6 | (ly & 0x3F));
+            out[2] = static_cast<uint8_t>(((rx & 1) << 7) | (((lt >> 3) & 3) << 5) | (ry & 0x1F));
+            out[3] = static_cast<uint8_t>(((lt & 7) << 5) | (rt & 0x1F));
+            out[4] = static_cast<uint8_t>(~in.cl4);
+            out[5] = static_cast<uint8_t>(~in.cl5);
+            return;
+        }
         out[0] = in.sx;
         out[1] = in.sy;
         out[2] = 0x80; // accel X
@@ -403,13 +528,59 @@ private:
         out[5] = static_cast<uint8_t>(0x03 & ~((in.z ? 1 : 0) | (in.c ? 2 : 0)));
     }
 
+    // Decides which device aims and updates the pointer (pointer scheme) or shapes the Classic right stick.
+    // Called once per data report: it consumes the accumulated mouse motion.
+    void UpdateAim(const Input& in, float dt, float& classicX, float& classicY) {
+        classicX = classicY = 0.f;
+        float mdx = 0.f, mdy = 0.f;
+        AimInput::ConsumeMouseDelta(mdx, mdy);
+        if (in.blocked) {
+            m_arbiter.prevStick = m_arbiter.prevMouse = false;
+            m_classicFilter = DualAnalog::StickFilter{};
+            return;
+        }
+        const AimSettings::MouseConfig& mouse = m_settings.mouse;
+        const bool mouseOn = mouse.enabled && !in.scripted;
+        const bool mouseMoving = mouseOn && (std::fabs(mdx) + std::fabs(mdy)) > 0.f;
+        const bool stickMoving = DualAnalog::StickActive(m_config, in.rx, in.ry);
+        const InputMap::AimSource source = in.scripted ? InputMap::AimSource::Stick
+                                                       : InputMap::Arbitrate(m_arbiter, stickMoving, mouseMoving);
+        const bool byMouse = mouseOn && source == InputMap::AimSource::Mouse;
+        if (m_scheme == AimSettings::Scheme::Classic) {
+            float sx = in.rx, sy = in.ry;
+            if (byMouse) DualAnalog::MouseDeltaToStick(mdx, mdy, dt, mouse.stickSpeed, sx, sy);
+            DualAnalog::ClassicStick(m_config, m_classicFilter, sx, sy, dt, in.precision, classicX, classicY);
+            return;
+        }
+        if (in.recenter && !m_prevRecenter) DualAnalog::Recenter(m_pointer, m_config);
+        m_prevRecenter = in.recenter;
+        if (byMouse && mouse.raw) {
+            if (mouseMoving) DualAnalog::MouseRelativeStep(m_pointer, m_config, mdx, mdy, mouse.sensitivity);
+        } else if (byMouse) {
+            const AimInput::MouseSample ms = AimInput::MouseNow();
+            if (ms.valid) {
+                const bool letterbox = RuntimeConfigFile::ForceAspectEnabled();
+                const float aspect = RuntimeConfigFile::WidescreenEnabled() ? 16.0f / 9.0f : 4.0f / 3.0f;
+                const DualAnalog::Rect rect = DualAnalog::ContentRect(ms.winW, ms.winH, letterbox, aspect);
+                float u = 0.5f, v = 0.5f, tx = m_pointer.x, ty = m_pointer.y;
+                DualAnalog::WindowToNormalized(rect, ms.x, ms.y, u, v);
+                DualAnalog::NormalizedToCamera(m_config, u, v, mouse.rangeX, mouse.rangeY, tx, ty);
+                m_pointer.x = DualAnalog::SmoothToward(m_pointer.x, tx, dt, mouse.smoothingMs);
+                m_pointer.y = DualAnalog::SmoothToward(m_pointer.y, ty, dt, mouse.smoothingMs);
+            }
+        } else {
+            // Stick right moves the pointer right, which moves the sensor bar left in the camera.
+            DualAnalog::Advance(m_pointer, m_config, -in.rx, in.ry, dt, in.precision);
+        }
+    }
+
     void BuildDataReport(Report& out) {
         const Input in = ReadInput();
         const auto now = Clock::now();
         const float dt = std::chrono::duration<float>(now - m_pointerStamp).count();
         m_pointerStamp = now;
-        // Stick right moves the pointer right, which moves the sensor bar left in the camera.
-        DualAnalog::Advance(m_pointer, m_config, -in.rx, -in.ry, dt);
+        float classicX = 0.f, classicY = 0.f;
+        UpdateAim(in, dt, classicX, classicY);
         {
             static int s_tick = 0;
             static int s_budget = 2000;
@@ -438,7 +609,7 @@ private:
         out[2] = static_cast<uint8_t>(in.buttons & 0xFF);
         auto accel = [&](size_t at) { out[at] = 0x80; out[at + 1] = 0x80; out[at + 2] = 0x9A; };
         uint8_t ext[21] = {};
-        BuildNunchuk(ext, in);
+        BuildExtension(ext, in, classicX, classicY);
         switch (m_mode) {
         case 0x31: accel(3); break;
         case 0x32: std::memcpy(&out[3], ext, 8); break;
@@ -469,6 +640,13 @@ private:
     std::array<uint8_t, kEepromSize> m_eeprom{};
     DualAnalog::Config m_config;
     DualAnalog::PointerState m_pointer;
+    AimSettings::Settings m_settings;
+    uint32_t m_settingsGeneration = 0;
+    bool m_settingsLoaded = false;
+    AimSettings::Scheme m_scheme = AimSettings::Scheme::Classic;
+    InputMap::Arbiter m_arbiter;
+    DualAnalog::StickFilter m_classicFilter;
+    bool m_prevRecenter = false;
 };
 
 class CompositeHost final : public Bluetooth::RemoteHost {

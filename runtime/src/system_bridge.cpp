@@ -507,7 +507,9 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
 
     constexpr uint32_t kMem2LoFloor = 0x90000800u;
     // Reserve enough guest memory for the runtime-built DVD FST.
-    constexpr uint32_t kDvdFstReserveSize = 0x200000u;
+    // 2 MiB for the runtime FST (g_dvdFstReservedBase, grows downward) plus the 2 MiB stage-module window
+    // [FST base + 2 MiB, IPC buffer lo) = 0x97DC0000.. (tools/rso_link.py links every stg module there).
+    constexpr uint32_t kDvdFstReserveSize = 0x400000u;
     // IOS36 reserves 128 KiB for IPC immediately below a 128 KiB IOS-owned
     // block. Dolphin's RAM override preserves both sizes and moves them to the
     // top of the expanded MEM2 mapping.

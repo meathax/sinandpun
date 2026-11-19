@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -25,8 +25,8 @@ namespace Translator.Core.Translation;
 /// </summary>
 public sealed record TranslationOptions(
     string? PreferredName = null,
-    int MaxInstructions = 8192,
-    int MaxBytes = 0x10000,
+    int MaxInstructions = 65536,
+    int MaxBytes = 0x100000,
     bool AllowUnsupportedInstructions = false,
     bool EmitModRegistration = false,
     uint ModRegistrationPriority = 100,

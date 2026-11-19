@@ -377,7 +377,7 @@ public sealed class InferredGuestFunctionAbiProvider : IGuestFunctionAbiProvider
     private IrFunction BuildLinearIr(uint entryPoint)
     {
         using var disassembler = new PpcDisassembler();
-        var instructions = disassembler.DisassembleFunction(_image, entryPoint, maxInstructions: 8192, maxBytes: 0x10000);
+        var instructions = disassembler.DisassembleFunction(_image, entryPoint, maxInstructions: 65536, maxBytes: 0x100000);
         var basicBlocks = BasicBlockBuilder.Build(instructions);
         var lifted = new PpcLifter().Lift(instructions, true);
         var liftedByAddress = lifted.ToDictionary(x => x.Origin.Address, x => x.Ir);

@@ -508,6 +508,12 @@ inline void DispatchKnownTranslatedCpuTargetStatic(CpuContext* cpu) {
     }
 }
 
+// Stage-module code sets (runtime/src/hle/os/os_rso.cpp): resolves calls into the module window to the active
+// module's translated functions. Only consulted where the base registry has no translation.
+namespace ModuleOverlay {
+bool TryInvoke(uint32_t target, CpuContext* cpu);
+} // namespace ModuleOverlay
+
 [[noreturn]] inline void ReportMissingCpuTarget(uint32_t target, CpuContext* cpu) {
     // Centralized crash path: stderr diagnostics, heuristics, crash artifacts
     // in the run's log folder, popup, exit.
@@ -612,6 +618,9 @@ inline void InvokeDirectCpu(CpuContext* ctx) {
     if (TryDispatchResolvedCpuTarget(registeredInfo, cpu)) {
         return;
     }
+    if (ModuleOverlay::TryInvoke(Target, cpu)) {
+        return;
+    }
 
     ReportMissingCpuTarget(Target, cpu);
 }
@@ -644,6 +653,9 @@ MKW_PPC_NO_INLINE inline void InvokeIndirectJumpSlow(uint32_t target, CpuContext
             return;
         }
     }
+    if (ModuleOverlay::TryInvoke(target, cpu)) {
+        return;
+    }
     ReportMissingIndirectJumpTarget(target, cpu);
 }
 
@@ -667,6 +679,9 @@ MKW_PPC_NO_INLINE inline void InvokeIndirectCpuSlow(uint32_t target, CpuContext*
         return;
     }
     if (TryDispatchResolvedCpuTarget(TranslatedFunctionRegistry::FindByAddressPtr(target), cpu)) {
+        return;
+    }
+    if (ModuleOverlay::TryInvoke(target, cpu)) {
         return;
     }
     ReportMissingCpuTarget(target, cpu);

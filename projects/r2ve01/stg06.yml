@@ -9,7 +9,7 @@ project:
 
 memory:
   base: 0x80000000
-  size: 0x01800000
+  size: 0x18000000
   sda_base: 0x804B7700
   sda2_base: 0x804BA920
 
@@ -19,7 +19,7 @@ inputs:
     sha256: 2c750625d647608d9f3f48d75bb45c2f357de44689a167c8074f5ace1054da60
   module:
     path: build/modules/stg06.bin
-    load_address: 0x80800000
+    load_address: 0x97DC0000
 
 translation:
   entry_points:

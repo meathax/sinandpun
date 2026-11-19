@@ -39,26 +39,27 @@ struct Step {
     StepKind kind;
 };
 
-// Prompts describe what the control does in-game; the SDL fields land on the
-// right GC controls through pad.cpp's "standard" defaults (Z lives on
-// rightshoulder, L/R on the trigger axes).
+// Prompts name the GameCube-controller scheme of Sin & Punishment: Star Successor (StrategyWiki control
+// table): Control Stick moves, C-Stick aims, L evades, Z locks on, R shoots/slashes/charges, Up jumps. The SDL
+// fields land on the right GC controls through pad.cpp's "standard" defaults (Z on rightshoulder, L/R on the
+// trigger axes).
 constexpr std::array<Step, 16> kSteps = {{
-    {"a", "Press the button for A (accelerate / select)", StepKind::Button},
-    {"b", "Press the button for B (brake / back)", StepKind::Button},
-    {"x", "Press the button for X", StepKind::Button},
-    {"y", "Press the button for Y", StepKind::Button},
-    {"start", "Press the button for pause (Start)", StepKind::Button},
-    {"rightshoulder", "Press the button for rear view (Z)", StepKind::Button},
-    {"lefttrigger", "Press or pull the control for using items (L)", StepKind::Trigger},
-    {"righttrigger", "Press or pull the control for hop / drift (R)", StepKind::Trigger},
-    {"dpup", "Press D-pad Up", StepKind::Button},
+    {"a", "Press the button for A (menu confirm)", StepKind::Button},
+    {"b", "Press the button for B (menu cancel)", StepKind::Button},
+    {"x", "Press the button for X (no in-game action)", StepKind::Button},
+    {"y", "Press the button for Y (no in-game action)", StepKind::Button},
+    {"start", "Press the button for Pause (Start)", StepKind::Button},
+    {"rightshoulder", "Press the button for Lock-on (Z)", StepKind::Button},
+    {"lefttrigger", "Press or pull the control for Evade (L)", StepKind::Trigger},
+    {"righttrigger", "Press or pull the control for Shoot / Sword / Charge shot (R)", StepKind::Trigger},
+    {"dpup", "Press D-pad Up (jump on the GameCube controller)", StepKind::Button},
     {"dpdown", "Press D-pad Down", StepKind::Button},
     {"dpleft", "Press D-pad Left", StepKind::Button},
     {"dpright", "Press D-pad Right", StepKind::Button},
-    {"leftx", "Move the Control Stick LEFT", StepKind::Stick},
-    {"lefty", "Move the Control Stick UP", StepKind::Stick},
-    {"rightx", "Move the C-Stick LEFT (or Skip)", StepKind::Stick},
-    {"righty", "Move the C-Stick UP (or Skip)", StepKind::Stick},
+    {"leftx", "Move the Control Stick LEFT (move character)", StepKind::Stick},
+    {"lefty", "Move the Control Stick UP (move / hover)", StepKind::Stick},
+    {"rightx", "Move the C-Stick LEFT (aim reticle, or Skip)", StepKind::Stick},
+    {"righty", "Move the C-Stick UP (aim reticle, or Skip)", StepKind::Stick},
 }};
 
 struct WizardState {

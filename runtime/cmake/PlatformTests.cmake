@@ -37,6 +37,11 @@ target_include_directories(mkw_runtime_config_tests PRIVATE
 target_compile_features(mkw_runtime_config_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_runtime_config_tests COMMAND mkw_runtime_config_tests)
 
+add_executable(mkw_controls_tests "${MKW_TEST_RUNTIME_DIR}/tests/controls_tests.cpp")
+target_include_directories(mkw_controls_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_controls_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_controls_tests COMMAND mkw_controls_tests)
+
 add_executable(mkw_nand_save_tests "${MKW_TEST_RUNTIME_DIR}/tests/nand_save_tests.cpp")
 target_include_directories(mkw_nand_save_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
 target_compile_features(mkw_nand_save_tests PRIVATE cxx_std_17)

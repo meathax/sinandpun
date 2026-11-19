@@ -127,6 +127,14 @@ add_library(mkw_base_registration OBJECT ${MKW_BASE_REGISTRATION_SOURCES})
 mkw_configure_translated_target(mkw_base_registration)
 target_precompile_headers(mkw_base_registration REUSE_FROM mkw_base_shared)
 
+# Stage-module code sets (tools/module_shards.py): one table per stg module, activated at run time.
+include("${CMAKE_CURRENT_LIST_DIR}/../../generated/module_shards/module_shards.cmake" OPTIONAL)
+if(MKW_MODULE_SHARDS)
+    add_library(mkw_stage_modules OBJECT ${MKW_MODULE_SHARDS})
+    mkw_configure_translated_target(mkw_stage_modules)
+    target_precompile_headers(mkw_stage_modules REUSE_FROM mkw_base_shared)
+endif()
+
 if(MKW_BASE_PORTABLE_SENSITIVE_SHARDS)
     add_library(mkw_base_sensitive OBJECT ${MKW_BASE_PORTABLE_SENSITIVE_SHARDS})
     mkw_configure_translated_target(mkw_base_sensitive)
@@ -309,6 +317,9 @@ add_executable(WiiCompiled "${MKW_BASE_PRODUCT_SOURCE}")
 mkw_configure_product(WiiCompiled)
 mkw_add_product_icon(WiiCompiled)
 target_sources(WiiCompiled PRIVATE $<TARGET_OBJECTS:mkw_base_registration>)
+if(TARGET mkw_stage_modules)
+    target_sources(WiiCompiled PRIVATE $<TARGET_OBJECTS:mkw_stage_modules>)
+endif()
 target_precompile_headers(WiiCompiled PRIVATE
     "${MKW_RUNTIME_SOURCE_DIR}/include/mkw_pch.h")
 if(TARGET mkw_base_sensitive)
@@ -336,7 +347,7 @@ endif()
 
 # mkw_runtime_common gets the same flags from mkw_add_runtime_library.
 set(MKW_ALL_BUILD_TARGETS
-    mkw_game_data mkw_base_shared mkw_base_registration mkw_base_sensitive mkw_retro_sensitive
+    mkw_game_data mkw_base_shared mkw_base_registration mkw_stage_modules mkw_base_sensitive mkw_retro_sensitive
     mkw_retro_rewind_functions mkw_retro_registration WiiCompiled RetroRewind)
 foreach(target IN LISTS MKW_ALL_BUILD_TARGETS)
     if(TARGET ${target})

@@ -4,12 +4,15 @@
 #include "aurora_events.h"
 #include "controller_button_names.h"
 #include "controller_mapping_wizard.h"
+#include "aim_input.h"
+#include "controls_menu.h"
 #include "input_bindings.h"
 #include "motion_trick.h"
 #include "game_graphics_options.h"
 #include "music_attenuation.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
+#include "system_settings.h"
 #include "wiimote_host.h"
 
 #include <imgui.h>
@@ -19,6 +22,7 @@
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
+#include <SDL3/SDL_video.h>
 
 #include <array>
 #include <algorithm>
@@ -206,6 +210,107 @@ void LimitResolutionForFrameRate() {
     if (IsHighFrameRateMode() && IsHighResolutionScale(g_resolutionScale)) {
         SetResolutionScale(4.0f);
     }
+}
+
+// Display options that can leave the user without a usable picture are applied live, then kept or
+// reverted: the prompt auto-reverts after kRevertSeconds like an OS display-settings dialog.
+struct DisplayState {
+    int mode;
+    float resolution;
+    int interpolation;
+    bool vsync;
+    bool forceAspect;
+
+    bool operator==(const DisplayState& o) const {
+        return mode == o.mode && resolution == o.resolution && interpolation == o.interpolation &&
+               vsync == o.vsync && forceAspect == o.forceAspect;
+    }
+};
+
+DisplayState CurrentDisplay() {
+    return {g_displayMode, g_resolutionScale, g_frameInterpolationMode, g_vsync, g_forceAspect};
+}
+
+DisplayState g_applied = CurrentDisplay();
+DisplayState g_revertBase{};
+bool g_revertActive = false;
+Clock::time_point g_revertDeadline{};
+constexpr auto kRevertTime = std::chrono::seconds(10);
+
+DisplayState NormalizeDisplay(DisplayState s) {
+    if (kFrameInterpolationTargetFps[static_cast<size_t>(s.interpolation)] > 60 && IsHighResolutionScale(s.resolution)) {
+        s.resolution = 4.0f;
+    }
+    return s;
+}
+
+void ApplyDisplay(const DisplayState& next) {
+    if (next.mode != g_applied.mode) {
+        aurora_set_display_mode(static_cast<AuroraDisplayMode>(next.mode));
+    }
+    if (next.interpolation != g_applied.interpolation) {
+        GX_SYNC_INLINE();
+        aurora_set_frame_interpolation_fps(kFrameInterpolationTargetFps[static_cast<size_t>(next.interpolation)]);
+        if (aurora_get_display_mode() == AURORA_DISPLAY_MODE_EXCLUSIVE) {
+            // Re-apply exclusive mode so the display refresh tracks the new target.
+            aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
+        }
+    }
+    if (next.resolution != g_applied.resolution) {
+        GX_SYNC_INLINE();
+        VISetFrameBufferScale(next.resolution);
+    }
+    if (next.vsync != g_applied.vsync) {
+        aurora_enable_vsync(next.vsync);
+    }
+    if (next.forceAspect != g_applied.forceAspect) {
+        SetMkwForceAspect(next.forceAspect);
+    }
+    g_displayMode = static_cast<int>(aurora_get_display_mode());
+    g_resolutionScale = next.resolution;
+    g_frameInterpolationMode = next.interpolation;
+    g_vsync = next.vsync;
+    g_forceAspect = next.forceAspect;
+    g_applied = CurrentDisplay();
+}
+
+void PersistDisplay(const DisplayState& s) {
+    RuntimeConfigFile::SetDisplayMode(std::string(kDisplayModeConfigNames[static_cast<size_t>(s.mode)]));
+    RuntimeConfigFile::SetResolutionMultiplier(s.resolution);
+    RuntimeConfigFile::SetFrameInterpolationFps(kFrameInterpolationTargetFps[static_cast<size_t>(s.interpolation)]);
+    RuntimeConfigFile::SetVsync(s.vsync);
+    RuntimeConfigFile::SetForceAspect(s.forceAspect);
+}
+
+void ChangeDisplay(DisplayState next) {
+    const DisplayState before = CurrentDisplay();
+    next = NormalizeDisplay(next);
+    if (next == before) {
+        return;
+    }
+    if (!g_revertActive) {
+        g_revertBase = before;
+        g_revertActive = true;
+    }
+    g_revertDeadline = Clock::now() + kRevertTime;
+    ApplyDisplay(next);
+}
+
+void KeepDisplay() {
+    PersistDisplay(CurrentDisplay());
+    g_revertActive = false;
+}
+
+void RevertDisplay() {
+    g_revertActive = false;
+    ApplyDisplay(g_revertBase);
+}
+
+// Defaults are applied and saved at once: windowed, native resolution, no interpolation.
+void ResetDisplayDefaults() {
+    g_revertActive = false;
+    ApplyDisplay(DisplayState{static_cast<int>(AURORA_DISPLAY_MODE_WINDOWED), 1.0f, 0, false, false});
+    PersistDisplay(CurrentDisplay());
 }
 
 using ControllerNames::FindNativeButton;
@@ -1149,25 +1254,13 @@ void DrawAudioSettings() {
     }
 }
 
-void DrawGraphicsSettings() {
-    g_displayMode = static_cast<int>(aurora_get_display_mode());
-    if (ImGui::BeginCombo("Aspect ratio (restart required)", g_widescreen ? "16:9" : "4:3")) {
-        if (ImGui::Selectable("16:9", g_widescreen)) {
-            g_widescreen = true;
-            RuntimeConfigFile::SetWidescreen(true);
-        }
-        if (ImGui::Selectable("4:3", !g_widescreen)) {
-            g_widescreen = false;
-            RuntimeConfigFile::SetWidescreen(false);
-        }
-        ImGui::EndCombo();
-    }
-    if (ImGui::Checkbox("Force aspect ratio", &g_forceAspect)) {
-        SetMkwForceAspect(g_forceAspect);
-        RuntimeConfigFile::SetForceAspect(g_forceAspect);
-    }
-    ImGui::TextDisabled("Keep the current aspect ratio with black bars when the window has another shape.");
-    ImGui::Separator();
+void Hint(const char* text) {
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", text);
+    ImGui::PopTextWrapPos();
+}
+
+void DrawGraphicsPage() {
     struct EffectFlag {
         const char* label;
         uint32_t flag;
@@ -1188,61 +1281,8 @@ void DrawGraphicsSettings() {
             RuntimeConfigFile::SetDisabledPostProcessingPaths(g_disabledPostProcessingPaths);
         }
     }
-    ImGui::TextDisabled("Applied when the next scene renderer is created.");
+    Hint("Applied when the next scene renderer is created.");
     ImGui::Separator();
-    static constexpr const char* kDisplayModes[] = {
-        "Windowed",
-        "Borderless fullscreen",
-        "Exclusive fullscreen",
-    };
-    if (ImGui::Combo("Display mode", &g_displayMode, kDisplayModes, static_cast<int>(std::size(kDisplayModes)))) {
-        const auto mode = static_cast<AuroraDisplayMode>(g_displayMode);
-        aurora_set_display_mode(mode);
-        const AuroraDisplayMode activeMode = aurora_get_display_mode();
-        if (activeMode == mode) {
-            RuntimeConfigFile::SetDisplayMode(std::string(kDisplayModeConfigNames[static_cast<size_t>(g_displayMode)]));
-        } else {
-            g_displayMode = static_cast<int>(activeMode);
-        }
-    }
-    if (g_displayMode == AURORA_DISPLAY_MODE_EXCLUSIVE) {
-        ImGui::TextDisabled(
-            "Requests the closest native-resolution display mode to the output frame "
-            "rate (60 Hz, or the frame interpolation target).");
-    }
-    constexpr std::array<const char*, 3> kFrameInterpolationModes{
-        "Off", "120 FPS", "180 FPS",
-    };
-    const char* currentFrameInterpolationMode =
-        kFrameInterpolationModes[static_cast<size_t>(g_frameInterpolationMode)];
-    bool frameInterpolationModeChanged = false;
-    if (ImGui::BeginCombo("Race frame interpolation (experimental)", currentFrameInterpolationMode)) {
-        for (int mode = 0; mode < static_cast<int>(kFrameInterpolationModes.size()); ++mode) {
-            const bool selected = g_frameInterpolationMode == mode;
-            if (ImGui::Selectable(kFrameInterpolationModes[static_cast<size_t>(mode)], selected)) {
-                g_frameInterpolationMode = mode;
-                frameInterpolationModeChanged = true;
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    if (frameInterpolationModeChanged) {
-        GX_SYNC_INLINE();
-        const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
-        aurora_set_frame_interpolation_fps(targetFps);
-        RuntimeConfigFile::SetFrameInterpolationFps(targetFps);
-        LimitResolutionForFrameRate();
-        if (aurora_get_display_mode() == AURORA_DISPLAY_MODE_EXCLUSIVE) {
-            // Re-apply exclusive mode so the display refresh tracks the new target.
-            aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
-        }
-    }
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
-    ImGui::TextDisabled("Frame interpolation is experimental, you might find visual artifacts");
-    ImGui::PopTextWrapPos();
 #if defined(__APPLE__)
     const bool metalFxSupported = aurora_is_metalfx_spatial_supported();
     ImGui::BeginDisabled(!metalFxSupported);
@@ -1273,25 +1313,267 @@ void DrawGraphicsSettings() {
         break;
     }
 #endif
-    if (ImGui::Checkbox("Disable copy filter", &g_disableCopyFilter)) {
+    if (ImGui::Checkbox("Disable copy filter (recommended)", &g_disableCopyFilter)) {
         GX_SYNC_INLINE();
         aurora_set_disable_copy_filter(g_disableCopyFilter);
         RuntimeConfigFile::SetDisableCopyFilter(g_disableCopyFilter);
     }
-    if (ImGui::Checkbox("Skip draws while shaders compile", &g_skipUnreadyPipelines)) {
+    if (ImGui::Checkbox("Skip draws while shaders compile (recommended)", &g_skipUnreadyPipelines)) {
         GX_SYNC_INLINE();
         aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
         RuntimeConfigFile::SetSkipUnreadyPipelines(g_skipUnreadyPipelines);
     }
-    if (ImGui::Checkbox("VSync", &g_vsync)) {
-        aurora_enable_vsync(g_vsync);
-        RuntimeConfigFile::SetVsync(g_vsync);
+    Hint("Skipping avoids stutter while pipelines build; some effects may flicker on first use.");
+    ImGui::Separator();
+
+    SystemSettings::Values sys = SystemSettings::Get();
+    bool sysChanged = false;
+    auto choiceCombo = [&](const char* label, int& value, const int* choices, size_t count) {
+        const std::string preview = value == 1 ? std::string("Off") : std::to_string(value) + "x";
+        if (ImGui::BeginCombo(label, preview.c_str())) {
+            for (size_t i = 0; i < count; ++i) {
+                const std::string item = choices[i] == 1 ? std::string("Off") : std::to_string(choices[i]) + "x";
+                if (ImGui::Selectable(item.c_str(), value == choices[i])) {
+                    value = choices[i];
+                    sysChanged = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    };
+    choiceCombo("Anti-aliasing, MSAA (restart required)", sys.msaa, SystemSettings::kMsaaChoices.data(),
+                SystemSettings::kMsaaChoices.size());
+    Hint("Off is the safest. Higher values cost GPU time and are untested with every effect.");
+    choiceCombo("Anisotropic filtering (restart required, 16x recommended)", sys.anisotropy,
+                SystemSettings::kAnisotropyChoices.data(), SystemSettings::kAnisotropyChoices.size());
+    if (sysChanged) {
+        SystemSettings::Set(sys);
+        SystemSettings::Save();
     }
+    ImGui::Separator();
+
+    auto restartToggle = [](const char* label, bool value, const char* section, const char* key,
+                            std::optional<bool>& slot) {
+        if (ImGui::Checkbox(label, &value)) {
+            slot = value;
+            RuntimeConfigFile::WriteSetting(section, key, value ? "true" : "false");
+        }
+    };
+    RuntimeUserConfig& userConfig = RuntimeConfigFile::Mutable();
+    restartToggle("Custom textures (restart required)", RuntimeConfigFile::TextureReplacements(false), "video",
+                  "texture_replacements", userConfig.textureReplacements);
+    restartToggle("Dump unmatched textures (restart required)", RuntimeConfigFile::TextureDumps(false), "video",
+                  "texture_dumps", userConfig.textureDumps);
+    Hint("Custom textures are read from texture_replacements/ next to Config.toml.");
+    restartToggle("Run GX on its own thread (restart required, recommended)", RuntimeConfigFile::GxWorkerEnabled(true),
+                  "video", "gx_worker", userConfig.gxWorker);
+    ImGui::Separator();
+    ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+    Hint("Pick another API with graphics_api in Config.toml (restart required).");
+}
+
+void DrawDisplayPage() {
+    Hint("Options marked (confirm) are applied at once and revert after 10 seconds unless you keep them.");
+    if (!g_revertActive) {
+        g_displayMode = static_cast<int>(aurora_get_display_mode());
+    }
+    DisplayState next = CurrentDisplay();
+    bool changed = false;
+
+    static constexpr const char* kDisplayModes[] = {"Windowed", "Borderless fullscreen", "Exclusive fullscreen"};
+    changed |= ImGui::Combo("Display mode (confirm)", &next.mode, kDisplayModes, static_cast<int>(std::size(kDisplayModes)));
+    if (next.mode == AURORA_DISPLAY_MODE_EXCLUSIVE) {
+        Hint("Requests the closest native-resolution display mode to the output frame rate.");
+    }
+
+    struct WindowSize {
+        const char* label;
+        int width;
+        int height;
+    };
+    static constexpr std::array<WindowSize, 7> kWindowSizes = {{
+        {"854 x 480", 854, 480}, {"1280 x 720", 1280, 720}, {"1600 x 900", 1600, 900}, {"1920 x 1080", 1920, 1080},
+        {"2560 x 1440", 2560, 1440}, {"960 x 720 (4:3)", 960, 720}, {"1440 x 1080 (4:3)", 1440, 1080},
+    }};
+    const AuroraWindowSize windowSize = aurora_get_window_size();
+    char windowLabel[48];
+    std::snprintf(windowLabel, sizeof windowLabel, "%u x %u", windowSize.width, windowSize.height);
+    ImGui::BeginDisabled(next.mode != AURORA_DISPLAY_MODE_WINDOWED);
+    if (ImGui::BeginCombo("Window size", windowLabel)) {
+        for (const WindowSize& size : kWindowSizes) {
+            if (ImGui::Selectable(size.label)) {
+                SDL_SetWindowSize(aurora_get_window(), size.width, size.height);
+                RuntimeConfigFile::SetWindowSize(static_cast<uint32_t>(size.width), static_cast<uint32_t>(size.height));
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    Hint("Windowed only. You can also drag the window edges.");
+
+    changed |= ImGui::Checkbox("VSync (confirm)", &next.vsync);
+    Hint("Needed for smooth motion with frame interpolation.");
+
+    ImGui::Separator();
+    if (ImGui::BeginCombo("Aspect ratio (restart required)", g_widescreen ? "16:9 widescreen" : "4:3 original")) {
+        if (ImGui::Selectable("16:9 widescreen", g_widescreen)) {
+            g_widescreen = true;
+            RuntimeConfigFile::SetWidescreen(true);
+        }
+        if (ImGui::Selectable("4:3 original", !g_widescreen)) {
+            g_widescreen = false;
+            RuntimeConfigFile::SetWidescreen(false);
+        }
+        ImGui::EndCombo();
+    }
+    changed |= ImGui::Checkbox("Keep aspect ratio with black bars (confirm)", &next.forceAspect);
+    Hint("Off stretches the picture to the window. On letterboxes it; the mouse pointer follows the picture.");
+
+    ImGui::Separator();
+    const auto resolutionIt = std::find_if(kResolutions.begin(), kResolutions.end(), [&](const ResolutionItem& item) {
+        return std::fabs(item.scale - next.resolution) < 0.001f;
+    });
+    if (ImGui::BeginCombo("Internal resolution (confirm)", resolutionIt != kResolutions.end() ? resolutionIt->label : "Custom")) {
+        for (const auto& resolution : kResolutions) {
+            const bool selected = std::fabs(resolution.scale - next.resolution) < 0.001f;
+            const bool disabled = kFrameInterpolationTargetFps[static_cast<size_t>(next.interpolation)] > 60 &&
+                                  IsHighResolutionScale(resolution.scale);
+            ImGui::BeginDisabled(disabled);
+            if (ImGui::Selectable(resolution.label, selected)) {
+                next.resolution = resolution.scale;
+                changed = true;
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::EndCombo();
+    }
+    Hint("Rendering scale relative to the original 640x480 picture. Native (1x) is the original look.");
+
+    static constexpr std::array<const char*, 3> kInterpolation = {"Off", "120 FPS", "180 FPS"};
+    if (ImGui::BeginCombo("Frame interpolation, experimental (confirm)", kInterpolation[static_cast<size_t>(next.interpolation)])) {
+        for (int mode = 0; mode < static_cast<int>(kInterpolation.size()); ++mode) {
+            if (ImGui::Selectable(kInterpolation[static_cast<size_t>(mode)], next.interpolation == mode)) {
+                next.interpolation = mode;
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    Hint("Generates extra frames on high-refresh displays. Game logic stays at its original rate. May show artifacts.");
+
+    SystemSettings::Values sys = SystemSettings::Get();
+    int filter = sys.scalingFilter;
+    ImGui::SetNextItemWidth(260.0f);
+    if (ImGui::Combo("Scaling filter", &filter, SystemSettings::kScalingFilterLabels.data(),
+                     static_cast<int>(SystemSettings::kScalingFilterLabels.size()))) {
+        sys.scalingFilter = filter;
+        SystemSettings::Set(sys);
+        SystemSettings::Save();
+        aurora_set_resampler(static_cast<AuroraSampler>(filter));
+    }
+    Hint("How the picture is resampled to the window.");
+
+    if (changed) {
+        ChangeDisplay(next);
+    }
+}
+
+void DrawSystemPage() {
     if (ImGui::Checkbox("Show FPS", &g_showFps)) {
         RuntimeConfigFile::SetShowFps(g_showFps);
     }
+    SystemSettings::Values sys = SystemSettings::Get();
+    bool changed = false;
+    changed |= ImGui::Checkbox("Show frame-time graph", &sys.showFrameTime);
+    Hint("Host frame time in milliseconds with a short history; spikes show stutter.");
+
+    ImGui::Separator();
+    int cover = static_cast<int>(sys.startupCover);
+    ImGui::SetNextItemWidth(300.0f);
+    if (ImGui::Combo("Startup screen (next launch)", &cover, SystemSettings::kStartupCoverLabels.data(),
+                     static_cast<int>(SystemSettings::kStartupCoverLabels.size()))) {
+        sys.startupCover = static_cast<SystemSettings::StartupCover>(cover);
+        changed = true;
+    }
+    Hint("The black cover hides the first seconds while shaders build. It always waits for shaders.");
+    if (changed) {
+        SystemSettings::Set(sys);
+        SystemSettings::Save();
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Files");
+    const std::string configPath = RuntimeConfigFile::PathToUtf8(RuntimeConfigFile::ResolveConfigPath());
+    ImGui::TextWrapped("Config: %s", configPath.c_str());
+    const std::string nand = RuntimeConfigFile::NandRoot();
+    ImGui::TextWrapped("Save data (NAND): %s", nand.empty() ? "default, under the user data folder" : nand.c_str());
+    const std::string dvd = RuntimeConfigFile::DvdRoot();
+    ImGui::TextWrapped("Game files (DVD root): %s", dvd.empty() ? "not set (paths.dvd_root in Config.toml)" : dvd.c_str());
+    Hint("Paths are edited in Config.toml.");
+#if defined(_WIN32)
+    if (ImGui::Button("Open user data folder")) {
+        const std::wstring folder = RuntimeConfigFile::ApplicationDataDirectory().wstring();
+        ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+#endif
+
+    ImGui::Separator();
+    AuroraPresentTiming timing{};
+    aurora_get_present_timing(&timing);
+    ImGui::Text("Presented: %.1f FPS (motion %.1f)", timing.framesPerSecond, timing.effectiveFramesPerSecond);
+    ImGui::Text("Shaders compiling: %u", aurora_get_queued_pipeline_count());
+    Hint("While this menu is open the game keeps running with its input blocked (there is no safe emulation pause).");
+}
+
+void DrawAboutPage() {
+    ImGui::TextUnformatted("Sin & Punishment: Star Successor - PC port");
+    ImGui::TextDisabled("Static recompilation of the original game; no game data is included. GPL-3.");
     ImGui::Separator();
     ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+    const AuroraWindowSize size = aurora_get_window_size();
+    ImGui::Text("Window: %u x %u   Internal: %u x %u", size.width, size.height, size.fb_width, size.fb_height);
+    const double refresh = aurora_get_display_refresh_rate();
+    if (refresh > 0.0) {
+        ImGui::Text("Display refresh: %.1f Hz", refresh);
+    }
+    ImGui::Text("Config version: %d", SystemSettings::kConfigVersion);
+    ImGui::Separator();
+    Hint("Menu: F10 / F1, or Back + Start on a gamepad. Esc / B goes back. Alt+Enter toggles fullscreen.");
+}
+
+void ResetGraphicsDefaults() {
+    g_disabledPostProcessingPaths = 0;
+    RuntimeGameGraphicsOptions::SetDisabledPostProcessingPaths(0);
+    RuntimeConfigFile::SetDisabledPostProcessingPaths(0);
+    g_disableCopyFilter = true;
+    GX_SYNC_INLINE();
+    aurora_set_disable_copy_filter(true);
+    RuntimeConfigFile::SetDisableCopyFilter(true);
+    g_skipUnreadyPipelines = true;
+    aurora_set_skip_unready_pipelines(true);
+    RuntimeConfigFile::SetSkipUnreadyPipelines(true);
+    SystemSettings::Values sys = SystemSettings::Get();
+    sys.msaa = 1;
+    sys.anisotropy = 16;
+    SystemSettings::Set(sys);
+    SystemSettings::Save();
+    RuntimeUserConfig& userConfig = RuntimeConfigFile::Mutable();
+    userConfig.textureReplacements = false;
+    userConfig.textureDumps = false;
+    userConfig.gxWorker = true;
+    RuntimeConfigFile::WriteSetting("video", "texture_replacements", "false");
+    RuntimeConfigFile::WriteSetting("video", "texture_dumps", "false");
+    RuntimeConfigFile::WriteSetting("video", "gx_worker", "true");
+}
+
+void ResetSystemDefaults() {
+    SystemSettings::Values sys = SystemSettings::Get();
+    sys.startupCover = SystemSettings::StartupCover::Auto;
+    sys.showFrameTime = false;
+    SystemSettings::Set(sys);
+    SystemSettings::Save();
+    g_showFps = true;
+    RuntimeConfigFile::SetShowFps(true);
 }
 
 void DrawFpsOverlay() {
@@ -1302,9 +1584,14 @@ void DrawFpsOverlay() {
     const bool interpolationInactive = targetFps > 60 && !aurora_display_shows_interpolation();
     const bool unevenPacing =
         !g_vsync && !interpolationInactive && refreshRate > 0.0 && targetFps > refreshRate + 1.0;
-    if (!g_showFps && !unevenPacing && !interpolationInactive) {
+    const bool showFrameTime = SystemSettings::Get().showFrameTime;
+    if (!g_showFps && !showFrameTime && !unevenPacing && !interpolationInactive) {
         return;
     }
+    static std::array<float, 120> s_frameTimes{};
+    static size_t s_frameTimeIndex = 0;
+    s_frameTimes[s_frameTimeIndex] = ImGui::GetIO().DeltaTime * 1000.0f;
+    s_frameTimeIndex = (s_frameTimeIndex + 1) % s_frameTimes.size();
 
     const ImGuiIO& io = ImGui::GetIO();
     constexpr float kMargin = 10.0f;
@@ -1333,6 +1620,12 @@ void DrawFpsOverlay() {
                 ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "Motion: %.1f",
                                    presentTiming.effectiveFramesPerSecond);
             }
+        }
+        if (showFrameTime) {
+            const float latest = s_frameTimes[(s_frameTimeIndex + s_frameTimes.size() - 1) % s_frameTimes.size()];
+            ImGui::Text("Frame: %.2f ms", latest);
+            ImGui::PlotLines("##frametime", s_frameTimes.data(), static_cast<int>(s_frameTimes.size()),
+                             static_cast<int>(s_frameTimeIndex), nullptr, 0.0f, 33.3f, ImVec2(180.0f, 40.0f));
         }
         if (interpolationInactive) {
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
@@ -1412,7 +1705,10 @@ void DrawStartupScreen() {
             ImGui::TextUnformatted(line);
             nextY = ImGui::GetCursorPosY() + 4.0f;
         }
-        constexpr const char* kHint = "Press F10 to open settings";
+        const bool waitForButton = SystemSettings::Get().startupCover == SystemSettings::StartupCover::Button &&
+                                   !g_strapInputAccepted.load(std::memory_order_relaxed);
+        const char* kHint = waitForButton ? "Press any button to start   |   F10 or Back + Start: settings"
+                                          : "F10 or Back + Start: settings";
         ImGui::SetWindowFontScale(0.8f);
         const ImVec2 hintSize = ImGui::CalcTextSize(kHint);
         ImGui::SetCursorPos(ImVec2(std::max(0.0f, (viewport->Size.x - hintSize.x) * 0.5f), nextY));
@@ -1463,6 +1759,131 @@ void DrawRestartPrompt() {
     ImGui::EndPopup();
 }
 
+int g_tab = 0;
+int g_tabRequest = -1;
+bool g_popupWasOpen = false;
+
+void ResetAudioDefaults() {
+    g_audioVolumePercent = g_musicVolumePercent = g_soundEffectsVolumePercent = 100;
+    g_uiVolumePercent = g_voicesVolumePercent = 100;
+    g_audioMuted = false;
+    g_audioMixWorker = true;
+    g_attenuateMusicWhenMediaPlays = false;
+    g_muteHotkey = SDL_SCANCODE_BACKSLASH;
+    AudioBackend::Instance().SetMasterVolume(1.0f);
+    AudioBackend::Instance().SetMuted(false);
+    MusicAttenuation::SetMusicVolume(1.0f);
+    MusicAttenuation::SetSoundEffectsVolume(1.0f);
+    MusicAttenuation::SetUiVolume(1.0f);
+    MusicAttenuation::SetVoicesVolume(1.0f);
+    MusicAttenuation::SetEnabled(false);
+    AxDspHle::SetMixWorkerEnabled(true);
+    RuntimeConfigFile::SetAudioVolume(1.0f);
+    RuntimeConfigFile::SetMusicVolume(1.0f);
+    RuntimeConfigFile::SetSoundEffectsVolume(1.0f);
+    RuntimeConfigFile::SetUiVolume(1.0f);
+    RuntimeConfigFile::SetVoicesVolume(1.0f);
+    RuntimeConfigFile::SetAudioMuted(false);
+    RuntimeConfigFile::SetAudioMixWorker(true);
+    RuntimeConfigFile::SetAttenuateMusicWhenMediaPlays(false);
+    RuntimeConfigFile::SetMuteHotkey(g_muteHotkey);
+}
+
+void ResetDisplayPageDefaults() {
+    ResetDisplayDefaults();
+    g_widescreen = true;
+    RuntimeConfigFile::SetWidescreen(true);
+    SystemSettings::Values sys = SystemSettings::Get();
+    sys.scalingFilter = 0;
+    SystemSettings::Set(sys);
+    SystemSettings::Save();
+    aurora_set_resampler(SAMPLER_BILINEAR);
+}
+
+void ResetCurrentPage() {
+    switch (g_tab) {
+    case 0: ResetDisplayPageDefaults(); break;
+    case 1: ResetGraphicsDefaults(); break;
+    case 2: ResetAudioDefaults(); break;
+    case 3: controls_menu::ResetAll(); break;
+    case 4: ResetSystemDefaults(); break;
+    default: break;
+    }
+}
+
+void ResetEverything() {
+    ResetDisplayPageDefaults();
+    ResetGraphicsDefaults();
+    ResetAudioDefaults();
+    controls_menu::ResetAll();
+    ResetSystemDefaults();
+}
+
+// Gamepad shortcuts while the menu is open: LB/RB switch tabs, B leaves the menu when nothing else is
+// using it (ImGui itself consumes B to close combos and edit modes).
+void PollMenuGamepad() {
+    static bool s_lb = false, s_rb = false, s_b = false;
+    SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
+    auto edge = [&](SDL_GamepadButton button, bool& was) {
+        const bool down = pad != nullptr && SDL_GetGamepadButton(pad, button);
+        const bool pressed = down && !was;
+        was = down;
+        return pressed;
+    };
+    const bool previous = edge(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, s_lb);
+    const bool next = edge(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, s_rb);
+    const bool back = edge(SDL_GAMEPAD_BUTTON_EAST, s_b);
+    if (!g_topBarVisible || controls_menu::Capturing() || g_revertActive) {
+        return;
+    }
+    if (previous) g_tabRequest = (g_tab + 5) % 6;
+    if (next) g_tabRequest = (g_tab + 1) % 6;
+    if (back && !g_popupWasOpen) {
+        SetTopBarVisible(false);
+    }
+}
+
+void DrawRevertPrompt() {
+    if (!g_revertActive) {
+        return;
+    }
+    const float remaining = std::chrono::duration<float>(g_revertDeadline - Clock::now()).count();
+    if (remaining <= 0.0f) {
+        RevertDisplay();
+        return;
+    }
+    constexpr const char* kTitle = "Keep display settings?";
+    if (!ImGui::IsPopupOpen(kTitle)) {
+        ImGui::OpenPopup(kTitle);
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        return;
+    }
+    ImGui::Text("The previous settings return in %d seconds unless you keep these.",
+                static_cast<int>(std::ceil(remaining)));
+    if (ImGui::IsWindowAppearing()) {
+        ImGui::SetKeyboardFocusHere();
+    }
+    bool revert = ImGui::Button("Revert", ImVec2(150.0f, 0.0f));
+    ImGui::SameLine();
+    const bool keep = ImGui::Button("Keep", ImVec2(150.0f, 0.0f));
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+        revert = true;
+    }
+    if (keep) {
+        KeepDisplay();
+    } else if (revert) {
+        RevertDisplay();
+    }
+    if (!g_revertActive) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void DrawTopBar() {
     if (!g_topBarVisible) {
         return;
@@ -1471,85 +1892,64 @@ void DrawTopBar() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::GetBackgroundDrawList()->AddRectFilled(viewport->Pos,
         ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y),
-        IM_COL32(0, 0, 0, 70));
-    constexpr float kHintMargin = 10.0f;
+        IM_COL32(0, 0, 0, 110));
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f,
-                                 viewport->Pos.y + ImGui::GetFrameHeight() + kHintMargin),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.55f);
-    if (ImGui::Begin("Settings input hint", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoFocusOnAppearing)) {
-        for (const char* line : {"Settings open - game controls disabled.",
-                                 "Press F10 to return to the game."}) {
-            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(line).x) * 0.5f);
-            ImGui::TextUnformatted(line);
+                                   viewport->Pos.y + viewport->Size.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x * 0.8f, viewport->Size.y * 0.84f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    if (ImGui::Begin("WiiCompiled settings", nullptr,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoSavedSettings)) {
+        if (ImGui::Button("Close")) {
+            SetTopBarVisible(false);
         }
+        ImGui::SameLine();
+        if (controls_menu::ResetConfirmButton("Reset this page", "resetpage")) {
+            ResetCurrentPage();
+        }
+        ImGui::SameLine();
+        if (controls_menu::ResetConfirmButton("Reset ALL settings", "resetall")) {
+            ResetEverything();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Quit game...")) {
+            g_exitPromptOpen = true;
+        }
+        Hint("LB / RB: change tab   D-pad: move   A: select   B: back   Back + Start, F10, F1 or Esc: close");
+        ImGui::Separator();
+
+        static constexpr std::array<const char*, 6> kTabs = {"Display", "Graphics", "Audio", "Controls", "System", "About"};
+        if (ImGui::BeginTabBar("##settingsTabs")) {
+            for (int tab = 0; tab < static_cast<int>(kTabs.size()); ++tab) {
+                const ImGuiTabItemFlags flags = g_tabRequest == tab ? ImGuiTabItemFlags_SetSelected : 0;
+                if (!ImGui::BeginTabItem(kTabs[static_cast<size_t>(tab)], nullptr, flags)) {
+                    continue;
+                }
+                g_tab = tab;
+                switch (tab) {
+                case 0: DrawDisplayPage(); break;
+                case 1: DrawGraphicsPage(); break;
+                case 2:
+                    DrawAudioSettings();
+                    DrawRebindPrompt();
+                    break;
+                case 3:
+                    controls_menu::Draw(&DrawControllerSettings);
+                    DrawRebindPrompt();
+                    break;
+                case 4: DrawSystemPage(); break;
+                default: DrawAboutPage(); break;
+                }
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+        g_tabRequest = -1;
     }
     ImGui::End();
-    if (!ImGui::BeginMainMenuBar()) return;
-
-    ImGui::TextUnformatted("WiiCompiled");
-    ImGui::Separator();
-    const auto resolutionIt = std::find_if(kResolutions.begin(), kResolutions.end(), [](const ResolutionItem& item) {
-        return std::fabs(item.scale - g_resolutionScale) < 0.001f;
-    });
-    const char* resolutionLabel = resolutionIt != kResolutions.end() ? resolutionIt->label : "Custom";
-    const std::string resolutionMenuLabel = std::string("Resolution: ") + resolutionLabel;
-    if (ImGui::BeginMenu(resolutionMenuLabel.c_str())) {
-        for (const auto& resolution : kResolutions) {
-            const bool selected = std::fabs(resolution.scale - g_resolutionScale) < 0.001f;
-            const bool disabled = IsHighFrameRateMode() && IsHighResolutionScale(resolution.scale);
-            ImGui::BeginDisabled(disabled);
-            const bool clicked = ImGui::MenuItem(resolution.label, nullptr, selected);
-            ImGui::EndDisabled();
-            if (clicked) {
-                SetResolutionScale(resolution.scale);
-            }
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Graphics")) {
-        DrawGraphicsSettings();
-        ImGui::EndMenu();
-    }
-
-    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, viewport->Size.y * 0.75f));
-    if (ImGui::BeginMenu("Controller settings")) {
-        DrawControllerSettings();
-        // Nest capture under this menu so opening/closing the modal preserves
-        // the settings popup and its current port and scroll position.
-        DrawRebindPrompt();
-        ImGui::EndMenu();
-    }
-
-    const std::string audioLabel = g_audioMuted
-        ? "Audio: Muted"
-        : "Audio: " + std::to_string(g_audioVolumePercent) + "%";
-    // Keep the popup ID stable while the Master slider changes the visible
-    // label. Without the ### suffix, ImGui treats every new percentage as a
-    // different menu and closes the popup on the first drag update.
-    const std::string audioMenuLabel = audioLabel + "###AudioSettingsMenu";
-    if (ImGui::BeginMenu(audioMenuLabel.c_str())) {
-        DrawAudioSettings();
-        DrawRebindPrompt();
-        ImGui::EndMenu();
-    }
-
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float hideWidth = ImGui::CalcTextSize("Hide (F10)").x + style.FramePadding.x * 2.0f;
-    const float exitWidth = ImGui::CalcTextSize("X").x + style.FramePadding.x * 2.0f;
-    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
-                                  ImGui::GetWindowWidth() - hideWidth - exitWidth - style.ItemSpacing.x - 8.0f));
-    if (ImGui::MenuItem("Hide (F10)")) {
-        SetTopBarVisible(false);
-    }
-    if (ImGui::MenuItem("X")) {
-        g_exitPromptOpen = true;
-    }
-    ImGui::EndMainMenuBar();
+    g_popupWasOpen = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ||
+                     ImGui::IsAnyItemActive();
 }
 
 // Steam's desktop layout maps B to Escape on Valve controllers.
@@ -1612,7 +2012,7 @@ void PersistDisplayModeIfChanged() {
 }
 
 void ApplyInputBlockState() {
-    const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
+    const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active || g_revertActive ||
                          g_exitPromptOpen || g_restartPromptOpen || g_topBarVisible || StartupScreenVisible();
     PADBlockInput(blocked);
     InputBindings::SetInputBlocked(blocked);
@@ -1620,6 +2020,9 @@ void ApplyInputBlockState() {
 } // namespace
 
 void InitializeRuntimeSettings() noexcept {
+    AimInput::Install();
+    aurora_set_resampler(static_cast<AuroraSampler>(SystemSettings::Get().scalingFilter));
+    SystemSettings::EnsureVersionStamp();
     PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
     InputBindings::Reload();
     controller_mapping_wizard::LoadPersistedMappings();
@@ -1662,13 +2065,25 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         if (ev->type != AURORA_SDL_EVENT) {
             continue;
         }
+        AimInput::HandleSdlEvent(ev->sdl);
         controller_mapping_wizard::HandleSdlEvent(ev->sdl);
+        if (SystemSettings::Get().startupCover == SystemSettings::StartupCover::Button &&
+            (ev->sdl.type == SDL_EVENT_KEY_DOWN || ev->sdl.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+             ev->sdl.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || ev->sdl.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN) &&
+            !g_topBarVisible) {
+            NotifyStrapInputAccepted();
+        }
+        const bool bindCapture = controls_menu::Capturing();
+        if (bindCapture) {
+            if (IsMouseActivity(ev->sdl)) g_lastMouseActivity = Clock::now();
+            continue;
+        }
         if (g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_BACKSPACE) ||
                                 IsToggleKey(ev->sdl, SDL_SCANCODE_DELETE))) {
             CompleteRebind(g_rebind.kind == RebindKind::Controller ? PAD_NATIVE_BUTTON_DISABLED
                                                                   : static_cast<uint32_t>(PAD_KEY_INVALID));
         }
-        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
+        if (!g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_F10) || IsToggleKey(ev->sdl, SDL_SCANCODE_F1))) {
             SetTopBarVisible(!g_topBarVisible);
             ApplyInputBlockState();
         }
@@ -1679,7 +2094,9 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             RuntimeConfigFile::SetAudioMuted(g_audioMuted);
         }
         if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE)) {
-            if (g_restartPromptOpen) {
+            if (g_revertActive) {
+                RevertDisplay();
+            } else if (g_restartPromptOpen) {
                 g_restartPromptOpen = false;
             } else if (g_exitPromptOpen) {
                 g_exitPromptOpen = false;
@@ -1718,8 +2135,35 @@ void ReleaseControllers() noexcept {
     if (queued) SDL_Delay(120);
 }
 
+// Back + Start on gamepad 0 opens/closes the menu so a gamepad-only user can reach (and leave) it.
+static void PollGamepadMenuChord() {
+    static bool wasDown = false;
+    SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
+    const bool down = pad != nullptr && SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_BACK) &&
+                      SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_START);
+    if (down && !wasDown) {
+        SetTopBarVisible(!g_topBarVisible);
+        ApplyInputBlockState();
+    }
+    wasDown = down;
+}
+
+// ImGui navigates with the gamepad only while the menu is open.
+static void UpdateMenuNavigation() {
+    ImGuiIO& io = ImGui::GetIO();
+    const ImGuiConfigFlags navFlags = ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+    if (g_topBarVisible || g_revertActive) {
+        io.ConfigFlags |= navFlags;
+    } else {
+        io.ConfigFlags &= ~navFlags;
+    }
+}
+
 void Draw() noexcept {
     // ImGui is only touched on this thread; the render worker replays a frozen copy.
+    PollGamepadMenuChord();
+    PollMenuGamepad();
+    UpdateMenuNavigation();
     ApplyConfiguredMappings();
     PersistDisplayModeIfChanged();
     UpdateCursorAutoHide();
@@ -1731,8 +2175,10 @@ void Draw() noexcept {
     DrawTopBar();
     DrawExitPrompt();
     DrawRestartPrompt();
+    DrawRevertPrompt();
     controller_mapping_wizard::Draw();
     ApplyInputBlockState();
+    AimInput::UpdateWindowState(InputBindings::InputBlocked());
     DrawStartupScreen();
 }
 
@@ -1757,8 +2203,21 @@ void AdvancePresentedFrame() noexcept {
     // the game and must stay visible), so release the cover once the game has been presenting frames
     // for about two seconds; boot-shader readiness still gates it separately.
     constexpr uint64_t kAutoDismissFrame = 120;
-    if (g_presentedFrame == kAutoDismissFrame) {
-        NotifyStrapInputAccepted();
+    switch (SystemSettings::Get().startupCover) {
+    case SystemSettings::StartupCover::Auto:
+        if (g_presentedFrame == kAutoDismissFrame) {
+            NotifyStrapInputAccepted();
+        }
+        break;
+    case SystemSettings::StartupCover::Skip: {
+        bool expected = false;
+        if (g_strapInputAccepted.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            g_startupDismissFrame.store(0, std::memory_order_release);
+        }
+        break;
+    }
+    case SystemSettings::StartupCover::Button:
+        break;
     }
 }
 } // namespace settings_overlay

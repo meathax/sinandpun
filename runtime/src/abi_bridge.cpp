@@ -717,7 +717,19 @@ static std::vector<uint32_t>& WatchedTargets() {
 
 bool g_argsEnabled = !WatchedTargets().empty();
 
+extern "C" void SinDebugSnapshot(const char* why);
+
 void RecordArgs(uint32_t target, const CpuContext* ctx) {
+    static const uint32_t dumpOn = [] {
+        const char* v = std::getenv("SIN_DUMP_ON");
+        return v && *v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) : 0u;
+    }();
+    static std::atomic<bool> dumped{false};
+    if (dumpOn != 0 && target == dumpOn && !dumped.exchange(true)) {
+        std::fprintf(stderr, "[trace] SIN_DUMP_ON %08X r3=%08X r4=%08X r5=%08X: writing snapshot\n", target,
+                     ctx->gpr[3], ctx->gpr[4], ctx->gpr[5]);
+        SinDebugSnapshot("dump_on");
+    }
     static std::atomic<int> hits[64];
     const auto& watched = WatchedTargets();
     for (size_t i = 0; i < watched.size() && i < 64; ++i) {

@@ -111,9 +111,26 @@ def main():
     missing = []
     counts = {}
 
+    stubs = {}  # target -> stub address (far-jump stubs for REL24 beyond +-32 MB)
+    stub_base = (end + 31) & ~31
+
+    def far_stub(target):
+        # lis r0,hi ; ori r0,r0,lo ; mtctr r0 ; bctr  (r0 is never an argument register; r12 must survive: the MWCC __ptmf_scall thunk takes the PTMF pointer in r12)
+        if target not in stubs:
+            at = stub_base + 16 * len(stubs)
+            stubs[target] = at
+            need = at + 16 - base
+            if len(img) < need:
+                img.extend(bytes(need - len(img)))
+            struct.pack_into('>IIII', img, at - base, 0x3C000000 | ((target >> 16) & 0xFFFF),
+                             0x60000000 | (target & 0xFFFF), 0x7C0903A6, 0x4E800420)
+        return stubs[target]
+
     def apply(loc, val, ty):
         o = loc - base
         counts[ty] = counts.get(ty, 0) + 1
+        if ty == R_REL24 and not (-0x2000000 <= val - loc < 0x2000000):
+            val = far_stub(val)
         if ty in (R_ADDR32, R_UADDR32):
             struct.pack_into('>I', img, o, val & 0xFFFFFFFF)
         elif ty == R_ADDR16_LO:
@@ -152,6 +169,10 @@ def main():
         apply(locate(off), sel_syms[name], ty)
     symmap = {}
     skipped_exports = []
+    for target, at in stubs.items():
+        symmap[f'farjump_{target:08X}'] = at
+    if stubs:
+        end = stub_base + 16 * len(stubs)
     for name, si, off in m['exports']:
         if si not in sec_addr:
             skipped_exports.append(name)  # debug-section pseudo symbols (.dwarf_*)

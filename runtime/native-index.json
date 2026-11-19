@@ -2,7 +2,7 @@
   "format": "wiicompiled-runtime-native-index",
   "formatVersion": 2,
   "extractorVersion": 2,
-  "sourceDigest": "6c063e0b5c0edd6088a79bc588108ccad51ee979cc98e15c750a12b75fd112b2",
+  "sourceDigest": "989bce0b80e940bf44688065bbba58acb5a230d3bf37aa55f6ad39dcf37d1d9e",
   "registrations": [
     {
       "address": "0x8012B830",
@@ -1597,6 +1597,14 @@
       "modOverlay": "Unspecified"
     },
     {
+      "address": "0x801D7DE0",
+      "symbol": "GX__SetCopyClear_801d7de0",
+      "sourceFile": "hle/gx/gx_module_natives.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
       "address": "0x801D7E60",
       "symbol": "GX__SetCopyFilter_8016fa40",
       "sourceFile": "hle/gx/gx_copy.cpp",
@@ -2005,6 +2013,14 @@
       "modOverlay": "Unspecified"
     },
     {
+      "address": "0x801DAB20",
+      "symbol": "GX__SetFogRangeAdj_801dab20",
+      "sourceFile": "hle/gx/gx_module_natives.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
       "address": "0x801DAC30",
       "symbol": "GX__SetBlendMode_8017277c",
       "sourceFile": "hle/gx/gx_pixel.cpp",
@@ -2176,6 +2192,22 @@
       "address": "0x801DB490",
       "symbol": "GX__SetClipMode_8017351c",
       "sourceFile": "hle/gx/gx_pixel.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x8020EA08",
+      "symbol": "RSOLinkListFixed_HLE",
+      "sourceFile": "hle/os/os_rso.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x8020EA20",
+      "symbol": "RSOUnLinkList_HLE",
+      "sourceFile": "hle/os/os_rso.cpp",
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
       "modOverlay": "Unspecified"
@@ -2748,6 +2780,14 @@
       "scalarFloatArgumentRegisters": []
     },
     {
+      "address": "0x801D7DE0",
+      "argumentRegisters": [
+        "r3",
+        "r4"
+      ],
+      "scalarFloatArgumentRegisters": []
+    },
+    {
       "address": "0x801D7E60",
       "argumentRegisters": [
         "r3",
@@ -3214,6 +3254,15 @@
         "f3",
         "f4"
       ]
+    },
+    {
+      "address": "0x801DAB20",
+      "argumentRegisters": [
+        "r3",
+        "r4",
+        "r5"
+      ],
+      "scalarFloatArgumentRegisters": []
     },
     {
       "address": "0x801DAC30",
@@ -7567,6 +7616,27 @@
       }
     },
     {
+      "address": "0x801D7DE0",
+      "isPrecise": true,
+      "contract": {
+        "gprReadBeforeWriteMask": 24,
+        "gprPossibleWriteMask": 0,
+        "gprReturnMask": 0,
+        "fprReadBeforeWriteMask": 0,
+        "fprPossibleWriteMask": 0,
+        "fprReturnMask": 0,
+        "crReadBeforeWriteMask": 0,
+        "crPossibleWriteMask": 0,
+        "readsXerBeforeWrite": false,
+        "mayWriteXer": false,
+        "readsCtrBeforeWrite": false,
+        "mayWriteCtr": false,
+        "readsLrBeforeWrite": false,
+        "mayWriteLr": false,
+        "boundaryFlags": 0
+      }
+    },
+    {
       "address": "0x801D7E60",
       "isPrecise": true,
       "contract": {
@@ -8638,6 +8708,27 @@
       }
     },
     {
+      "address": "0x801DAB20",
+      "isPrecise": true,
+      "contract": {
+        "gprReadBeforeWriteMask": 56,
+        "gprPossibleWriteMask": 0,
+        "gprReturnMask": 0,
+        "fprReadBeforeWriteMask": 0,
+        "fprPossibleWriteMask": 0,
+        "fprReturnMask": 0,
+        "crReadBeforeWriteMask": 0,
+        "crPossibleWriteMask": 0,
+        "readsXerBeforeWrite": false,
+        "mayWriteXer": false,
+        "readsCtrBeforeWrite": false,
+        "mayWriteCtr": false,
+        "readsLrBeforeWrite": false,
+        "mayWriteLr": false,
+        "boundaryFlags": 0
+      }
+    },
+    {
       "address": "0x801DAC30",
       "isPrecise": true,
       "contract": {
@@ -9085,6 +9176,48 @@
         "gprReadBeforeWriteMask": 8,
         "gprPossibleWriteMask": 0,
         "gprReturnMask": 0,
+        "fprReadBeforeWriteMask": 0,
+        "fprPossibleWriteMask": 0,
+        "fprReturnMask": 0,
+        "crReadBeforeWriteMask": 0,
+        "crPossibleWriteMask": 0,
+        "readsXerBeforeWrite": false,
+        "mayWriteXer": false,
+        "readsCtrBeforeWrite": false,
+        "mayWriteCtr": false,
+        "readsLrBeforeWrite": false,
+        "mayWriteLr": false,
+        "boundaryFlags": 0
+      }
+    },
+    {
+      "address": "0x8020EA08",
+      "isPrecise": true,
+      "contract": {
+        "gprReadBeforeWriteMask": 56,
+        "gprPossibleWriteMask": 8,
+        "gprReturnMask": 8,
+        "fprReadBeforeWriteMask": 0,
+        "fprPossibleWriteMask": 0,
+        "fprReturnMask": 0,
+        "crReadBeforeWriteMask": 0,
+        "crPossibleWriteMask": 0,
+        "readsXerBeforeWrite": false,
+        "mayWriteXer": false,
+        "readsCtrBeforeWrite": false,
+        "mayWriteCtr": false,
+        "readsLrBeforeWrite": false,
+        "mayWriteLr": false,
+        "boundaryFlags": 0
+      }
+    },
+    {
+      "address": "0x8020EA20",
+      "isPrecise": true,
+      "contract": {
+        "gprReadBeforeWriteMask": 8,
+        "gprPossibleWriteMask": 8,
+        "gprReturnMask": 8,
         "fprReadBeforeWriteMask": 0,
         "fprPossibleWriteMask": 0,
         "fprReturnMask": 0,

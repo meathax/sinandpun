@@ -152,9 +152,9 @@ inline constexpr Facts kFacts[kCount] = {
     // Sin & Punishment: Star Successor (USA). Single-region project: region 0 is
     // the only one the translator ever selects (FromGameId falls back to 0 and
     // R2VE01 has no other-region build in this tree), rows 1/2 stay unused.
-    {"R2VE01", 'E', 0x52325645u, 0u, 0x804BA960u, "USA", "RVL-001(USA)", "LU", "NTSC", "US"},
-    {"R2VP01", 'P', 0x52325650u, 1u, 0x804BA960u, "EUR", "RVL-001(EUR)", "LEH", "PAL", "EU"},
-    {"R2VJ01", 'J', 0x5232564Au, 0u, 0x804BA960u, "JPN", "RVL-001(JPN)", "LJ", "NTSC", "JP"},
+    {"R2VE01", 'E', 0x52325645u, 0u, 0x804C68C0u, "USA", "RVL-001(USA)", "LU", "NTSC", "US"},
+    {"R2VP01", 'P', 0x52325650u, 1u, 0x804C68C0u, "EUR", "RVL-001(EUR)", "LEH", "PAL", "EU"},
+    {"R2VJ01", 'J', 0x5232564Au, 0u, 0x804C68C0u, "JPN", "RVL-001(JPN)", "LJ", "NTSC", "JP"},
 };
 
 inline const Facts& CurrentFacts() noexcept { return kFacts[static_cast<size_t>(Current())]; }

@@ -76,6 +76,7 @@
 #include "gx_worker.h"
 #include "hle_stubs.h"
 #include "runtime_config.h"
+#include "system_settings.h"
 #include "runtime_log.h"
 #include "runtime_product.h"
 #include "recomp_mod_loader.h"
@@ -750,6 +751,15 @@ void SetRuntimeExitCodeImpl(int code) {
 }
 
 } // namespace
+
+// Debug aid (SIN_DUMP_ON=<hex target>): snapshot guest memory when the arg tracer first sees a target.
+extern "C" void SinDebugSnapshot(const char* why) {
+    WriteFatalLogImpl(why);
+    if (std::getenv("SIN_DUMP_EXIT")) {
+        std::fflush(stderr);
+        std::_Exit(0);
+    }
+}
 
 namespace {
 
@@ -1481,6 +1491,8 @@ int RuntimeMain(int argc, char** argv) {
         auroraConfig.allowTextureDumps = auroraConfig.allowTextureReplacements &&
                                          RuntimeConfigFile::TextureDumps(false);
         auroraConfig.vsync = RuntimeConfigFile::Vsync();
+        auroraConfig.msaa = static_cast<uint32_t>(SystemSettings::Get().msaa);
+        auroraConfig.maxTextureAnisotropy = static_cast<uint16_t>(SystemSettings::Get().anisotropy);
         auroraConfig.desiredBackend = BACKEND_AUTO;
         const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
         ConfigureMkwDynamicAspect(configWidescreen, forceAspect,
