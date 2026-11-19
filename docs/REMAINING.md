@@ -28,3 +28,8 @@ Updated 2026-11-20. "Verified" means shown by a log or screenshot from this repo
 6. Robustness: missing indirect targets (jump tables), `module_coverage.py` residual 2 false positives, `InvokeIndirectJump` coverage across modules, OSFatal/crash artifacts, log size caps.
 7. Clean from-scratch build with only documented commands; translator tests; `git status` clean; nothing pushed.
 8. Docs: README, STATUS.md stage table, acceptance checklist evidence, license note (GPL-3, forked from Wiicompiled; no game data included).
+
+## D. Status 2026-11-20 evening
+- DONE: donor cleanup (docs/DONOR-CLEANUP.md), game-styled options overlay renders in game (build/screenshots/ov1_66s.png), entry_hooks mechanism proven (title-root hook fired). Stages 0-7 all load and render.
+- OPEN: reach the real title OPTIONS and pause OPTIONS pages in game to confirm the overlay opens from them (needs pointer-driven menu navigation in the script); stock Options page stays open under the overlay (see docs/MENU-HOOKS.md fallbacks).
+- OPEN: A->B->A swap, aim sweep/Classic extension/mouse, save/quit/reload, audibility, sepia scene recheck, performance pass, clean from-scratch build.
