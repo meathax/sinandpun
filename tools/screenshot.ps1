@@ -3,6 +3,7 @@ param(
     [string]$OutFile = "build\screenshots\latest.png"
 )
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;

@@ -316,7 +316,12 @@ extern "C" void PPCMtdec_8012e594()
         // region), and the callback's OSLoadContext then jumps to a NULL
         // SRR0. Arena-plausible addresses only.
         if (currentContext >= 0x80300000u && currentContext < 0x81800000u) {
-            cpu->gpr[3] = currentContext;
+            // __OSExceptionHandler(__OSException, OSContext*): exception number
+            // in r3 (__OS_EXCEPTION_DECREMENTER = 8), context in r4. The earlier
+            // attempt put the context in r3 and left r4 stale, so the callback
+            // jumped through a bogus context (crash: OSLoadContext 0x80000000).
+            cpu->gpr[3] = 8u;
+            cpu->gpr[4] = currentContext;
             ++callbackDepth;
             try {
                 MKW_GUEST_FUNC(801A7160)(cpu);
