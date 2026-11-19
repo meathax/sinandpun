@@ -46,6 +46,22 @@ virtual remote deterministically. Log lines `[bt] pointer cam=(x,y) stick R=.. L
 * the camera x/y are inverted relative to the stick by design (sensor-bar logic); whether the on-screen cursor moves
   the right way is NOT verified yet (needs a menu with a visible cursor).
 
+
+## Stage module results (autostage run, 90-150 s each, scripted idle player; fatal = crash artifact or fatal log line)
+
+| Autostage id | Module loaded (RSOLinkListFixed log) | Fatal | Frames presented | Screenshot evidence | Notes |
+|---|---|---|---|---|---|
+| 0 (normal menu path) | stg00, 1729 fns | none | 19,200 | uild/screenshots/m8a.png ("The Basics" tutorial, 60.1 fps) | tutorial, then gameplay |
+| 1 | stg01, 3050 fns | none | 17,400 | stage1.png, ix1s.png (HUD, bridge), fix1s.png (cutscene) | |
+| 2 | stg02, 2773 fns | none | 18,000 | stage2.png, fix2s.png (underwater gameplay + HUD) | |
+| 3 | stg05, 3643 fns | none | 17,400 | stage3.png (sepia HUD), fix4s.png boss | autostage 3 loads stg05 (id != module number) |
+| 4 | stg04, 2223 fns | none | 18,000 | no gameplay screenshot kept | run completed, see batch log uild/stage_matrix.txt |
+| 5 | stg03, 2164 fns | none | 17,400 | stage5.png, fix5s.png (desert bike gameplay) | autostage 5 loads stg03 |
+| 6 | stg06, 4896 fns | none | 9,000 | g6_90s.png (lava level, HUD, enemies) | |
+| 7 | stg07, 2775 fns | none | 9,000 | g7_90s.png (space stage) | |
+
+Audio mixer (SIN_AUDIO_LOG=1): 103-112 of 150 logged seconds had non-silent PCM blocks in stages 6 and 7 (up to 8 voices). Audibility on the real device is NOT verified.
+Not yet tested: A -> B -> A module swap, boss/credits/continue flow, save -> quit -> reload, Classic extension / mouse / aim sweep in game, the tabbed options menu in game.
 ## Known problems / not done
 
 * Title screen shows a pale rectangle top-left and no "press" text; right edge looks cut (window is 698x422, aspect

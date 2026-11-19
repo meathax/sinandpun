@@ -61,7 +61,6 @@
 
 #include "abi_bridge.h"
 #include "audio_backend.h"
-#include "boot_race.h"
 #include "guest_abi/guest_region.h"
 #include "guest_flat_memory.h"
 #include "gx_guest_write.h"
@@ -70,7 +69,6 @@
 #include "ppc_runtime.h"
 #include "aurora_events.h"
 #include "wiimote_host.h"
-#include "discord_presence.h"
 #include "steam_input_layout.h"
 #include "fiber_manager.h"
 #include "gx_worker.h"
@@ -238,7 +236,7 @@ const std::filesystem::path& GetRunLogDirectory() {
         const auto secs = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
 
         std::ostringstream name;
-        name << (RuntimeProduct::IsRetroRewind() ? "retro_rewind" : "base")
+        name << "base"
              << "_" << secs << "_pid" << pid;
         const std::filesystem::path directory = logRoot / name.str();
         std::filesystem::create_directories(directory, ec);
@@ -1427,27 +1425,21 @@ int RuntimeMain(int argc, char** argv) {
     
     std::string currentEntryLabel;
 
-    // `--headless`: with a boot race, run without a window, sound or dialogs.
+    // `--headless`: run without a window, sound or dialogs.
     g_headless = std::any_of(argv + 1, argv + argc,
                              [](const char* arg) { return std::string_view(arg) == "--headless"; });
 
     try {
         for (int i = 1; i < argc; ++i) {
-            if (std::string_view(argv[i]) != "--headless" && !BootRace::ParseArgument(argv[i])) {
+            if (std::string_view(argv[i]) != "--headless") {
                 throw std::invalid_argument(std::string("Unknown command-line option '") + argv[i] +
-                                            "'; the game runtime only accepts --race[=<course id>], --race-cpu and --headless, use Config.toml through the installed host.");
+                                            "'; the runtime only accepts --headless, use Config.toml for everything else.");
             }
-        }
-        if (g_headless && !BootRace::Requested()) {
-            throw std::invalid_argument("--headless needs --race[=<course id>] or --race-cpu");
         }
         if (g_headless) {
             AudioBackend::Instance().SetSilenced(true);
         }
         RuntimeConfigFile::LogLoadedConfig();
-        if (!g_headless && RuntimeConfigFile::DiscordPresenceEnabled()) {
-            DiscordPresence::Initialize(RuntimeConfigFile::DiscordClientId(), "Mario Kart Wii");
-        }
         SystemBridge::Initialize();
         TranslatedFunctionRegistry::Finalize();
 
@@ -1495,7 +1487,7 @@ int RuntimeMain(int argc, char** argv) {
         auroraConfig.maxTextureAnisotropy = static_cast<uint16_t>(SystemSettings::Get().anisotropy);
         auroraConfig.desiredBackend = BACKEND_AUTO;
         const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
-        ConfigureMkwDynamicAspect(configWidescreen, forceAspect,
+        ConfigureDynamicAspect(configWidescreen, forceAspect,
                                   auroraConfig.windowWidth, auroraConfig.windowHeight);
         VISetFrameBufferScale(resolutionMultiplier);
         // One table for both directions. RuntimeConfigFile::IsSupportedGraphicsApi
@@ -1559,15 +1551,12 @@ int RuntimeMain(int argc, char** argv) {
         aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
         Wiimote::Initialize();
         GxGuestWrite::InstallAuroraHooks();
-        UpdateMkwDynamicAspectSurface(auroraInfo.windowSize.native_fb_width,
+        UpdateDynamicAspectSurface(auroraInfo.windowSize.native_fb_width,
                                       auroraInfo.windowSize.native_fb_height);
         settings_overlay::InitializeRuntimeSettings();
         if (!g_headless) {
             SteamInputLayout::Initialize(RuntimeConfigFile::SteamInputOverrideEnabled(),
                                          RuntimeConfigFile::SteamInputAppId());
-        }
-        if (BootRace::Requested()) {
-            aurora_set_skip_unready_pipelines(false);
         }
         RT_LOG(RT_TAG_CONFIG) << "video.widescreen=" << (configWidescreen ? "true" : "false")
                   << " force_aspect=" << (forceAspect ? "true" : "false")
@@ -1578,7 +1567,7 @@ int RuntimeMain(int argc, char** argv) {
                   << auroraInfo.windowSize.native_fb_height
                   << " viewportPolicy=" << (forceAspect ? (configWidescreen ? "16:9" : "fit") : "stretch")
                   << " presentAspect="
-                  << (forceAspect ? (configWidescreen ? "16:9" : "4:3") : "surface (dynamic EGG canvas)")
+                  << (forceAspect ? (configWidescreen ? "16:9" : "4:3") : "surface")
                   << std::endl;
         g_auroraInitialized.store(true, std::memory_order_release);
         GxWorker::SetWaitCallback(ServiceGuestTimingDuringAuroraFrameWait);
@@ -1614,7 +1603,6 @@ int RuntimeMain(int argc, char** argv) {
         SteamInputLayout::Release();
         GxWorker::Stop();
         aurora_shutdown();
-        DiscordPresence::Shutdown();
         SetRuntimeExitCodeImpl(0);
         ShutdownProcessTranscript();
         return 0;
@@ -1635,7 +1623,6 @@ int RuntimeMain(int argc, char** argv) {
         Wiimote::Shutdown();
         GxWorker::Stop();
         aurora_shutdown();
-        DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
         return 1;
     } catch (const std::exception& ex) {
@@ -1650,7 +1637,6 @@ int RuntimeMain(int argc, char** argv) {
         Wiimote::Shutdown();
         GxWorker::Stop();
         aurora_shutdown();
-        DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
         return 1;
     }
@@ -1659,4 +1645,3 @@ int RuntimeMain(int argc, char** argv) {
 int main(int argc, char** argv) {
     return RuntimeMain(argc, argv);
 }
-extern "C" bool g_dynamicAspectRatioEnabled = false;

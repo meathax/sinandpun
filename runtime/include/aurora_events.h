@@ -1,6 +1,5 @@
 #pragma once
 
-#include "friend_code_keyboard.h"
 #include "settings_overlay.h"
 #include "steam_input_layout.h"
 #include "runtime_config.h"
@@ -19,15 +18,12 @@
 #include <windows.h>
 #endif
 
-extern "C" bool g_dynamicAspectRatioEnabled;
-void ConfigureMkwDynamicAspect(bool widescreen, bool forceAspect, uint32_t surfaceWidth, uint32_t surfaceHeight);
-void SetMkwForceAspect(bool enabled);
-void UpdateMkwDynamicAspectSurface(uint32_t surfaceWidth, uint32_t surfaceHeight);
-// Arms the "keep EGG::Frustum's projection scale" flag on every screen that
-// renders to a fixed-size offscreen target. Cheap and idempotent; called from
-// the GX viewport path so it beats bakes that never cross a frame boundary.
-void AssertMkwOffscreenScreenBypass();
-inline std::atomic_bool g_mkwDynamicAspectSurfacePending{false};
+void ConfigureDynamicAspect(bool widescreen, bool forceAspect, uint32_t surfaceWidth, uint32_t surfaceHeight);
+void SetForceAspect(bool enabled);
+// Donor-era name still called by settings_overlay.cpp; drop once that file uses SetForceAspect.
+inline void SetMkwForceAspect(bool enabled) { SetForceAspect(enabled); }
+void UpdateDynamicAspectSurface(uint32_t surfaceWidth, uint32_t surfaceHeight);
+inline std::atomic_bool g_dynamicAspectSurfacePending{false};
 
 namespace WindowPlacementPersistence {
 inline bool sizeDirty = false;
@@ -118,23 +114,22 @@ inline void ProcessAuroraEvents(const AuroraEvent* events) {
         // frame worker is intentionally waiting for begin permission. Joining
         // it here creates a circular wait. Record the newest native size and
         // apply it immediately after the next frame has been prepared.
-        g_mkwDynamicAspectSurfacePending.store(true, std::memory_order_release);
+        g_dynamicAspectSurfacePending.store(true, std::memory_order_release);
     }
     settings_overlay::HandleEvents(events);
-    FriendCodeKeyboard::HandleEvents(events);
     SteamInputLayout::HandleEvents(events);
 }
 
-inline void ApplyPendingMkwDynamicAspectSurface() {
+inline void ApplyPendingDynamicAspectSurface() {
     // The OS can adjust a window without a resize event reaching the queue
     // (observed with hidden windows clamped to the work area), so re-read the
     // surface at every frame boundary instead of only on queued events.
-    // UpdateMkwDynamicAspectSurface is idempotent and cheap for a stable size.
-    (void)g_mkwDynamicAspectSurfacePending.exchange(false, std::memory_order_acq_rel);
+    // UpdateDynamicAspectSurface is idempotent and cheap for a stable size.
+    (void)g_dynamicAspectSurfacePending.exchange(false, std::memory_order_acq_rel);
     uint32_t surfaceWidth = 0;
     uint32_t surfaceHeight = 0;
     AuroraGetSurfaceSize(&surfaceWidth, &surfaceHeight);
-    UpdateMkwDynamicAspectSurface(surfaceWidth, surfaceHeight);
+    UpdateDynamicAspectSurface(surfaceWidth, surfaceHeight);
 }
 
 void GxWorkerBeginFrame();
@@ -154,14 +149,14 @@ inline bool BeginAuroraFrame() {
             return false;
         }
         GxWorker::Submit([] { GxWorkerBeginFrame(); });
-        ApplyPendingMkwDynamicAspectSurface();
+        ApplyPendingDynamicAspectSurface();
         return true;
     }
     if (!aurora_begin_frame()) {
         return false;
     }
     SetAuroraFrameGxBegun(true);
-    ApplyPendingMkwDynamicAspectSurface();
+    ApplyPendingDynamicAspectSurface();
     return true;
 }
 
