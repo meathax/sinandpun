@@ -36,9 +36,16 @@ constexpr uint32_t kThreadListHeadAddr = 0x800000dcu;    // First thread in thre
 constexpr uint32_t kThreadListTailAddr = 0x800000e0u;    // Last added thread (tail of thread list)
 constexpr uint32_t kOSRunningContextAddr = 0x800000e4u;  // Currently running thread context
 
-const uint32_t kDefaultThreadContextAddr = MKW_GADDR(80347498);
-const uint32_t kIdleThreadContextAddr = MKW_GADDR(803478b0);
-const uint32_t kThreadQueueArrayAddr = MKW_GADDR(803477b0);
+// Scheduler constants retargeted from the os.a OSThread.o .bss layout,
+// anchored on the harvested IdleThread (0x8042A9B8, reloc-name transfer):
+//   member base = IdleThread - 0x6E0 = 0x8042A2D8
+//   DefaultThread @ +0x000 = 0x8042A2D8, RunQueue @ +0x318 = 0x8042A5F0
+//   (size 0x100 = kThreadQueueArrayBytes), IdleContext @ +0x418 = 0x8042A6F0.
+// The donor addresses (0x80347xxx) point into Sin .data where the queue walk
+// reads garbage and feeds LoadContext bogus threads (crash: ctx=0x80000000).
+const uint32_t kDefaultThreadContextAddr = MKW_GADDR(8042A2D8);
+const uint32_t kIdleThreadContextAddr = MKW_GADDR(8042A6F0);
+const uint32_t kThreadQueueArrayAddr = MKW_GADDR(8042A5F0);
 constexpr size_t kThreadQueueArrayBytes = 0x100u;
 const uint32_t kSwitchThreadCallbackPtrAddr = MKW_GADDR(80385ae0);
 const uint32_t kSchedulerReschedCounterAddr = MKW_GADDR(8038691c);
