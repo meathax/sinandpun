@@ -19,6 +19,9 @@ New-Item -ItemType Directory -Force (Split-Path $OutFile) | Out-Null
 $proc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 if (-not $proc) { Write-Output "window-not-found"; exit 1 }
 $h = $proc.MainWindowHandle
+# A minimised window captures as just its title bar: restore it (SW_RESTORE = 9) and let it repaint.
+[Win32]::ShowWindow($h, 9) | Out-Null
+Start-Sleep -Milliseconds 800
 $rect = New-Object Win32+RECT
 [Win32]::GetWindowRect($h, [ref]$rect) | Out-Null
 $w = $rect.Right - $rect.Left; $ht = $rect.Bottom - $rect.Top

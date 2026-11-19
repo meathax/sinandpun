@@ -162,8 +162,28 @@ PPC_NATIVE_OVERRIDE_VOID(801D8050, GX__SetDispCopyGamma_8016fc24, (uint32_t g), 
 // Copy Execution
 // ============================================================================
 
+extern std::atomic<uint64_t> g_gxBeginDebugCount;
+extern std::atomic<uint64_t> g_gxBeginDebugVerts;
+
 extern "C" void GX__CopyDisp_8016fc38(uint32_t da, uint32_t c) {
+    static std::atomic<int> s_copyLog{0};
+    const int copyIdx = s_copyLog.fetch_add(1);
+    if (copyIdx < 4 || copyIdx % 600 == 0) {
+        RT_LOGF(RT_TAG_GX, "GXCopyDisp #%d xfb=0x%08X clear=%u (GXBegin total=%llu verts=%llu)\n", copyIdx, da, c,
+                static_cast<unsigned long long>(g_gxBeginDebugCount.load()), static_cast<unsigned long long>(g_gxBeginDebugVerts.load()));
+    }
     EnsureAuroraFrameActive();
+    {
+        // Debug aid (SIN_GX_TEST_RED=1): force the EFB clear colour to red to tell a broken present
+        // path (window stays black) from draws that never reach the EFB (window turns red).
+        static const bool testRed = [] {
+            const char* v = std::getenv("SIN_GX_TEST_RED");
+            return v && *v && *v != '0';
+        }();
+        if (testRed) {
+            GXSetCopyClear(GXColor{255, 0, 0, 255}, 0xFFFFFF);
+        }
+    }
     if (GxWorker::ShouldDefer()) {
         // The worker drains like the inline path; EndAuroraFrame joins it before the next frame.
         GxWorker::Submit([da, c] {
@@ -181,6 +201,9 @@ extern "C" void GX__CopyDisp_8016fc38(uint32_t da, uint32_t c) {
         aurora_wait_for_frame_worker();
     }
     ++g_gxFrameCount;
+    if (copyIdx < 4) {
+        RT_LOGF(RT_TAG_GX, "GXCopyDisp #%d: copy done, marking XFB 0x%08X ready\n", copyIdx, da);
+    }
     VI_HLE_SetXfbReady(da);
     settings_overlay::Draw();
     // Seal, pace to the VI retrace boundary (Aurora renders the sealed frame

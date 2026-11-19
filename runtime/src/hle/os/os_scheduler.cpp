@@ -251,6 +251,11 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
                 if (RunnablePendingMask() != 0) {
                     break;
                 }
+                // The game's OS idle function (its asset loader) runs here, when nothing else is runnable.
+                OS_HLE_RunIdleSlice(cpu, 256);
+                if (RunnablePendingMask() != 0) {
+                    break;
+                }
                 VI_HLE_WaitForNextRetracePoll();
             }
 

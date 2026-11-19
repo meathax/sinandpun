@@ -335,6 +335,11 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
     }
 
     if (ctx) {
+        uint32_t breakPtCb = 0;
+        if (GX_HLE_TakeBreakPoint(&breakPtCb) && breakPtCb != 0) {
+            // GP breakpoint interrupt (see gx_breakpoint.cpp).
+            InvokeIndirectCpu(breakPtCb, ctx);
+        }
         ctx->gpr[3] = retraceValue;
         if (preCb) {
             InvokeIndirectCpu(preCb, ctx);
@@ -358,6 +363,16 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         const bool shouldPresentXfb = hasXfbReady && !isBlack && xfbMatches;
         const bool shouldPresentBlack = isBlack && frameActive;
         const bool shouldSubmit = frameActive && (shouldPresentXfb || shouldPresentBlack);
+        {
+            static std::atomic<int> s_presentLog{0};
+            const int n = s_presentLog.fetch_add(1);
+            if (n < 4 || n % 300 == 0) {
+                RT_LOG(RT_TAG_VI) << "[present] retrace=" << retraceValue << " hasXfb=" << hasXfbReady
+                                  << " black=" << isBlack << " readyXfb=0x" << std::hex << readyXfb
+                                  << " currentFb=0x" << currentFb << std::dec << " frameActive=" << frameActive
+                                  << " submit=" << shouldSubmit << std::endl;
+            }
+        }
 
         if (shouldSubmit) {
             if (!isBlack || settings_overlay::StartupScreenVisible()) {

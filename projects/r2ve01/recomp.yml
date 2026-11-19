@@ -25,8 +25,13 @@ translation:
   function_map:
     path: projects/r2ve01/MAP.txt
   allow_unsupported_instructions: false
+  # Guest spin loops that get a runtime poll call (GuestLoopPoll) at every basic-block entry, so the
+  # cooperative scheduler can preempt them. 0x800380D8 is the OS idle function (Sin's asset loader).
+  loop_poll_functions:
+    - 0x800380D8
 
 output:
   # Donor contract: the runtime CMake hard-codes <workspace>/generated for
   # data_sections_init.cpp / guest_symbol_table.cpp / build_shards/shards.cmake.
   root: generated
+

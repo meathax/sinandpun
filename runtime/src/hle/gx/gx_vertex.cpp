@@ -323,7 +323,12 @@ extern "C" void GX__Begin_8016f0f0(uint32_t t, uint32_t vf, uint32_t nv) {
     GxBeginImpl(t, vf, nv);
 }
 
+std::atomic<uint64_t> g_gxBeginDebugCount{0};
+std::atomic<uint64_t> g_gxBeginDebugVerts{0};
+
 static void GxBeginImpl(uint32_t t, uint32_t vf, uint32_t nv) {
+    g_gxBeginDebugCount.fetch_add(1, std::memory_order_relaxed);
+    g_gxBeginDebugVerts.fetch_add(nv, std::memory_order_relaxed);
     ApplyAuroraVtxStateForBegin(static_cast<GXVtxFmt>(vf));
     g_hleGxState.currentVtxFmt=(GXVtxFmt)vf; g_hleGxState.currentPrim=(GXPrimitive)t;
     g_hleGxState.vertsRemaining=nv; g_hleGxState.inBegin=nv!=0; g_hleGxState.auroraBeginCalled=false;

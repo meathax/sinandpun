@@ -2,7 +2,7 @@
   "format": "wiicompiled-runtime-native-index",
   "formatVersion": 2,
   "extractorVersion": 2,
-  "sourceDigest": "8f328f2bb5a968df74a0a2d44162b96ac9688ef3fed1da1dd4e08cd0097c8778",
+  "sourceDigest": "f08c839b936cb98b7ef2b758b3d30b1ecb3ce012c9ee7f810ccf848f55e96f34",
   "registrations": [
     {
       "address": "0x8012B830",
@@ -1376,6 +1376,14 @@
       "address": "0x801D5800",
       "symbol": "GX__GetCPUFifo_8016cf10",
       "sourceFile": "hle/gx/gx_init.cpp",
+      "isTranslatedOverride": false,
+      "excludesBaseTranslation": true,
+      "modOverlay": "Unspecified"
+    },
+    {
+      "address": "0x801D5900",
+      "symbol": "GXEnableBreakPt_HLE_801d5900",
+      "sourceFile": "hle/gx/gx_breakpoint.cpp",
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
       "modOverlay": "Unspecified"
@@ -6943,6 +6951,27 @@
     },
     {
       "address": "0x801D5800",
+      "isPrecise": true,
+      "contract": {
+        "gprReadBeforeWriteMask": 8,
+        "gprPossibleWriteMask": 0,
+        "gprReturnMask": 0,
+        "fprReadBeforeWriteMask": 0,
+        "fprPossibleWriteMask": 0,
+        "fprReturnMask": 0,
+        "crReadBeforeWriteMask": 0,
+        "crPossibleWriteMask": 0,
+        "readsXerBeforeWrite": false,
+        "mayWriteXer": false,
+        "readsCtrBeforeWrite": false,
+        "mayWriteCtr": false,
+        "readsLrBeforeWrite": false,
+        "mayWriteLr": false,
+        "boundaryFlags": 0
+      }
+    },
+    {
+      "address": "0x801D5900",
       "isPrecise": true,
       "contract": {
         "gprReadBeforeWriteMask": 8,

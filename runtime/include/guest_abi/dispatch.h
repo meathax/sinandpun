@@ -53,6 +53,10 @@ inline void MaybeServicePeriodicAlarms(CpuContext* ctx) {
 }
 } // namespace PeriodicAlarmService
 
+// Emitted by the translator at basic-block entries of functions in translation.loop_poll_functions
+// (guest spin loops); yields to the host idle loop when running as the idle coroutine (os_idle.cpp).
+void GuestLoopPoll(CpuContext* ctx);
+
 inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
     PeriodicAlarmService::MaybeServicePeriodicAlarms(ctx);
     if (__builtin_expect(CallTrace::g_enabled, 0)) {

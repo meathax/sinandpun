@@ -89,7 +89,11 @@ extern "C" void OS__LoadContext_801a1f58(CpuContext* ctx)
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t guestContextAddr = cpu->gpr[3];
 
-    RT_LOG(RT_TAG_OS) << "OS__LoadContext_801a1f58 called: ctx=0x" << std::hex << guestContextAddr << std::dec << std::endl;
+    static std::atomic<int> s_loadLog{0};
+    const bool logLoad = s_loadLog.fetch_add(1) < 8;
+    if (logLoad) {
+        RT_LOG(RT_TAG_OS) << "OS__LoadContext_801a1f58 called: ctx=0x" << std::hex << guestContextAddr << std::dec << std::endl;
+    }
 
     if (guestContextAddr == 0) {
         RT_LOG(RT_TAG_OS) << "OS__LoadContext: FATAL - null context address!" << std::endl;
@@ -111,7 +115,7 @@ extern "C" void OS__LoadContext_801a1f58(CpuContext* ctx)
         // A LoadContext for a DIFFERENT context (a real thread switch made by
         // the handler) still takes the normal path below.
         if (g_decrementerCallbackDepth > 0 && guestContextAddr == g_simulatedDecrementerContext) {
-            RT_LOG(RT_TAG_OS) << "OS__LoadContext: simulated-decrementer rfi to the interrupted "
+            if (logLoad) RT_LOG(RT_TAG_OS) << "OS__LoadContext: simulated-decrementer rfi to the interrupted "
                       "execution (guest SRR0 0x" << std::hex << srr0 << " is stale, ignored)"
                       << std::dec << std::endl;
             throw DecrementerExceptionReturn{};

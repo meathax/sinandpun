@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -619,9 +621,58 @@ bool g_enabled = [] {
     return v && *v && *v != '0';
 }();
 
+// SIN_CALLPROF=1: count every guest call that passes the dispatch hook and print the 40 hottest
+// targets to stderr every 10 s ("[prof] addr count"), then reset. Shows what runs per frame.
+static std::atomic<uint32_t>* ProfCounts() {
+    static std::atomic<uint32_t>* counts = [] {
+        auto* p = static_cast<std::atomic<uint32_t>*>(std::calloc(0x01800000u / 4, sizeof(uint32_t)));
+        return p;
+    }();
+    return counts;
+}
+
+static bool ProfEnabled() {
+    static const bool on = [] {
+        const char* v = std::getenv("SIN_CALLPROF");
+        if (!(v && *v && *v != '0')) return false;
+        std::thread([] {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+                std::vector<std::pair<uint32_t, uint32_t>> rows;
+                std::atomic<uint32_t>* c = ProfCounts();
+                for (uint32_t i = 0; i < 0x01800000u / 4; ++i) {
+                    const uint32_t n = c[i].exchange(0, std::memory_order_relaxed);
+                    if (n) rows.emplace_back(n, 0x80000000u + i * 4);
+                }
+                std::sort(rows.rbegin(), rows.rend());
+                std::fprintf(stderr, "[prof] ---- %zu distinct targets in the last 10 s\n", rows.size());
+                for (size_t r = 0; r < rows.size() && r < 25; ++r) {
+                    std::fprintf(stderr, "[prof] %08X %u\n", rows[r].second, rows[r].first);
+                }
+                size_t shown = 0;
+                for (size_t r = 0; r < rows.size() && shown < 60; ++r) {
+                    const uint32_t a = rows[r].second;
+                    if (a < 0x80150000u || a >= 0x801F0000u) {
+                        std::fprintf(stderr, "[prof-game] %08X %u\n", a, rows[r].first);
+                        ++shown;
+                    }
+                }
+                std::fflush(stderr);
+            }
+        }).detach();
+        return true;
+    }();
+    return on;
+}
+
+static const bool g_profInit = ProfEnabled();
+
 void Record(uint32_t target) {
     constexpr uint32_t kBase = 0x80000000u;
     constexpr uint32_t kSpan = 0x01800000u;
+    if (g_profInit && target >= kBase && target < kBase + kSpan) {
+        ProfCounts()[(target - kBase) >> 2].fetch_add(1, std::memory_order_relaxed);
+    }
     static std::atomic<uint64_t> seen[(kSpan / 4 + 63) / 64];
     static std::atomic<uint32_t> counter{0};
     static std::mutex fileMutex;

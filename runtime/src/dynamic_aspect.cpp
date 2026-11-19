@@ -14,6 +14,7 @@ extern "C" int g_gxFrameCount;
 
 namespace {
 
+constexpr bool kEggScreenRecordsEnabled = false;
 bool g_widescreen = true;
 bool g_forceAspect = false;
 std::atomic_bool g_requestedForceAspect{false};
@@ -115,6 +116,9 @@ void SweepGfxNodeList(uint32_t list, bool offscreenList) {
 // record 2), so without this bypass they'd inherit the expansion and render vertically squashed.
 // Re-arms every scene transition since the offscreen renderer is a per-scene singleton.
 void AssertOffscreenScreenBypass() {
+    if (!kEggScreenRecordsEnabled) {
+        return; // MKWii-only structures (see ApplyEggScreenRecords).
+    }
     SweepGfxNodeList(kMkwGfxDrawList, /*offscreenList=*/false);
     SweepGfxNodeList(kMkwGfxOffscreenList, /*offscreenList=*/true);
 }
@@ -128,6 +132,12 @@ void WriteEggScreenRecord(uint32_t recordAddr, uint32_t width) {
 }
 
 void ApplyEggScreenRecords(uint32_t surfaceWidth, uint32_t surfaceHeight) {
+    // Mario Kart Wii only: this rewrites EGG::Screen records at MKWii guest addresses and calls guest
+    // functions there. Sin & Punishment has no EGG engine, so those addresses are unrelated game
+    // data; writing them corrupts memory. Sin keeps only the Aurora viewport policy below.
+    if (!kEggScreenRecordsEnabled) {
+        return;
+    }
     using namespace MkwDynamicAspect;
     if (g_forceAspect) {
         surfaceWidth = g_widescreen ? 16u : 4u;

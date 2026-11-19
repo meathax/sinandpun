@@ -292,7 +292,8 @@ int RunEmitBuildShards(string[] argsTail)
             string.IsNullOrWhiteSpace(resolvedProfile) ? null : Path.GetFullPath(resolvedProfile),
             string.IsNullOrWhiteSpace(retroCpp) ? null : Path.GetFullPath(retroCpp),
             NativeIndex: nativeIndex,
-            Region: GuestRegions.FromGameId(project.Identity.GameId)));
+            Region: GuestRegions.FromGameId(project.Identity.GameId),
+            LoopPollFunctions: (project.Translation.LoopPollFunctions ?? Array.Empty<uint>()).ToHashSet()));
         Console.WriteLine("[translator] emitted stable translated build graph");
         Console.WriteLine($"  base functions: {result.BaseFunctionCount:N0}");
         Console.WriteLine($"  shared base functions: {result.SharedBaseFunctionCount:N0}");

@@ -33,6 +33,10 @@ void Audio_HLE_Poll(CpuContext* ctx);
 void Audio_HLE_PollDeferred();
 bool OS_HLE_InterruptsEnabled() noexcept;
 extern "C" void OS_HLE_ProcessAlarmsDeferred(int maxToProcess);
+// GX command-processor breakpoint emulation (gx_breakpoint.cpp): true once per GXEnableBreakPt.
+bool GX_HLE_TakeBreakPoint(uint32_t* callback);
+// Game OS idle function (the asset loader) run as a coroutine from the scheduler idle loop (os_idle.cpp).
+extern "C" void OS_HLE_RunIdleSlice(CpuContext* cpu, int maxResumes);
 extern "C" void OS_HLE_BeginDeferredGuestCallbacks();
 extern "C" void OS_HLE_EndDeferredGuestCallbacks();
 

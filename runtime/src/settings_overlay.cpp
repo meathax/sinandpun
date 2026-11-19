@@ -1750,5 +1750,15 @@ void NotifyStrapInputAccepted() noexcept {
     }
 }
 
-void AdvancePresentedFrame() noexcept { ++g_presentedFrame; }
+void AdvancePresentedFrame() noexcept {
+    ++g_presentedFrame;
+    // The startup cover was built around Mario Kart Wii's wrist-strap scene, which signalled
+    // NotifyStrapInputAccepted(). Sin & Punishment has no such hook (its own strap screen is part of
+    // the game and must stay visible), so release the cover once the game has been presenting frames
+    // for about two seconds; boot-shader readiness still gates it separately.
+    constexpr uint64_t kAutoDismissFrame = 120;
+    if (g_presentedFrame == kAutoDismissFrame) {
+        NotifyStrapInputAccepted();
+    }
+}
 } // namespace settings_overlay

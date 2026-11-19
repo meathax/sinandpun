@@ -925,6 +925,14 @@ extern "C" int32_t DVDReadPrio_8015E834(uint32_t fileInfoPtr, uint32_t bufferPtr
         uLength = entry.size - uOffset;
     }
 
+    {
+        static std::atomic<int> s_readLog{0};
+        if (s_readLog.fetch_add(1) < 4000) {
+            RT_LOG(RT_TAG_DVD) << "read " << HostPathText(entry.hostPath) << " off=0x" << std::hex << uOffset
+                               << " len=0x" << uLength << std::dec << std::endl;
+        }
+    }
+
     if (uLength != 0 && !Memory::Contains(bufferPtr, uLength)) {
         return DvdReadFatal(fileInfoPtr, HostPathText(entry.hostPath), offset, uLength,
                             "DVD read destination is outside guest memory");
