@@ -207,7 +207,7 @@ bool ProcessAlarmQueue(CpuContext* cpu, int maxToProcess)
                     cpu->gpr[5] = 0;
                     cpu->gpr[6] = 0;
                     cpu->gpr[7] = handler;
-                    MKW_GUEST_FUNC(801A0620)(cpu);
+                    MKW_GUEST_FUNC(801A6CF0)(cpu);  // Sin InsertAlarm (SDK-verified; donor 0x801A0620 is their layout's InsertAlarm)
                 }
 
                 if (handler != 0) {
@@ -425,7 +425,7 @@ extern "C" void OS__SetPeriodicAlarm_801a08e0(CpuContext* ctx)
 
     cpu->gpr[3] = startHi;
     cpu->gpr[4] = startLo;
-    MKW_GUEST_FUNC(801AADE0)(cpu);
+    MKW_GUEST_FUNC(801B0D60)(cpu);  // Sin __OSTimeToSystemTime (donor 0x801AADE0 = their OS::__TimeToSystemTime)
     Memory::Write32(alarm + 0x20u, cpu->gpr[3]);
     Memory::Write32(alarm + 0x24u, cpu->gpr[4]);
 
@@ -433,7 +433,7 @@ extern "C" void OS__SetPeriodicAlarm_801a08e0(CpuContext* ctx)
     cpu->gpr[5] = 0;
     cpu->gpr[6] = 0;
     cpu->gpr[7] = handler;
-    MKW_GUEST_FUNC(801A0620)(cpu);
+    MKW_GUEST_FUNC(801A6CF0)(cpu);  // Sin InsertAlarm (donor 0x801A0620 = their InsertAlarm)
 
     cpu->gpr[3] = static_cast<uint32_t>(OS__RestoreInterrupts_801a65d4(level));
 }
