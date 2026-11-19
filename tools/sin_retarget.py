@@ -42,6 +42,10 @@ BLOCKLIST_FILES = {
     "src/music_attenuation.cpp",
     "src/recomp_mod_loader.cpp",
     "src/hle/gx/gx_dynamic_aspect.h",
+    # Abort-by-design donor stubs: their retargeted literals land on unrelated
+    # Sin functions (first casualty: BTE_Init 0x801737F8 excluded from
+    # translation by GX_FATAL_STUB). Donor stub policy does not transfer.
+    "src/hle/gx/gx_fatal_stubs.cpp",
 }
 
 OVERRIDE_RE = re.compile(
