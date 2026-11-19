@@ -310,16 +310,23 @@ extern "C" void PPCMtdec_8012e594()
     static thread_local int callbackDepth = 0;
     if (callbackDepth == 0) {
         CpuContext* cpu = &GetPersistentCpuContext();
-        cpu->gpr[3] = ::Memory::Read32(0x800000E4u);  // __OSCurrentContext
-        ++callbackDepth;
-        try {
-            MKW_GUEST_FUNC(801A7160)(cpu);
-        } catch (...) {
+        const uint32_t currentContext = ::Memory::Read32(0x800000E4u);  // __OSCurrentContext
+        // Only preempt when a real thread context exists: at boot the global
+        // can hold a non-thread value (observed 0x80000000, the boot-info
+        // region), and the callback's OSLoadContext then jumps to a NULL
+        // SRR0. Arena-plausible addresses only.
+        if (currentContext >= 0x80300000u && currentContext < 0x81800000u) {
+            cpu->gpr[3] = currentContext;
+            ++callbackDepth;
+            try {
+                MKW_GUEST_FUNC(801A7160)(cpu);
+            } catch (...) {
+                --callbackDepth;
+                throw;
+            }
             --callbackDepth;
-            throw;
+            SelectThread_801a9c08(cpu);
         }
-        --callbackDepth;
-        SelectThread_801a9c08(cpu);
     }
 }
 PPC_NATIVE_OVERRIDE_VOID(8015E7D0, PPCMtdec_8012e594, (), ());
