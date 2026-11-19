@@ -47,3 +47,11 @@ extern "C" void OS_HLE_EndDeferredGuestCallbacks();
 #define PPC_NATIVE_OVERRIDE_VOID(addr_hex, name, arg_list, call_list) \
     [[maybe_unused]] static void native_signature_##addr_hex arg_list { name call_list; } \
     REGISTER_NATIVE_FUNCTION(0x##addr_hex, name)
+
+// Sin & Punishment retarget: natives whose donor (MKWii PAL) address has no
+// verified R2VE01 counterpart yet are mechanically renamed to these by
+// tools/sin_retarget.py. They expand to nothing: the guest's own translated
+// function executes instead of a wrong-address hijack. The donor address
+// literal stays visible in the call site for the recovery follow-up.
+#define SIN_DISABLED_NATIVE_OVERRIDE(...)
+#define SIN_DISABLED_NATIVE_OVERRIDE_VOID(...)
