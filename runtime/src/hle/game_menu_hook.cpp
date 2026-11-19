@@ -25,6 +25,7 @@
 #include "memory.h"
 #include "runtime_log.h"
 #include "settings_overlay.h"
+#include "virtual_remote.h"
 
 #include <chrono>
 #include <cstdint>
@@ -100,6 +101,9 @@ bool PageEntered(PageTracker& page, uint32_t menu, uint32_t flags) {
     return entered;
 }
 
+bool g_openedByHook = false;
+bool g_sawOpen = false;
+
 void OpenOverlayFromPage(PageTracker& page, uint32_t menu) {
     if (settings_overlay::IsOpenFromGame()) {
         return;
@@ -107,6 +111,33 @@ void OpenOverlayFromPage(PageTracker& page, uint32_t menu) {
     RT_LOGF(RT_TAG_HLE, "game-menu: OPTIONS chosen in the %s menu (menu object 0x%08X) -> recomp settings overlay\n",
             page.name, menu);
     settings_overlay::OpenFromGame();
+    g_openedByHook = true;
+    g_sawOpen = false;
+    if (const char* v = std::getenv("SIN_MENU_AUTOCLOSE")) {  // debug: dismiss the overlay after <s> seconds
+        const int seconds = std::atoi(v);
+        if (seconds > 0) {
+            std::thread([seconds] {
+                std::this_thread::sleep_for(std::chrono::seconds(seconds));
+                settings_overlay::CloseFromGame();
+            }).detach();
+        }
+    }
+}
+
+// The stock Options page is still alive under our overlay. When the overlay has been dismissed, press B once on the
+// virtual remote so the page closes itself and the player lands back on the parent menu.
+void ServicePostClose() {
+    if (!g_openedByHook) {
+        return;
+    }
+    if (settings_overlay::IsOpenFromGame()) {
+        g_sawOpen = true;
+    } else if (g_sawOpen) {
+        g_openedByHook = false;
+        g_sawOpen = false;
+        RT_LOGF(RT_TAG_HLE, "game-menu: overlay closed -> closing the stock Options page (B)\n");
+        VirtualRemote::InjectCancel(150);
+    }
 }
 
 PageTracker g_titleOptions{"title"};
@@ -119,6 +150,7 @@ bool g_autoOpened = false;
 
 static void TitleOptionsPage(CpuContext* ctx) {
     const uint32_t menu = ctx->gpr[3];
+    ServicePostClose();
     if (PageEntered(g_titleOptions, menu, ReadFlags(menu))) {
         OpenOverlayFromPage(g_titleOptions, menu);
     }
@@ -126,6 +158,7 @@ static void TitleOptionsPage(CpuContext* ctx) {
 
 static void PauseOptionsPage(CpuContext* ctx) {
     const uint32_t menu = ctx->gpr[3];
+    ServicePostClose();
     if (PageEntered(g_pauseOptions, menu, ReadFlags(menu))) {
         OpenOverlayFromPage(g_pauseOptions, menu);
     }

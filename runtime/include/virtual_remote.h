@@ -16,4 +16,8 @@ namespace VirtualRemote {
 // present (or SIN_VIRTUAL_REMOTE=1 forces it for testing).
 Bluetooth::RemoteHost& Host();
 
+// Presses the game's B / cancel button on the virtual remote for `millis` ms (used to close the stock Options page
+// once the recomp settings overlay that replaced it has been dismissed). Thread-safe.
+void InjectCancel(int millis);
+
 } // namespace VirtualRemote

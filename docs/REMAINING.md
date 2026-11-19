@@ -33,3 +33,7 @@ Updated 2026-11-20. "Verified" means shown by a log or screenshot from this repo
 - DONE: donor cleanup (docs/DONOR-CLEANUP.md), game-styled options overlay renders in game (build/screenshots/ov1_66s.png), entry_hooks mechanism proven (title-root hook fired). Stages 0-7 all load and render.
 - OPEN: reach the real title OPTIONS and pause OPTIONS pages in game to confirm the overlay opens from them (needs pointer-driven menu navigation in the script); stock Options page stays open under the overlay (see docs/MENU-HOOKS.md fallbacks).
 - OPEN: A->B->A swap, aim sweep/Classic extension/mouse, save/quit/reload, audibility, sepia scene recheck, performance pass, clean from-scratch build.
+
+## E. Menu hook verified (2026-11-20)
+- Title OPTIONS and pause OPTIONS both open the game-styled overlay (logs 'OPTIONS chosen in the title/pause menu'; screenshots build/screenshots/nav2_sheet.png, pa2_sheet.png). Closing the overlay auto-closes the stock Options page (pa3_sheet.png).
+- Scripted route: see lesson 'Reaching Sin pointer-driven menus'. Script syntax now has @u/v absolute pointer; SIN_MENU_AUTOCLOSE, SIN_OPEN_OPTIONS_AT are debug switches.

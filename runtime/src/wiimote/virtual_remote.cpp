@@ -31,6 +31,15 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using Report = std::vector<uint8_t>;
 
+// InjectCancel(): press B until this deadline (steady-clock milliseconds).
+std::atomic<long long> g_injectCancelUntilMs{0};
+
+long long NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+}
+
+bool InjectActive() { return NowMs() < g_injectCancelUntilMs.load(std::memory_order_relaxed); }
+
 // Wii Remote button bits (the two core-button bytes of every input report).
 constexpr uint16_t kBtnLeft = 0x0100, kBtnRight = 0x0200, kBtnDown = 0x0400, kBtnUp = 0x0800, kBtnPlus = 0x1000;
 constexpr uint16_t kBtnTwo = 0x0001, kBtnOne = 0x0002, kBtnB = 0x0004, kBtnA = 0x0008, kBtnMinus = 0x0010,
@@ -143,6 +152,8 @@ private:
         float rx = 0, ry = 0;          // aim stick, raw
         bool precision = false, recenter = false;
         bool blocked = false, scripted = false;
+        bool absPtr = false;  // scripted absolute pointer (screen fractions)
+        float au = 0.5f, av = 0.5f;
     };
 
     void RefreshSettings() {
@@ -283,6 +294,8 @@ private:
         uint16_t buttons = 0;
         bool c = false, z = false;
         float rx = 0, ry = 0, lx = 0, ly = 0;
+        bool absPtr = false;  // third field written as @u/v: pointer placed at screen fractions u,v
+        float au = 0.5f, av = 0.5f;
     };
 
     static std::vector<std::string> Split(const std::string& text, char sep) {
@@ -339,7 +352,12 @@ private:
                         y = static_cast<float>(std::atof(xy[1].c_str()));
                     }
                 };
-                if (parts.size() > 2) pair(parts[2], s.rx, s.ry);
+                if (parts.size() > 2 && !parts[2].empty() && parts[2][0] == '@') {
+                    pair(parts[2].substr(1), s.au, s.av);
+                    s.absPtr = true;
+                } else if (parts.size() > 2) {
+                    pair(parts[2], s.rx, s.ry);
+                }
                 if (parts.size() > 3) pair(parts[3], s.lx, s.ly);
                 out.push_back(s);
             }
@@ -376,6 +394,9 @@ private:
                 in.rx = s.rx;
                 in.ry = s.ry;
                 in.scripted = true;
+                in.absPtr = s.absPtr;
+                in.au = s.au;
+                in.av = s.av;
                 const auto cl = [&](uint16_t wii, uint8_t& mask, uint8_t bit) { if (s.buttons & wii) mask |= bit; };
                 cl(kBtnA, in.cl5, kClA);
                 cl(kBtnB, in.cl5, kClB);
@@ -400,6 +421,15 @@ private:
 
     // Bindings (gamepad, keyboard, mouse) -> remote state. Called with the mutex held; side-effect free.
     Input ReadInput() {
+        Input in = ReadInputBase();
+        if (InjectActive()) {
+            in.buttons |= kBtnB;
+            in.cl5 |= kClB;
+        }
+        return in;
+    }
+
+    Input ReadInputBase() {
         using AimSettings::Action;
         Input in;
         if (ScriptedInput(in)) return in;
@@ -537,6 +567,10 @@ private:
         if (in.blocked) {
             m_arbiter.prevStick = m_arbiter.prevMouse = false;
             m_classicFilter = DualAnalog::StickFilter{};
+            return;
+        }
+        if (in.scripted && in.absPtr && m_scheme != AimSettings::Scheme::Classic) {
+            DualAnalog::NormalizedToCamera(m_config, in.au, in.av, 1.0f, 1.0f, m_pointer.x, m_pointer.y);
             return;
         }
         const AimSettings::MouseConfig& mouse = m_settings.mouse;
@@ -749,6 +783,10 @@ private:
 Bluetooth::RemoteHost& Host() {
     static CompositeHost* host = new CompositeHost();
     return *host;
+}
+
+void InjectCancel(int millis) {
+    g_injectCancelUntilMs.store(NowMs() + (millis > 0 ? millis : 0), std::memory_order_relaxed);
 }
 
 } // namespace VirtualRemote
