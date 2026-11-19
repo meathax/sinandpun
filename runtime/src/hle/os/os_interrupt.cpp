@@ -240,8 +240,8 @@ PPC_NATIVE_OVERRIDE(801ACB90, OS____InterruptInit_801a661c, uint32_t, (uint32_t 
 PPC_NATIVE_OVERRIDE(801ACC60, SetInterruptMask_801a66e0, uint32_t, (uint32_t mask, uint32_t enable), (mask, enable));
 SIN_DISABLED_NATIVE_OVERRIDE(801A00E0, OS__ExceptionInit_801a00e0, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20), (r3, r4, r5, r6, r7, r8, r20));
 PPC_NATIVE_OVERRIDE(80197100, EXIInit_80168fa0, uint32_t, (), ());
-REGISTER_NATIVE_FUNCTION(0x801A65F8, __OSSetInterruptHandler_801a65f8_hle);
-REGISTER_NATIVE_FUNCTION(0x801A69BC, __OSUnmaskInterrupts_801a69bc_hle);
+// SIN-PENDING(unresolved raw registration) REGISTER_NATIVE_FUNCTION(0x801A65F8, __OSSetInterruptHandler_801a65f8_hle);
+// SIN-PENDING(unresolved raw registration) REGISTER_NATIVE_FUNCTION(0x801A69BC, __OSUnmaskInterrupts_801a69bc_hle);
 
 // OS____MaskInterrupts (0x801a693c): stubbed out because its verification loop reads MMIO
 // registers we don't emulate, which would spin forever.

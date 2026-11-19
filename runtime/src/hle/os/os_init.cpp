@@ -97,26 +97,31 @@ extern "C" void SIInit_801b2de0()
     RT_LOG(RT_TAG_OS) << "SIInit_801b2de0 called: skipping MMIO register setup and controller detection" << std::endl;
 }
 
-// SISetSamplingRate (0x801b3acc): ignored, we don't emulate SI polling timing.
-extern "C" void HLE_SISetSamplingRate_801b3acc(uint32_t msec)
+// SISetSamplingRate (R2VE01 0x801B8830): ignored, we don't emulate SI polling
+// timing. The translated body would otherwise reach VIGetTvFormat and the VI
+// TV-mode MMIO register (crash artifact base_1795063862).
+extern "C" void HLE_SISetSamplingRate_801b8830(uint32_t msec)
 {
-    RT_LOG(RT_TAG_OS) << "HLE_SISetSamplingRate_801b3acc called: msec=" << msec << ": Stubbed success." << std::endl;
+    RT_LOG(RT_TAG_OS) << "HLE_SISetSamplingRate_801b8830 called: msec=" << msec << ": Stubbed success." << std::endl;
 }
 
 // Video Interface (VI) - TV output.
 
-// VIGetTvFormat (0x801bacd8): CRITICAL, must report the game's own TV format or it
-// misbehaves/panics.
-extern "C" uint32_t HLE_VIGetTvFormat_801bacd8()
+// VIGetTvFormat (R2VE01 0x801BC440): CRITICAL, must report the game's own TV
+// format or it misbehaves/panics. The Feb 2009 SDK build Sin links reads the
+// VI TV-mode MMIO register (0xCC00206C) directly, so the translated body must
+// never run; the donor's global-based equivalent never needed this native.
+extern "C" uint32_t HLE_VIGetTvFormat_801bc440()
 {
     // VI_NTSC = 0, VI_PAL = 1, VI_MPAL = 2
-    RT_LOG(RT_TAG_OS) << "HLE_VIGetTvFormat_801bacd8 called: returning " << ::GuestRegion::CurrentFacts().viTvFormat
+    RT_LOG(RT_TAG_OS) << "HLE_VIGetTvFormat_801bc440 called: returning " << ::GuestRegion::CurrentFacts().viTvFormat
                       << std::endl;
     return ::GuestRegion::CurrentFacts().viTvFormat;
 }
+PPC_NATIVE_OVERRIDE(801BC440, HLE_VIGetTvFormat_801bc440, uint32_t, (), ());
 
-REGISTER_NATIVE_FUNCTION(0x801B2DE0, SIInit_801b2de0);
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B3ACC, HLE_SISetSamplingRate_801b3acc, (uint32_t msec), (msec));
+REGISTER_NATIVE_FUNCTION(0x801B7AF0, SIInit_801b2de0);
+PPC_NATIVE_OVERRIDE_VOID(801B8830, HLE_SISetSamplingRate_801b8830, (uint32_t msec), (msec));
 
 // OS____InitMemoryProtection (0x801A7DFC): real version touches MMU/MMIO we don't emulate;
 // no-op and return success so boot doesn't stall.
