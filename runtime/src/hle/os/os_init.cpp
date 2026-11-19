@@ -180,13 +180,24 @@ PPC_NATIVE_OVERRIDE(801A58E0, OS__GetConsoleType_8019f33c, uint32_t, (uint32_t r
 // Cold Boot (0).
 extern "C" uint32_t OSGetResetCode_801a8a50()
 {
+    // Boot-path flags BS2 would have set before the game runs: a disc boot
+    // happens from IPL, so __OSInIPL = 1. The guest crt's own __init_data
+    // zeroes .sbss AFTER every host-side seeding pass, so this native (called
+    // inside OSInit, before the __OSInIPL gate at 0x801A6514) is the earliest
+    // reliable place to plant them. Without this, OSInit takes the NAND-boot
+    // diagnostics path and OSFatals ("Failed to register network shutdown
+    // function") at OSInit source lines 1153/1171.
+    Memory::Write32(0x804B21D8u, 0x00000001u);  // __OSInIPL: disc boot
+    Memory::Write32(0x804B21DCu, 0x00000000u);  // __OSInNandBoot
+
     // Log occasionally just to track boot flow
     static bool logged = false;
     if (!logged) {
-        RT_LOG(RT_TAG_OS) << "OSGetResetCode_801a8a50 called: returning 0 (Cold Boot)" << std::endl;
+        RT_LOG(RT_TAG_OS) << "OSGetResetCode_801a8a50 called: returning 0 (Cold Boot)"
+                          << " (__OSInIPL seeded)" << std::endl;
         logged = true;
     }
-    return 0; 
+    return 0;
 }
 
 // Register the function

@@ -531,14 +531,6 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     entries.push_back({0x8000004Cu, 0x00000001u, "OSBootInfo consoleType (retail)", true});
     entries.push_back({0x80003180u, ::GuestRegion::CurrentFacts().gameCode, "OS app game code"});
     entries.push_back({0x80003194u, ::GuestRegion::CurrentFacts().gameCode, "OS app gamename"});
-    // Disc boot path flags: OSInit gates its marker/firmware-diagnostics assert
-    // block on __OSInIPL (a real disc boot happens from IPL, so the block is
-    // skipped); __OSInNandBoot stays 0. Both globals live in .sdata2 and are
-    // zero in a cold recomp boot, which made OSInit take the NAND-boot
-    // diagnostics path and OSFatal ("Failed to register network shutdown
-    // function") at OSInit source lines 1153/1171.
-    entries.push_back({0x804B21D8u, 0x00000001u, "__OSInIPL (disc boot)", true});
-    entries.push_back({0x804B21DCu, 0x00000000u, "__OSInNandBoot", true});
     if (RuntimeProduct::IsRetroRewind()) {
         entries.push_back({0x800017D8u, 0x00000001u, "Retro Rewind recomp runtime marker", true});
     }
