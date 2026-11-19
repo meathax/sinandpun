@@ -1,0 +1,33 @@
+schema_version: 1
+workspace_root: ../..
+
+project:
+  id: snp2-r2ve01-stg07
+  display_name: Sin & Punishment Star Successor (USA) + stg07 module
+  game_id: R2VE01
+  region: E
+
+memory:
+  base: 0x80000000
+  size: 0x01800000
+  sda_base: 0x804B7700
+  sda2_base: 0x804BA920
+
+inputs:
+  dol:
+    path: orig/R2VE01/sys/main.dol
+    sha256: 2c750625d647608d9f3f48d75bb45c2f357de44689a167c8074f5ace1054da60
+  module:
+    path: build/modules/stg07.bin
+    load_address: 0x80800000
+
+translation:
+  entry_points:
+    - 0x80006310
+  function_map:
+    path: build/modules/stg07.map
+  allow_unsupported_instructions: false
+
+output:
+  root: build/generated-stg07
+
