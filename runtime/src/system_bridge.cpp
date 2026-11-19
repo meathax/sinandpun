@@ -313,12 +313,15 @@ void SystemBridge::Initialize() {
     const auto memoryConfig = Memory::Config::WiiDefaults();
     Memory::Init(memoryConfig);
 
-    SeedLowMemDefaults(memoryConfig);
-
     // Initialize from the embedded DOL/REL data sections. This provides the
     // initial memory state for .data, .rodata, .sdata, etc.
     RT_LOG(RT_TAG_RUNTIME) << "Initializing data sections from embedded DOL/REL data" << std::endl;
     InitializeDataSections();
+
+    // Seed AFTER the section initialization: the data loader zeroes the BSS
+    // range (.bss/.sbss/.sbss2), which would wipe any seed placed there
+    // (__OSInIPL lives in .sbss and gates OSInit's NAND-boot assert block).
+    SeedLowMemDefaults(memoryConfig);
 
     // Constructors run before the main entry point, but they still require the
     // PowerPC ABI environment. Keep using the persistent context here: the old
