@@ -517,6 +517,15 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     // at 0x80003180/0x80003194 while building NAS auth fields.
     entries.push_back({0x80000000u, ::GuestRegion::CurrentFacts().gameCode, "Disc game code"});
     entries.push_back({0x80000004u, 0x30310100u, "Disc maker/id"});  // 01 + disc 1
+    // OSBootInfo header (revolution/os/OSBootInfo.h): BS2 fills magic, version,
+    // memorySize and consoleType on real hardware. The donor never seeded
+    // them (MKWii's OSInit did not care); Sin's OSInit reads consoleType to
+    // select retail vs dev boot paths, and dev-mode enables the firmware
+    // diagnostics block that asserts.
+    entries.push_back({0x80000040u, 0x0D15EA5Eu, "OSBootInfo magic", true});
+    entries.push_back({0x80000044u, 0x00000001u, "OSBootInfo version", true});
+    entries.push_back({0x80000048u, 0x01800000u, "OSBootInfo memorySize (24 MB MEM1)", true});
+    entries.push_back({0x8000004Cu, 0x00000001u, "OSBootInfo consoleType (retail)", true});
     entries.push_back({0x80003180u, ::GuestRegion::CurrentFacts().gameCode, "OS app game code"});
     entries.push_back({0x80003194u, ::GuestRegion::CurrentFacts().gameCode, "OS app gamename"});
     if (RuntimeProduct::IsRetroRewind()) {
