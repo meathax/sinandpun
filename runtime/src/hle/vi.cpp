@@ -709,6 +709,42 @@ extern "C" void VISetPostRetraceCallback_HLE_801b9138(CpuContext* ctx)
 SIN_DISABLED_NATIVE_OVERRIDE_VOID(801B9138, VISetPostRetraceCallback_HLE_801b9138, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
+// VI MMIO register reads (memory-layer HLE).
+//
+// Multiple independent guests paths read the VI register family directly:
+// VIGetScanMode's body reads 0xCC00206C (bit 0 = the scan-mode selector,
+// decoded against the VI control register), VIGetDTVStatus's reads
+// 0xCC00206E, and the engine's own video probe reads them inline. Function
+// level natives cover the SDK entry points; these handlers answer the raw
+// register reads so every caller sees one consistent retail-NTSC-480i VI.
+// -----------------------------------------------------------------------------
+bool ViMmio_Read16(uint32_t address, uint16_t& value)
+{
+    switch (address)
+    {
+    case 0xCC00206Cu:  // TV-mode register: bit 0 clear = interlaced (NTSC 480i).
+        value = 0x0000u;
+        return true;
+    case 0xCC00206Eu:  // DTV status: not ready / disabled.
+        value = 0x0000u;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool ViMmio_Read32(uint32_t address, uint32_t& value)
+{
+    uint16_t half = 0;
+    if (ViMmio_Read16(address, half))
+    {
+        value = half;
+        return true;
+    }
+    return false;
+}
+
+// -----------------------------------------------------------------------------
 // VIGetDTVStatus (0x801BAD38)
 // Reads DTV status from VI hardware (MMIO 0xCC00206E). Stub to "not ready".
 // -----------------------------------------------------------------------------

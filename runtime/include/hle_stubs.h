@@ -18,6 +18,11 @@ void VI_HLE_WaitForNextRetracePoll();
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace);
 bool VI_HLE_IsAdvancingRetrace();
 void VI_HLE_SetXfbReady(uint32_t xfbAddr); // Called by GXCopyDisp to signal EFB→XFB copy
+// VI register reads (vi.cpp): retail-NTSC-480i answers for the TV-mode and
+// DTV-status registers so every direct reader (SDK bodies and engine inline
+// probes alike) sees one consistent video state.
+bool ViMmio_Read16(uint32_t address, uint16_t& value);
+bool ViMmio_Read32(uint32_t address, uint32_t& value);
 void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros);
 void Audio_HLE_Poll(CpuContext* ctx);
 // Deferred twin of Audio_HLE_Poll for the long host waits that already service

@@ -1,5 +1,6 @@
 #include "memory.h"
 #include "hle/hollywood_gpio.h"
+#include "hle_stubs.h"
 
 #include <algorithm>
 #include <array>
@@ -628,6 +629,9 @@ namespace {
 
 uint8_t MemoryInline::Read8Slow(uint32_t addr) {
     if (IsMmioAddress(addr)) {
+        if (uint32_t value = 0; HollywoodGpio_Read32(addr, value)) {
+            return static_cast<uint8_t>(value);
+        }
         ThrowMmioReadBlocked(addr, sizeof(uint8_t));
     }
     ResolveDeferredReads(addr, sizeof(uint8_t));
@@ -636,6 +640,9 @@ uint8_t MemoryInline::Read8Slow(uint32_t addr) {
 
 uint16_t MemoryInline::Read16Slow(uint32_t addr) {
     if (IsMmioAddress(addr)) {
+        if (uint16_t value = 0; ViMmio_Read16(addr, value)) {
+            return value;
+        }
         ThrowMmioReadBlocked(addr, sizeof(uint16_t));
     }
     ResolveDeferredReads(addr, sizeof(uint16_t));
@@ -645,6 +652,9 @@ uint16_t MemoryInline::Read16Slow(uint32_t addr) {
 uint32_t MemoryInline::Read32Slow(uint32_t addr) {
     if (IsMmioAddress(addr)) {
         if (uint32_t value = 0; HollywoodGpio_Read32(addr, value)) {
+            return value;
+        }
+        if (uint32_t value = 0; ViMmio_Read32(addr, value)) {
             return value;
         }
         ThrowMmioReadBlocked(addr, sizeof(uint32_t));
