@@ -370,5 +370,9 @@ extern "C" void AXFXReverbStdExpCallback_8012b830(CpuContext* ctx) {
     ReverbStd::Render(stateAddr, frame);
 }
 
-REGISTER_NATIVE_FUNCTION_AS(0x8012B830, AXFXReverbStdExpCallback_8012b830,
-                            "AXFXReverbStdExpCallback_8012b830");
+// SIN-DISABLED: 0x8012B830 is MKWii's AXFXReverbStdExpCallback. Sin has no translated function at
+// that address and its axfx.a is only 0x8015D840..0x8015D8F0 stubs (AXFX*Shutdown etc.), i.e. the game
+// does not use AXFX reverb (nw4r snd mixes via AX aux buses). The sdata2 constants this body reads
+// (kOneConstantAddr/kScaleConstantAddr) are donor addresses too. Re-target both before re-enabling.
+// SIN-PENDING(unresolved raw registration) REGISTER_NATIVE_FUNCTION_AS(0x8012B830, AXFXReverbStdExpCallback_8012b830,
+//                             "AXFXReverbStdExpCallback_8012b830");

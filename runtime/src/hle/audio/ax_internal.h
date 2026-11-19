@@ -32,22 +32,38 @@ constexpr uint32_t kMailReset = kTaskMailToDsp | 0x0002u;
 constexpr size_t kResamplingCoefficientCount = 0x800;
 constexpr uint32_t kMailContinue = kTaskMailToDsp | 0x0003u;
 constexpr uint32_t kAxSamplesPerFrame = 96u;
-const uint32_t kAxDspTaskAddr = MKW_GADDR(802F81A0);
-const uint32_t kDspInitializedAddr = MKW_GADDR(80386608);
-const uint32_t kDspAssertPendingAddr = MKW_GADDR(80386610);
-const uint32_t kDspAssertTaskAddr = MKW_GADDR(80386614);
-const uint32_t kDspCurrentTaskAddr = MKW_GADDR(8038661C);
-const uint32_t kDspFirstTaskAddr = MKW_GADDR(80386620);
-const uint32_t kDspRunningTaskAddr = MKW_GADDR(80386624);
-const uint32_t kAxIramMmemAddr = MKW_GADDR(8027F820);
-const uint32_t kAxDramMmemAddr = MKW_GADDR(802F8200);
+// Sin & Punishment (R2VE01) addresses. The donor (MKWii) constants these replace pointed into
+// unrelated Sin data. Evidence: translated bodies of __AXOutInitDSP 0x8015C170, DSPInit 0x8018C2B0,
+// DSPAddTask 0x8018C380 / __DSP_insert_task 0x8018CC70, DSPAssertTask 0x8018C3F0 (r13 = 0x804B7700).
+// __AXOutInitDSP's task struct: lis 0x803E,-30304 -> 0x803D89A0 (__AXDSPTask, size 0x40).
+const uint32_t kAxDspTaskAddr = MKW_GADDR(803D89A0);
+// SDK DSP globals (r13-22328 .. r13-22300): __DSP_init_flag, rude_task_pending, rude_task, tmp_task,
+// last_task (tail of the task list), first_task, curr_task.
+const uint32_t kDspInitializedAddr = MKW_GADDR(804B1FC8);
+const uint32_t kDspAssertPendingAddr = MKW_GADDR(804B1FD0);
+const uint32_t kDspAssertTaskAddr = MKW_GADDR(804B1FD4);
+const uint32_t kDspTmpTaskAddr = MKW_GADDR(804B1FD8);
+const uint32_t kDspCurrentTaskAddr = MKW_GADDR(804B1FDC); // __DSP_last_task (list tail)
+const uint32_t kDspFirstTaskAddr = MKW_GADDR(804B1FE0);
+const uint32_t kDspRunningTaskAddr = MKW_GADDR(804B1FE4); // __DSP_curr_task
+// axDspSlave ucode (lis 0x8030,+29056) and the 64-byte DRAM image (lis 0x803E,-30208).
+const uint32_t kAxIramMmemAddr = MKW_GADDR(80307180);
+const uint32_t kAxDramMmemAddr = MKW_GADDR(803D8A00);
 constexpr uint32_t kAxDramLength = 64u;
 constexpr uint32_t kAxDramDspAddr = 3282u;
-const uint32_t kAxInitCallback = MKW_GADDR(80126948);
+// Task callbacks stored by __AXOutInitDSP at task+0x28/2C/30/34 (lis 0x8016,-16160/-16144/-16048/-16032):
+// __AXDSPInitCallback (sets __AXDSPInitFlag), __AXDSPResumeCallback, __AXDSPDoneCallback, __AXDSPRequestCallback.
+const uint32_t kAxInitCallback = MKW_GADDR(8015C0E0);
 const uint32_t kAxResumeCallback = MKW_GADDR(8015C0F0);
-const uint32_t kAxDoneCallback = MKW_GADDR(8016000C);
-const uint32_t kAxRequestCallback = MKW_GADDR(801269B8);
-
+const uint32_t kAxDoneCallback = MKW_GADDR(8015C150);
+const uint32_t kAxRequestCallback = MKW_GADDR(8015C160);
+// __AXOutInitDSP's ucode info (axDspInitVector/ResumeVector/SlaveLength, r13-28016/-28014/-28012) and flags.
+const uint32_t kAxDspInitVectorAddr = MKW_GADDR(804B0990);
+const uint32_t kAxDspResumeVectorAddr = MKW_GADDR(804B0992);
+const uint32_t kAxDspSlaveLengthAddr = MKW_GADDR(804B0994);
+const uint32_t kAxDspDoneFlagAddr = MKW_GADDR(804B1EEC);   // __AXDSPDoneFlag (r13-22548)
+const uint32_t kAxDspInitFlagAddr = MKW_GADDR(804B1EF0);   // __AXDSPInitFlag (r13-22544), the guest spins on it
+const uint32_t kAxOutThreadQueueAddr = MKW_GADDR(804B1EE0); // __AXOutThreadQueue (r13-22560)
 extern uint32_t g_axTaskPtr;
 
 // The mix worker must resolve guest addresses only via the MEM1/MEM2 region bases below, never

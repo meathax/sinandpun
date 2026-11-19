@@ -223,12 +223,11 @@ void ViSetR3(CpuContext* ctx, uint32_t value)
 void WriteGuestStateLocked() {
     try {
         Memory::Write8(kViInitializedFlagAddr, 1);
-        Memory::Write8(kViTimingGuardAddr, 1);
+        // kViTimingGuardAddr / kViRender{Width,Height}Addr / kViXfb{Width,Height}Addr are MKWii
+        // donor addresses (0x80350864.., 0x80386B44). In R2VE01 they fall inside game .bss
+        // (0x80334680-0x804B68C0), so writing them every retrace corrupted unrelated game data.
+        // No Sin code reads them (VIGetTvFormat/ScanMode/DTV are native), so they are not written.
         Memory::Write32(kViTvFormatAddr, g_vi.tvFormat);
-        Memory::Write16(kViRenderWidthAddr, static_cast<uint16_t>(g_vi.renderWidth));
-        Memory::Write16(kViRenderHeightAddr, static_cast<uint16_t>(g_vi.renderHeight));
-        Memory::Write16(kViXfbWidthAddr, static_cast<uint16_t>(g_vi.xfbWidth));
-        Memory::Write16(kViXfbHeightAddr, static_cast<uint16_t>(g_vi.xfbHeight));
         Memory::Write32(kViRetraceCountAddr, g_vi.retraceCount);
         // Pre/post retrace callbacks live in guest memory (the guest's own VISetPre/PostRetraceCallback store them there); never overwrite.
         // Write PENDING frame buffer to guest memory so SDK code sees the queued value

@@ -1,4 +1,5 @@
 #include "ax_dsp.h"
+#include "audio_debug.h"
 
 #include "ax_internal.h"
 
@@ -111,6 +112,11 @@ public:
         JoinMix();
         std::lock_guard<std::mutex> lock(m_mutex);
         ConfigureFromTaskLocked(taskPtr);
+    }
+
+    uint32_t UcodeCrc() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_ucodeCrc;
     }
 
     bool MixBusy() {
@@ -469,6 +475,9 @@ private:
         const bool newFilter = m_ucodeCrc != 0 ? UCodeUsesNewFilter(m_ucodeCrc) : layout != AXCommandLayout::Old;
         bool end = false;
         m_auxOutCount = 0;
+        if (AudioDebug::Enabled()) {
+            AudioDebug::FrameBegin();
+        }
         while (!end && idx < cmdListSize) {
             const uint16_t cmd = m_cmdList[idx++];
             uint16_t volume = 0;
@@ -550,6 +559,9 @@ private:
                 end = true;
                 break;
             }
+        }
+        if (AudioDebug::Enabled()) {
+            AudioDebug::FrameEnd();
         }
     }
 
@@ -659,6 +671,11 @@ private:
         while (pbAddr && guard++ < 256) {
             AXPBWii pb{};
             ReadPB(pbAddr, pb);
+            if (AudioDebug::Enabled()) {
+                AudioDebug::NoteVoice(pbAddr, pb.running, Hilo(pb.src.ratio_hi, pb.src.ratio_lo),
+                                      pb.mixer.main_left.volume, pb.mixer.main_right.volume,
+                                      pb.audio_addr.sample_format, pb.src_type);
+            }
             AXBuffers buffers = MixBuffers();
             const AXMixControl control = ConvertMixerControl(Hilo(pb.mixer_control_hi, pb.mixer_control_lo));
             if (oldAxLayout && (pb.updates.num_updates[0] | pb.updates.num_updates[1] | pb.updates.num_updates[2]) != 0) {
@@ -1477,15 +1494,26 @@ void InitForAXOut(CpuContext* ctx) {
     Memory::Write32(g_axTaskPtr + 0x2cu, kAxResumeCallback);
     Memory::Write32(g_axTaskPtr + 0x30u, kAxDoneCallback);
     Memory::Write32(g_axTaskPtr + 0x34u, kAxRequestCallback);
-    // __AXOutInitDSP's ucode length and DSP init/resume vectors, then its two flags.
+    // __AXOutInitDSP's ucode length and DSP init/resume vectors (u16 SDA globals), then its flags.
     (void)ctx;
-    Memory::Write32(g_axTaskPtr + 0x10u, Memory::Read16(MKW_GADDR(80385804)));
-    Memory::Write16(g_axTaskPtr + 0x24u, Memory::Read16(MKW_GADDR(80385800)));
-    Memory::Write16(g_axTaskPtr + 0x26u, Memory::Read16(MKW_GADDR(80385802)));
+    Memory::Write32(g_axTaskPtr + 0x10u, Memory::Read16(kAxDspSlaveLengthAddr));
+    Memory::Write16(g_axTaskPtr + 0x24u, Memory::Read16(kAxDspInitVectorAddr));
+    Memory::Write16(g_axTaskPtr + 0x26u, Memory::Read16(kAxDspResumeVectorAddr));
     Instance().ConfigureFromTask(g_axTaskPtr);
     LinkSingleDspTask(g_axTaskPtr);
-    Memory::Write32(MKW_GADDR(80386528), 1);
-    Memory::Write32(MKW_GADDR(80386524), 0);
+    // OSInitThreadQueue(&__AXOutThreadQueue), then the guest would spin on __AXDSPInitFlag until
+    // the DSP init callback sets it; do that here since the DSP init handshake is not emulated.
+    Memory::Write32(kAxOutThreadQueueAddr, 0);
+    Memory::Write32(kAxOutThreadQueueAddr + 4u, 0);
+    Memory::Write32(kAxDspInitFlagAddr, 1);
+    Memory::Write32(kAxDspDoneFlagAddr, 0);
+    if (AudioDebug::Enabled()) {
+        std::fprintf(stderr,
+                     "[audio-dbg] __AXOutInitDSP task=0x%08X iram=0x%08X len=0x%X initVec=0x%04X resumeVec=0x%04X ucodeCrc=0x%08X\n",
+                     g_axTaskPtr, Memory::Read32(g_axTaskPtr + 0x0cu), Memory::Read32(g_axTaskPtr + 0x10u),
+                     Memory::Read16(g_axTaskPtr + 0x24u), Memory::Read16(g_axTaskPtr + 0x26u),
+                     Instance().UcodeCrc());
+    }
 }
 
 void Stop() {

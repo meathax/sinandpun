@@ -489,14 +489,12 @@ extern "C" int32_t IPCCltInit_80193478(CpuContext* ctx)
     // Sets 0x803867EC/F0/E8 (IPC buffer lo/hi + init flag) from __OSGetIPCBufferLo/Hi.
     InvokeIndirectCpu(MKW_GADDR(80199330), ctx);
 
-    // Advance the buffer lo pointer by 0x1000 (iosHeap size), matching real IPCCltInit.
-    const uint32_t kIpcBufferLoGlobal = MKW_GADDR(803867EC);
-    uint32_t bufferLo = Memory::Read32(kIpcBufferLoGlobal);
-    uint32_t newBufLo = bufferLo + 0x1000; // Advance by 4KB for iosHeap
-    Memory::Write32(kIpcBufferLoGlobal, newBufLo);
-    
-    RT_LOG(RT_TAG_OS) << "IPCCltInit: IPC buffer lo advanced from 0x" << std::hex << bufferLo
-              << " to 0x" << newBufLo << std::dec << std::endl;
+    // The donor advanced its IPC buffer-lo global at MKWii 0x803867EC here. In R2VE01 that address
+    // is unrelated .bss (Sin keeps the IPC buffer window in SDA vars written by IPCInit,
+    // 0x80199330: r13-21936/-21940), so the write corrupted game data and advanced nothing.
+    // The real Sin IPCCltInit would also create the 0x1000-byte IPC heap (iosCreateHeap) and
+    // advance IPCSetBufferLo(0x80199410); nothing in the HLE'd IOS layer uses that heap
+    // (the guest's only sync Ioctlv users are ESP calls, which are native), so it is skipped.
     
     // Skip the rest (interrupt handler, IPC MMIO access) - those are hardware-specific
     return 0; // Success

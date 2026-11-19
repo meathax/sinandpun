@@ -657,6 +657,13 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
                 }
                 const char* path = (const char*)Memory::GetPointer(inBufPtr + 6);
                 const std::filesystem::path hostPath = TranslateNandPath(path);
+                // IOS answers FS_EEXIST (-105) for an existing entry and never truncates it.
+                // The Sin NAND library is the real guest code, so NANDCreate/NANDPrivateCreate
+                // reach this ioctl directly; truncating here wiped existing save/state files
+                // whenever the game used "create, ignore EEXIST, then open".
+                if (!hostPath.empty() && PathExists(hostPath)) {
+                    return ISFS_EEXIST;
+                }
                 CreateParentDirectories(hostPath);
 
                 // Create empty file

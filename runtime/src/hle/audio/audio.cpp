@@ -4,6 +4,7 @@
 #include "ppc_runtime.h"
 #include "audio_backend.h"
 #include "ax_dsp.h"
+#include "audio_debug.h"
 #include "music_attenuation.h"
 #include "runtime_log.h"
 
@@ -21,10 +22,14 @@ namespace {
 constexpr uint32_t kDefaultSampleRate = 32000u;
 constexpr uint32_t kAudioChannels = 2u;
 constexpr uint32_t kBytesPerSample = 2u;
-const uint32_t kAIInitializedAddr = MKW_GADDR(80386448);
-const uint32_t kAICallbackBusyAddr = MKW_GADDR(8038644C);
-const uint32_t kAICallbackStackSwitchAddr = MKW_GADDR(8038647C);
-const uint32_t kAIDmaCallbackAddr = MKW_GADDR(80386480);
+// Sin (R2VE01) AI SDK globals, from the translated AIInit 0x80159690 / AIRegisterDMACallback
+// 0x80159550 (r13 = 0x804B7700): __AI_init_flag r13-22776, __AID_Active r13-22772,
+// __CallbackStack r13-22724, __AID_Callback r13-22720. The MKWii donor addresses
+// (0x80386448/4C/7C/80) pointed at unrelated Sin data.
+const uint32_t kAIInitializedAddr = MKW_GADDR(804B1E08);
+const uint32_t kAICallbackBusyAddr = MKW_GADDR(804B1E0C);
+const uint32_t kAICallbackStackSwitchAddr = MKW_GADDR(804B1E3C);
+const uint32_t kAIDmaCallbackAddr = MKW_GADDR(804B1E40);
 
 // Max completed 3 ms DMA blocks delivered per tick. Draining several at once catches up
 // backlog from a long frame without letting a large stall spiral into an unbounded loop.
@@ -83,6 +88,9 @@ bool PushAudioBlock(uint32_t startAddr, uint32_t length) {
     }
 
     if (src) {
+        if (AudioDebug::Enabled()) {
+            AudioDebug::NoteBlock(src, bytes, g_ai.sampleRate);
+        }
         return AudioBackend::Instance().PushWiiAiSamplesBE16(src, bytes);
     }
 
@@ -193,6 +201,8 @@ extern "C" uint32_t AICheckInit_80124094()
     Memory::TryRead32(kAIInitializedAddr, initialized);
     return initialized;
 }
+// Sin AICheckInit is 0x80159680 (`lwz r3,-22776(r13)` = __AI_init_flag; inlined into 0x801DF4C0).
+// No native: the real leaf reads the flag AIInit_801240b0 now writes at the Sin address.
 // SIN-PENDING(unresolved raw registration) REGISTER_NATIVE_FUNCTION(0x80124094, AICheckInit_80124094);
 
 
@@ -209,6 +219,8 @@ extern "C" uint32_t DSPCheckInit_8015d504()
 {
     return AxDspHle::CheckInit();
 }
+// Sin DSPCheckInit is the 2-instruction leaf 0x8018C370 (`lwz r3,-22328(r13)` = __DSP_init_flag,
+// 0x804B1FC8; inlined into __AXOutInitDSP). No native: MarkDspInitialized writes that flag.
 // SIN-PENDING(unresolved raw registration) REGISTER_NATIVE_FUNCTION(0x8015D504, DSPCheckInit_8015d504);
 
 extern "C" uint32_t DSPAddTask_8015d50c(uint32_t task_ptr)
@@ -250,8 +262,12 @@ PPC_NATIVE_OVERRIDE_VOID(801595A0, AIInitDMA_80123fcc, (uint32_t start_addr, uin
 
 
 
-// AIRegisterDMACallback stores the callback in the guest global at 0x80386480.
-// Returns the old callback pointer.
+// AIRegisterDMACallback stores the callback in __AID_Callback (Sin 0x804B1E40, r13-22720).
+// Returns the old callback pointer. Sin address 0x80159550 (translated body: reads r13-22720,
+// stores r3 there under OSDisableInterrupts, returns the old value; called by __AXOutInit
+// 0x8015C260, nw4r AxManager::PrepareReset 0x80266410 and 0x801B2CA0). Without this native the
+// guest stores the callback itself and the HLE AI tick never learns about __AXOutAiCallback, so
+// no AX frame is ever produced.
 extern "C" uint32_t AIRegisterDMACallback_80123f88(uint32_t callback)
 {
     uint32_t old_callback = 0;
@@ -264,7 +280,7 @@ extern "C" uint32_t AIRegisterDMACallback_80123f88(uint32_t callback)
     }
     return old_callback;
 }
-SIN_DISABLED_NATIVE_OVERRIDE(80123f88, AIRegisterDMACallback_80123f88, uint32_t, (uint32_t callback), (callback));
+PPC_NATIVE_OVERRIDE(80159550, AIRegisterDMACallback_80123f88, uint32_t, (uint32_t callback), (callback));
 
 // AIStartDMA toggles the AI DMA control register on hardware. Keep the guest-visible
 // DMA state here and let the VI tick advance the hardware boundary.
@@ -311,6 +327,8 @@ extern "C" uint32_t AIGetDSPSampleRate_8012409c()
     // SDK AIGetDSPSampleRate returns AIDFR^1: 0 for 32 kHz, 1 for 48 kHz.
     return (g_ai.sampleRate == 48000u) ? 1u : 0u;
 }
+// Sin's ai.a has no AIGetDSPSampleRate (functions 0x80159550..0x80159930 are RegisterDMACallback,
+// InitDMA, StartDMA, GetDMABytesLeft/StartAddr/Length, CheckInit, AIInit, __AIDHandler, ...).
 SIN_DISABLED_NATIVE_OVERRIDE(8012409C, AIGetDSPSampleRate_8012409c, uint32_t, (), ());
 
 extern "C" void DSPSendMailToDSP_8015d430(uint32_t mail)
@@ -460,6 +478,9 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
                 }
             } else {
                 Memory::TryWrite32(kAICallbackBusyAddr, 1);
+                if (AudioDebug::Enabled()) {
+                    AudioDebug::C().aiCallbacks.fetch_add(1, std::memory_order_relaxed);
+                }
                 InvokeIndirectCpu(callback, cpu);
                 Memory::TryWrite32(kAICallbackBusyAddr, 0);
                 AxDspHle::ServiceDeferredCallbacks();
@@ -521,10 +542,29 @@ int64_t ConsumeAudioPollDeltaMicros()
 
 } // namespace
 
+static void ReportAudioDebug()
+{
+    if (!AudioDebug::Enabled()) {
+        return;
+    }
+    bool dma = false;
+    bool cb = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ai.mutex);
+        dma = g_ai.enabled;
+        cb = g_ai.callback != 0;
+    }
+    AudioDebug::MaybeReport(dma, cb);
+}
+
 void Audio_HLE_Poll(CpuContext* ctx)
 {
-    MusicAttenuation::TickGuest();
+    // SIN-DISABLED: MusicAttenuation::TickGuest() walks MKWii's sound-manager object graph at the
+    // donor address 0x809C2898 and writes SoundPlayer volume floats through it. At Sin's memory
+    // layout that is an unrelated address, so any chain that happens to dereference would corrupt
+    // game memory. Needs a nw4r SoundPlayer equivalent for Sin before it is re-enabled.
     Audio_HLE_Tick(ctx, static_cast<uint32_t>(ConsumeAudioPollDeltaMicros()));
+    ReportAudioDebug();
 }
 
 void Audio_HLE_PollDeferred()
@@ -540,6 +580,7 @@ void Audio_HLE_PollDeferred()
     OS_HLE_BeginDeferredGuestCallbacks();
     try {
         Audio_HLE_Tick(cpu, static_cast<uint32_t>(ConsumeAudioPollDeltaMicros()));
+        ReportAudioDebug();
     } catch (...) {
         OS_HLE_EndDeferredGuestCallbacks();
         throw;

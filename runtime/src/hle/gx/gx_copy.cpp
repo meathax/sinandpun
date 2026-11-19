@@ -111,6 +111,7 @@ void InvalidateEfbCopyDestinationsForRange(uint32_t addr, uint32_t size) {
 // ============================================================================
 
 extern "C" void GX__SetDispCopySrc_8016f438(uint32_t l, uint32_t t, uint32_t w, uint32_t h) {
+    if (GxCopyLogActive()) RT_LOGF(RT_TAG_GX, "[copylog] SetDispCopySrc l=%u t=%u w=%u h=%u\n", l, t, w, h);
     GX_DEFER_CALL(GX__SetDispCopySrc_8016f438, l, t, w, h);
     GXSetDispCopySrc((u16)l, (u16)t, (u16)w, (u16)h);
 }
@@ -126,6 +127,7 @@ PPC_NATIVE_OVERRIDE_VOID(801D7950, GX__SetDispCopyDst_8016f4b8, (uint32_t w, uin
 // ============================================================================
 
 extern "C" void GX__SetTexCopySrc_8016f478(uint32_t l, uint32_t t, uint32_t w, uint32_t h) {
+    if (GxCopyLogActive()) RT_LOGF(RT_TAG_GX, "[copylog] SetTexCopySrc l=%u t=%u w=%u h=%u\n", l, t, w, h);
     GxWorker::Run([l, t, w, h] { GXSetTexCopySrc((u16)l, (u16)t, (u16)w, (u16)h); });
     g_texCopyState.srcLeft=(u16)l; g_texCopyState.srcTop=(u16)t;
     g_texCopyState.srcWidth=(u16)w; g_texCopyState.srcHeight=(u16)h;
@@ -133,6 +135,7 @@ extern "C" void GX__SetTexCopySrc_8016f478(uint32_t l, uint32_t t, uint32_t w, u
 PPC_NATIVE_OVERRIDE_VOID(801D7910, GX__SetTexCopySrc_8016f478, (uint32_t l, uint32_t t, uint32_t w, uint32_t h), (l, t, w, h));
 
 extern "C" void GX__SetTexCopyDst_8016f4dc(uint32_t w, uint32_t h, uint32_t f, uint32_t m) {
+    if (GxCopyLogActive()) RT_LOGF(RT_TAG_GX, "[copylog] SetTexCopyDst w=%u h=%u fmt=%u mip=%u\n", w, h, f, m);
     GxWorker::Run([w, h, f, m] { GXSetTexCopyDst((u16)w, (u16)h, (GXTexFmt)f, (GXBool)m); });
     g_texCopyState.dstWidth=(u16)w; g_texCopyState.dstHeight=(u16)h;
     g_texCopyState.dstFormat=f; g_texCopyState.dstMipmap=m;
@@ -228,6 +231,7 @@ extern "C" void GX__CopyTex_8016fd74(uint32_t da, uint32_t c) {
     // Keep the source in guest EFB coordinates. Aurora maps it to the scaled
     // EFB exactly once, matching Dolphin's ConvertEFBRectangle path.
     GXSetTexCopySrc(rawSrcLeft, rawSrcTop, rawSrcWidth, rawSrcHeight);
+    if (GxCopyLogActive()) RT_LOGF(RT_TAG_GX, "[copylog] CopyTex dst=0x%08X clear=%u src=%u,%u %ux%u dst=%ux%u fmt=%u\n", da, c, rawSrcLeft, rawSrcTop, rawSrcWidth, rawSrcHeight, g_texCopyState.dstWidth, g_texCopyState.dstHeight, g_texCopyState.dstFormat);
     // EFB copies stay GPU-only except probe-sized ones (e.g. the 4x4 lens-flare depth probe),
     // which Aurora reads back asynchronously via efb_ram::schedule and land in guest RAM a frame
     // later. RISK: copies above the probe threshold, or on the offscreen list, are not
@@ -240,3 +244,5 @@ extern "C" void GX__CopyTex_8016fd74(uint32_t da, uint32_t c) {
     GXSetTexCopySrc(rawSrcLeft, rawSrcTop, rawSrcWidth, rawSrcHeight);
 }
 PPC_NATIVE_OVERRIDE_VOID(801D81B0, GX__CopyTex_8016fd74, (uint32_t da, uint32_t c), (da, c));
+
+extern "C" int SinGxLogActive() { return GxCopyLogActive() ? 1 : 0; }

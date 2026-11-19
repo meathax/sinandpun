@@ -229,26 +229,14 @@ extern "C" uint32_t __OSInitSTM_HLE_801ab848(CpuContext* ctx)
 
     RT_LOG(RT_TAG_OS) << "__OSInitSTM_HLE_801ab848 called: initializing STM state" << std::endl;
 
-    // STM_Initialized, /dev/stm/immediate and /dev/stm/eventhook.
-    const uint32_t kStmInitializedAddr = MKW_GADDR(80386934);
-    const uint32_t kStmImmediateHandleAddr = MKW_GADDR(80386938);
-    const uint32_t kStmEventHookHandleAddr = MKW_GADDR(8038693C);
-
-    try {
-        // Mark STM as initialized
-        ::Memory::Write32(kStmInitializedAddr, 1);
-
-        // Fake non-zero handles so callers' zero-checks pass.
-        ::Memory::Write32(kStmImmediateHandleAddr, 0x00535401); // "ST\x01"
-        ::Memory::Write32(kStmEventHookHandleAddr, 0x00535402); // "ST\x02"
-
-        // Default Power/Reset callback pointers are left unset; safe since we never fire
-        // the STM hardware interrupt that would invoke them.
-    } catch (const ::Memory::AccessViolation& e) {
-        RT_LOG(RT_TAG_OS) << "__OSInitSTM: Failed to write STM state to SDA @ 0x"
-                  << std::hex << e.address() << std::dec << " (" << e.reason() << ")" << std::endl;
-        return 0; // Return failure
-    }
+    // The donor wrote STM_Initialized and the /dev/stm handles to MKWii addresses
+    // 0x80386934/38/3C. In R2VE01 those are unrelated .bss words, so the writes corrupted game
+    // data and left Sin's real STM state untouched. Sin keeps that state in SDA vars
+    // (r13-21572 initialized, -21568/-21564 immediate/eventhook fds, -21560 event registered,
+    // -21552/-21548 default callbacks; see 0x801B1800). They are deliberately left at their
+    // boot value (0 = STM not present), which is the state the guest saw before this change
+    // (the donor writes never reached them); no STM device exists here.
+    (void)cpu;
 
     // Return 1 (success)
     return 1;

@@ -86,6 +86,15 @@ inline void GXMarkFrameWork() {
 extern "C" {
 extern int g_gxFrameCount;
 
+// Debug aid (SIN_GX_COPYLOG=<frame>): true for 3 presented frames starting at <frame>.
+inline bool GxCopyLogActive() {
+    static const int start = [] { const char* v = std::getenv("SIN_GX_COPYLOG"); return (v && *v) ? std::atoi(v) : -1; }();
+    static const int every = [] { const char* v = std::getenv("SIN_GX_COPYLOG_EVERY"); return (v && *v) ? std::atoi(v) : 0; }();
+    if (start < 0 || g_gxFrameCount < start) return false;
+    if (every > 0) return ((g_gxFrameCount - start) % every) < 3;
+    return g_gxFrameCount < start + 3;
+}
+
 extern int32_t g_scissorLeft;
 extern int32_t g_scissorTop;
 extern int32_t g_scissorWidth;

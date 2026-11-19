@@ -775,28 +775,17 @@ extern "C" const char* DVDResolveHostPathForTest(const char* dvdPath)
 // High-Level DVD API
 // ============================================================================
 
-static void InitDvdWaitingQueues()
-{
-    const uint32_t kQueueBase = MKW_GADDR(80343230);
-    for (uint32_t i = 0; i < 4; ++i) {
-        const uint32_t queue = kQueueBase + (i * 8);
-        Memory::Write32(queue + 0, queue);
-        Memory::Write32(queue + 4, queue);
-    }
-}
-
+// The MKWii-era HLE re-initialised the SDK DVD queue/cancel globals after every HLE read. Its
+// addresses were donor constants (WaitingQueue 0x80343230, 0x8038667C, 0x803866A8) or contiguity
+// guesses (0x804B2034, 0x804B20A4) that fall inside unrelated R2VE01 .bss/.sbss, and the real
+// Sin DVD module (DVDInit, DVDCancel*, DVDGetDriveStatus run as translated guest code) owns
+// those globals: Sin's WaitingQueue is 0x80423A30 (__DVDClearWaitingQueue), Canceling is
+// 0x804B2030, PausingFlag 0x804B2028, FatalErrorFlag 0x804B202C, executing 0x804B20B0.
+// HLE reads finish synchronously and set the command block to DVD_STATE_END, so they never enter
+// the guest state machine and nothing needs completing; writing the globals could only break an
+// in-flight real command (DVDInquiryAsync at OSInit). Intentionally empty.
 static void CompleteDvdCancelState()
 {
-    InitDvdWaitingQueues();
-
-    // These are the SDK DVD globals used by DVDCancelAll/__DVDPrepareReset.
-    // The actual drive work is HLE'd, so complete pending cancel/reset waits.
-    Memory::Write32(MKW_GADDR(804B2030), 0); // Canceling
-    Memory::Write32(MKW_GADDR(804B2034), 0); // ResumeFromHere
-    Memory::Write32(MKW_GADDR(804B2028), 0); // PausingFlag
-    Memory::Write32(MKW_GADDR(8038667C), 1); // CancelAllSync complete
-    Memory::Write32(MKW_GADDR(803866A8), 1); // PrepareReset complete
-    Memory::Write32(MKW_GADDR(804B20A4), 0); // executing command block
 }
 
 // 0x8015EA1C -> DVDInit
@@ -811,22 +800,9 @@ extern "C" void DVDInit_8015EA1C()
     initializing = true;
 
 
-    // 1. Initialize Global Flags (Emulate OS state)
-    // These addresses are standard OS globals for DVD context
-    Memory::Write8(MKW_GADDR(80386724), 1);   // Contexts initialized
-    Memory::Write8(MKW_GADDR(80386725), 1);   // LowInit called
-    Memory::Write32(MKW_GADDR(804B2250), 0);  // Current context index
-    Memory::Write8(MKW_GADDR(804B205C), 1);   // DVDInit called flag
-    CompleteDvdCancelState();
-
-    // 2. Initialize DVD Context structures (prevent crashes in callbacks)
-    const uint32_t kContextBase = MKW_GADDR(803434e0);
-    constexpr uint32_t kMagicValue = 0xFEEBDAED;
-    for (int i = 0; i < 4; i++) {
-        uint32_t ctx = kContextBase + i * 0x20;
-        Memory::Write32(ctx + 0x0C, kMagicValue);
-        Memory::Write32(ctx + 0x10, i);
-    }
+    // 1/2. The donor DVD flag/context writes (0x80386724/25, 0x804B2250, 0x803434E0 context table)
+    //      were removed: those addresses are not Sin's (see CompleteDvdCancelState). The real
+    //      guest DVDInit initialises its own structures around this call.
 
     // 3. Set Low Memory Globals (The "Magic" Identification)
     // This tells the game "Yes, I am Mario Kart Wii"

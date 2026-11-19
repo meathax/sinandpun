@@ -7,6 +7,19 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <cstdio>
+extern "C" int SinGxLogActive();
+namespace {
+void sin_log_draw(const char* tag, int prim, int n) {
+  if (!SinGxLogActive()) return;
+  const auto& s = aurora::gx::g_gxState;
+  std::fprintf(stderr, "[copylog] draw %s prim=0x%X n=%d vp=%.0f,%.0f %.0fx%.0f sc=%d,%d %dx%d ztest=%d func=%d zupd=%d" "\n", tag, prim, n,
+               s.renderViewport.left, s.renderViewport.top, s.renderViewport.width, s.renderViewport.height,
+               s.renderScissor.x, s.renderScissor.y, s.renderScissor.width, s.renderScissor.height,
+               (int)s.depthCompare, (int)s.depthFunc, (int)s.depthUpdate);
+}
+} // namespace
+
 
 // Track vertex count between GXBegin/GXEnd for mismatch detection
 static u16 sBeginNVerts = 0;
@@ -607,6 +620,7 @@ void post_begin(GXPrimitive primitive, GXVtxFmt vtxFmt, u16 nVerts) {
 extern "C" {
 
 void GXBegin(GXPrimitive primitive, GXVtxFmt vtxFmt, u16 nVerts) {
+  sin_log_draw("begin", (int)primitive, (int)nVerts);
   pre_begin();
 
   const u8 drawCmd = static_cast<u8>(vtxFmt) | static_cast<u8>(primitive);
@@ -825,6 +839,7 @@ void GXParam4f32(const f32 x, const f32 y, const f32 z, const f32 w) {
 namespace aurora::gx::fifo {
 bool submit_raw_draw(GXPrimitive primitive, GXVtxFmt vtxFmt, const uint8_t* vertices, uint16_t vtxCount,
                      uint32_t vertexBytes) {
+  sin_log_draw("raw", (int)primitive, (int)vtxCount);
   if (vertices == nullptr || vtxCount == 0 || vertexBytes == 0) {
     return false;
   }

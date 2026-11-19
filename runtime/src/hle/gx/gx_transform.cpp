@@ -40,15 +40,26 @@ namespace {
 // transform double-transformed menu viewports and broke 640x480 overscan, so it was removed.
 extern "C" void GX__SetViewportJitter_80173378(float l, float t, float w, float h, float nz, float fz, uint32_t f) {
     g_viewportState[0]=l; g_viewportState[1]=t; g_viewportState[2]=w; g_viewportState[3]=h; g_viewportState[4]=nz; g_viewportState[5]=fz;
+    if (GxCopyLogActive()) RT_LOGF(RT_TAG_GX, "[copylog] ViewportJitter %.1f,%.1f %.1fx%.1f z=%.2f..%.2f\n", l, t, w, h, nz, fz);
     GxWorker::Run([=] { GXSetViewportJitter(l, t, w, h, nz, fz, f); });
 }
 PPC_NATIVE_OVERRIDE_VOID(801DB370, GX__SetViewportJitter_80173378, (float l, float t, float w, float h, float nz, float fz, uint32_t f), (l, t, w, h, nz, fz, f));
 
 extern "C" void GX__SetViewport_801733b4(float l, float t, float w, float h, float nz, float fz) {
     g_viewportState[0]=l; g_viewportState[1]=t; g_viewportState[2]=w; g_viewportState[3]=h; g_viewportState[4]=nz; g_viewportState[5]=fz;
+    if (GxCopyLogActive()) RT_LOGF(RT_TAG_GX, "[copylog] Viewport %.1f,%.1f %.1fx%.1f z=%.2f..%.2f", l, t, w, h, nz, fz);
     GxWorker::Run([=] { GXSetViewport(l, t, w, h, nz, fz); });
+    // Sin's GXSetViewport (0x801DB3B0) only stores into the GX struct and sets a dirty bit that the HLE draw path never flushes.
+    // Mirror the guest function's stores so guest readers see the current viewport.
+    try {
+        const uint32_t gd = Memory::Read32(0x804B5B50u);
+        if (gd) {
+            const float v[6] = {l, t, w, h, nz, fz};
+            for (int i = 0; i < 6; ++i) Memory::WriteFloat32(gd + 1348u + 4u * i, v[i]);
+        }
+    } catch (...) {}
 }
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(801733b4, GX__SetViewport_801733b4, (float l, float t, float w, float h, float nz, float fz), (l, t, w, h, nz, fz));
+PPC_NATIVE_OVERRIDE_VOID(801DB3B0, GX__SetViewport_801733b4, (float l, float t, float w, float h, float nz, float fz), (l, t, w, h, nz, fz));
 
 extern "C" void GX__GetViewportv_801733e0(uint32_t oa) {
     // EGG::StateGX::GXSetViewport (0x802418D0) reads the current viewport unconditionally, and
@@ -104,6 +115,7 @@ extern "C" void GX__SetScissor_80173430(uint32_t l, uint32_t t, uint32_t w, uint
     // No viewport replay here: aurora recomputes viewport and scissor together
     // on every scissor change (set_logical_scissor -> apply_logical_render_state),
     // so re-issuing the current viewport would be duplicate work.
+    if (GxCopyLogActive()) RT_LOGF(RT_TAG_GX, "[copylog] Scissor %u,%u %ux%u\n", l, t, w, h);
     GxWorker::Run([l, t, w, h] { GXSetScissor(l, t, w, h); });
 }
 PPC_NATIVE_OVERRIDE_VOID(801DB3E0, GX__SetScissor_80173430, (uint32_t l, uint32_t t, uint32_t w, uint32_t h), (l, t, w, h));

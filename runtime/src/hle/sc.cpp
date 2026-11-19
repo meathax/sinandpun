@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include "memory.h"
+#include "guest_small_data.h"
 #include "runtime_config.h"
 #include "aurora_events.h"
 #include "runtime_log.h"
@@ -74,7 +75,9 @@ PPC_NATIVE_OVERRIDE(801B69E0, SCGetEuRgb60Mode_HLE, uint32_t, (), ());
 
 extern "C" uint32_t SCGetProductArea_HLE()
 {
-    return LookupProductRegion(MKW_GADDR(8029CEB0), 5, 13,
+    // R2VE01 SCGetProductArea (0x801B7060) walks the SDK area table at 0x8031F828 (5-byte rows:
+    // code + "JPN"/"USA"/...; 0xFF terminates). The donor table address (0x8029CEB0) is Sin code.
+    return LookupProductRegion(0x8031F828u, 5, 16,
                                RuntimeConsoleIdentity::Current().area);
 }
 
@@ -82,8 +85,10 @@ PPC_NATIVE_OVERRIDE(801B7060, SCGetProductArea_HLE, uint32_t, (), ());
 
 extern "C" uint32_t SCGetProductCode_HLE()
 {
-    // Original SC storage for the six-byte CODE value.
-    const uint32_t kProductCodeAddress = MKW_GADDR(803869E0);
+    // Original SC storage for the six-byte CODE value: the SDK's SDA buffer at r13-21408
+    // (SCGetProductCode passes it to __SCF1 as the destination). The donor address 0x803869E0
+    // is unrelated R2VE01 .bss.
+    const uint32_t kProductCodeAddress = GuestSmallData::kSda1Base - 21408u;
     const std::string& productCode = RuntimeConsoleIdentity::Current().productCode;
     const size_t size = productCode.size() + 1;
     if (!Memory::Contains(kProductCodeAddress, size)) {
@@ -108,7 +113,8 @@ PPC_NATIVE_OVERRIDE(801B7130, SCGetProductSN_HLE, uint32_t, (uint32_t serialAddr
 
 extern "C" uint32_t SCGetProductGameRegion_HLE()
 {
-    return LookupProductRegion(MKW_GADDR(8029CEF8), 4, 4,
+    // R2VE01 game-region table at 0x8031F870 (4-byte rows: code + "JP"/"US"/"EU"/...).
+    return LookupProductRegion(0x8031F870u, 4, 8,
                                RuntimeConsoleIdentity::Current().gameRegion);
 }
 
