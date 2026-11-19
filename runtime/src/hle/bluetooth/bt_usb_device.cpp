@@ -4,6 +4,7 @@
 #include "hle/runtime_parse_helpers.h"
 #include "memory.h"
 #include "runtime_log.h"
+#include "virtual_remote.h"
 #include "wiimote_host.h"
 
 #include <algorithm>
@@ -64,7 +65,7 @@ uint64_t NowUs() {
 
 Bluetooth::Controller& ControllerFor(Device& device) {
     if (!device.controller) {
-        device.controller = std::make_unique<Bluetooth::Controller>(Wiimote::Host());
+        device.controller = std::make_unique<Bluetooth::Controller>(VirtualRemote::Host());
     }
     return *device.controller;
 }

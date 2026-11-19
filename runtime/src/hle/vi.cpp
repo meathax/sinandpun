@@ -934,7 +934,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
     {
         static std::atomic<int> s_waitLogs{0};
         const int waitIdx = s_waitLogs.fetch_add(1);
-        if (waitIdx < 6 || waitIdx % 100 == 0) {
+        if (waitIdx < 3) {
             RT_LOG(RT_TAG_OS) << "[vi] VIWaitForRetrace call, fibers="
                               << (Fiber::GuestFiberManager::IsInitialized() ? 1 : 0) << std::endl;
         }

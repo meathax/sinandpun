@@ -26,4 +26,4 @@ extern "C" void WPADInit_HLE_801c0c10(CpuContext* ctx)
         logged = true;
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801C0C10, WPADInit_HLE_801c0c10, (CpuContext* ctx), (ctx));
+SIN_DISABLED_NATIVE_OVERRIDE_VOID(801C0C10, WPADInit_HLE_801c0c10, (CpuContext* ctx), (ctx));

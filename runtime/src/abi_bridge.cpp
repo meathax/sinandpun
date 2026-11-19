@@ -607,3 +607,41 @@ void InitializePersistentCpuContext() {
     ShowRuntimeFatalPopup("Unsupported guest instruction", message);
     std::abort();
 }
+
+// ---------------------------------------------------------------------------
+// Call tracing (debug): SIN_CALLTRACE=1 writes calltrace.txt with every guest
+// call target the first time it is called, in execution order. Shows exactly
+// where a stalled boot stops making progress.
+namespace CallTrace {
+bool g_enabled = [] {
+    const char* v = std::getenv("SIN_CALLTRACE");
+    return v && *v && *v != '0';
+}();
+
+void Record(uint32_t target) {
+    constexpr uint32_t kBase = 0x80000000u;
+    constexpr uint32_t kSpan = 0x01800000u;
+    static std::atomic<uint64_t> seen[(kSpan / 4 + 63) / 64];
+    static std::atomic<uint32_t> counter{0};
+    static std::mutex fileMutex;
+    static FILE* file = nullptr;
+    if (target < kBase || target >= kBase + kSpan) {
+        return;
+    }
+    const uint32_t idx = (target - kBase) >> 2;
+    const uint64_t bit = 1ull << (idx & 63);
+    if (seen[idx >> 6].fetch_or(bit, std::memory_order_relaxed) & bit) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(fileMutex);
+    if (!file) {
+        file = std::fopen("calltrace.txt", "w");
+        if (!file) {
+            g_enabled = false;
+            return;
+        }
+    }
+    std::fprintf(file, "%u %08X\n", counter.fetch_add(1) + 1, target);
+    std::fflush(file);
+}
+} // namespace CallTrace

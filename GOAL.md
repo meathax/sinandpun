@@ -26,9 +26,16 @@ resolution with nearest-filtered HUD — only after 1:1 + dual-analog is complet
    all 11,165 translated functions + aurora/SDL3/Dawn (d48a113)
    - music_attenuation.cpp: SMTC monitoring degrades without C++/WinRT headers
    - recomp.yml output root moved to generated/ (donor runtime CMake contract)
-6. [ ] **Sin product glue (IN PROGRESS)** — replace MKWii base_product/game glue,
-   retarget native registrations (MKWii PAL addrs -> R2VE01), DVD HLE over
-   orig/R2VE01/files, first-boot wiring
+6. [~] **Sin product glue (IN PROGRESS)** — natives retarget applied:
+   - SDK evidence: final Wii SDK archives (0x4302_145 series) matched into R2VE01:
+     2,451 functions, 363 data symbols, 905 reloc-transfer globals, 36 layout.
+   - 264 registrations + 29 GADDR constants rewritten to verified Sin addresses;
+     288 donor registrations disabled (SIN_DISABLED_*); MKWii glue blocklisted.
+   - Native index regenerated at Sin addresses (500 registrations); re-translated,
+     re-sharded. Rebuild in flight; next: first boot attempt with dvd_root set.
+   - Still unresolved: GXSetVtxDesc case-label sub-natives, KPAD/THPPlayer/AX
+     internals (drift), DVD queue/context bases, 164 GADDRs pending (report:
+     tools/retarget_pending_gaddr.txt).
 7. [ ] Module translation support (drop Program.cs module guard; module image at
    base + per-module maps; per-module code registration + dispatch)
 8. [ ] Locate game RSO loader (RSOStaticLocateObject 0x8020D990 xref) -> place

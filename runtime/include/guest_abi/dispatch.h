@@ -24,7 +24,15 @@ uint32_t FilterScnRendererPathMaskOption(uint32_t pathMask) noexcept;
 // static calls deliberately bypass InvokeDirectCpu for performance.
 // (used for the path mask filtering in ScnRenderer::createPath: depth of
 // field is always removed, bloom when the user disabled it)
+namespace CallTrace {
+extern bool g_enabled;  // SIN_CALLTRACE=1: log every first-seen call target in execution order
+void Record(uint32_t target);
+} // namespace CallTrace
+
 inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
+    if (__builtin_expect(CallTrace::g_enabled, 0)) {
+        CallTrace::Record(target);
+    }
     if (::GuestRegion::Is<0x8023BD38u>(target)) {
         // ScnRenderer::createPath receives the post-processing path mask in r4.
         ctx->gpr[4] = FilterScnRendererPathMaskOption(ctx->gpr[4]);

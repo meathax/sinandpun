@@ -2,7 +2,7 @@
   "format": "wiicompiled-runtime-native-index",
   "formatVersion": 2,
   "extractorVersion": 2,
-  "sourceDigest": "4538ba8b2cd1479b33a808dceae066561d4dc0cd9df0cf627fa4b50b668d9205",
+  "sourceDigest": "128b09b5a6cd4bf777105aaecf747b9c8609b8f7b45af1e977ada7ddcf96c3ae",
   "registrations": [
     {
       "address": "0x8012B830",
@@ -1264,14 +1264,6 @@
       "address": "0x801BC500",
       "symbol": "VIGetDTVStatus_HLE_801bad38",
       "sourceFile": "hle/vi.cpp",
-      "isTranslatedOverride": false,
-      "excludesBaseTranslation": true,
-      "modOverlay": "Unspecified"
-    },
-    {
-      "address": "0x801C0C10",
-      "symbol": "WPADInit_HLE_801c0c10",
-      "sourceFile": "hle/input/wpad.cpp",
       "isTranslatedOverride": false,
       "excludesBaseTranslation": true,
       "modOverlay": "Unspecified"
@@ -6642,27 +6634,6 @@
         "readsLrBeforeWrite": true,
         "mayWriteLr": true,
         "boundaryFlags": 1
-      }
-    },
-    {
-      "address": "0x801C0C10",
-      "isPrecise": true,
-      "contract": {
-        "gprReadBeforeWriteMask": 0,
-        "gprPossibleWriteMask": 0,
-        "gprReturnMask": 0,
-        "fprReadBeforeWriteMask": 0,
-        "fprPossibleWriteMask": 0,
-        "fprReturnMask": 0,
-        "crReadBeforeWriteMask": 0,
-        "crPossibleWriteMask": 0,
-        "readsXerBeforeWrite": false,
-        "mayWriteXer": false,
-        "readsCtrBeforeWrite": false,
-        "mayWriteCtr": false,
-        "readsLrBeforeWrite": false,
-        "mayWriteLr": false,
-        "boundaryFlags": 0
       }
     },
     {

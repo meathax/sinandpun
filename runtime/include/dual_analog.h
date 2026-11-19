@@ -102,7 +102,7 @@ inline void EmitDots(const PointerState& state, const Config& cfg,
     dot1Y = static_cast<uint16_t>(state.y);
 }
 
-// Left stick -> Nunchuk joystick (classic 8-bit axes, 128 centered).
+// Left stick -> Nunchuk joystick: 128 centered, +-96 = the 0x20..0xE0 range the\n// virtual Nunchuk calibration block advertises.
 struct NunchukState {
     uint8_t x = 128;
     uint8_t y = 128;
@@ -113,8 +113,8 @@ inline NunchukState NunchukFromStick(float rawStickX, float rawStickY,
     NunchukState out;
     ApplyDeadzone(rawStickX, rawStickY, deadzone);
     // SDL stick +Y is up; Nunchuk +Y is up too, so no inversion here.
-    out.x = static_cast<uint8_t>(128 + rawStickX * 127.f);
-    out.y = static_cast<uint8_t>(128 + rawStickY * 127.f);
+    out.x = static_cast<uint8_t>(128 + rawStickX * 96.f);
+    out.y = static_cast<uint8_t>(128 + rawStickY * 96.f);
     return out;
 }
 
