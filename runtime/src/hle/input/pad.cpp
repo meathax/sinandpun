@@ -103,7 +103,7 @@ extern "C" uint32_t PAD__Init_HLE()
 {
     return PADInit() ? 1u : 0u;
 }
-SIN_DISABLED_NATIVE_OVERRIDE(801AF2F0, PAD__Init_HLE, uint32_t, (), ());
+PPC_NATIVE_OVERRIDE(801B40B0, PAD__Init_HLE, uint32_t, (), ());
 
 // PADRead: gathers every GameCube pad source for the frame and writes the statuses to guest memory.
 extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
@@ -130,7 +130,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
 
     return rumbleMask;
 }
-SIN_DISABLED_NATIVE_OVERRIDE(801AF44C, PAD__Read_HLE, uint32_t, (uint32_t statusPtr), (statusPtr));
+PPC_NATIVE_OVERRIDE(801B4210, PAD__Read_HLE, uint32_t, (uint32_t statusPtr), (statusPtr));
 
 extern "C" uint32_t PAD__Reset_HLE(uint32_t mask)
 {
