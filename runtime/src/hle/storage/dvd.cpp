@@ -155,14 +155,14 @@ static bool IsDvdDataRoot(const fs::path& path) {
     }
     std::fprintf(stderr,
                  "\n[dvd] Set [paths] dvd_root in Config.toml "
-                 "to your extracted Mario Kart Wii DATA directory.\n");
+                 "to your extracted Sin & Punishment: Star Successor DATA directory.\n");
     std::string details = source ? source : "The configured DVD root could not be opened.";
     if (!path.empty()) {
         details += "\n\nPath: ";
         details += HostPathText(path);
     }
     details += "\n\nSet [paths] dvd_root in Config.toml to the extracted "
-               "Mario Kart Wii DATA directory.";
+               "Sin & Punishment: Star Successor DATA directory.";
     FailDvd("dvd_root", "DVD data is unavailable", details);
 }
 
@@ -183,7 +183,7 @@ static const fs::path& GetDvdRoot() {
             if (!file.read(id, 6)) {
                 FailDvdRoot("Configured DVD root has an unreadable or truncated sys/boot.bin", bootBin);
             }
-            if (std::memcmp(id, "RMC", 3) == 0 && id[3] != ::GuestRegion::CurrentFacts().letter) {
+            if (std::memcmp(id, "R2V", 3) == 0 && id[3] != ::GuestRegion::CurrentFacts().letter) {
                 FailDvd("dvd_region_mismatch", "DVD region mismatch",
                         std::string("Configured DVD root has disc ID '") + id +
                         "', but this build was compiled for region " + ::GuestRegion::CurrentFacts().gameId +
