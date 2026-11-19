@@ -111,6 +111,12 @@ extern "C" void OS__LoadContext_801a1f58(CpuContext* ctx)
             RT_LOG(RT_TAG_OS) << "OS__LoadContext: context 0x" << std::hex << guestContextAddr
                       << " has SRR0=0 (never saved); staying on current execution."
                       << std::dec << std::endl;
+            if (g_decrementerCallbackDepth > 0) {
+                // Inside the simulated decrementer exception: OSLoadContext is
+                // the handler's rfi back to the interrupted code. Unwind the
+                // callback instead of falling into its post-call bytes.
+                throw DecrementerExceptionReturn{};
+            }
             return;
         }
 

@@ -289,6 +289,8 @@ PPC_NATIVE_OVERRIDE_VOID(8015E790, PPCMfhid0_8012e574, (), ());
 PPC_SPR_STUB_BODY(PPCMthid0_8012e57c, "PPCMthid0 called (stubbed) - Move To HID0")
 PPC_NATIVE_OVERRIDE_VOID(8015E7A0, PPCMthid0_8012e57c, (), ());
 
+thread_local int g_decrementerCallbackDepth = 0;
+
 extern "C" void PPCMtdec_8012e594()
 {
     static std::atomic<int> logCount{0};
@@ -307,7 +309,7 @@ extern "C" void PPCMtdec_8012e594()
     // the callback with the current thread context. The callback's own path
     // re-reaches mtdec (its timer bookkeeping), so an in-flight guard keeps
     // the simulation from recursing: nested set-points only pump alarms.
-    static thread_local int callbackDepth = 0;
+    int& callbackDepth = g_decrementerCallbackDepth;
     if (callbackDepth == 0) {
         CpuContext* cpu = &GetPersistentCpuContext();
         const uint32_t currentContext = ::Memory::Read32(0x800000E4u);  // __OSCurrentContext
@@ -320,11 +322,17 @@ extern "C" void PPCMtdec_8012e594()
             // in r3 (__OS_EXCEPTION_DECREMENTER = 8), context in r4. The earlier
             // attempt put the context in r3 and left r4 stale, so the callback
             // jumped through a bogus context (crash: OSLoadContext 0x80000000).
+            const CpuContext interrupted = *cpu;
             cpu->gpr[3] = 8u;
             cpu->gpr[4] = currentContext;
             ++callbackDepth;
             try {
                 MKW_GUEST_FUNC(801A7160)(cpu);
+            } catch (const DecrementerExceptionReturn&) {
+                // rfi to the interrupted context: restore the caller's CPU state.
+                *cpu = interrupted;
+                --callbackDepth;
+                return;
             } catch (...) {
                 --callbackDepth;
                 throw;

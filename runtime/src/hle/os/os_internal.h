@@ -15,6 +15,12 @@
 #include "memory.h"
 #include "runtime_log.h"
 
+// Thrown by OS__LoadContext when the simulated decrementer exception handler
+// "returns from the exception" (OSLoadContext on the interrupted context).
+// PPCMtdec catches it, restores the interrupted CPU state and resumes.
+struct DecrementerExceptionReturn {};
+extern thread_local int g_decrementerCallbackDepth;
+
 namespace OsHleInternal {
 
 extern std::atomic<bool> g_interrupts_enabled;
