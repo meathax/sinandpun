@@ -299,14 +299,18 @@ extern "C" void PPCMtdec_8012e594()
     // 32, not 1: a single alarm let unrelated periodic alarms backlog and delay
     // AsyncDisplay's pacing alarm by multiple retraces.
     OS_HLE_ProcessAlarms(32);
-    // The guest's raw decrementer waits are BUSY SPINS: without preemption the
-    // spinning thread starves every other runnable thread (the boot stalled
-    // here: the worker spun the audio pump while the render main thread never
-    // ran again). Make every decrementer set a cooperative yield: after
-    // servicing alarms, run the scheduler so a higher-priority READY thread
-    // (or any other runnable one) gets the CPU. If no switch is needed,
-    // SelectThread returns immediately and the spin continues.
-    SelectThread_801a9c08(&GetPersistentCpuContext());
+    // The real decrementer exception runs the SDK's
+    // DecrementerExceptionCallback (R2VE01 0x801A7160): system-time
+    // bookkeeping, time-slice preemption and a conditional OSLoadContext
+    // (0x801A8880) switch. Raw decrementer waits (mtdec; spin) rely on that
+    // state machine to observe their wake condition, so the set-point invokes
+    // the callback with the current thread context. If it switches, execution
+    // resumes in the new thread; otherwise the callback returns and the spin
+    // continues.
+    CpuContext* cpu = &GetPersistentCpuContext();
+    cpu->gpr[3] = ::Memory::Read32(0x800000E4u);  // __OSCurrentContext
+    MKW_GUEST_FUNC(801A7160)(cpu);
+    SelectThread_801a9c08(cpu);
 }
 PPC_NATIVE_OVERRIDE_VOID(8015E7D0, PPCMtdec_8012e594, (), ());
 
