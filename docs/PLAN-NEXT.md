@@ -122,7 +122,7 @@ Known unaudited places: `runtime/src/hle/vi.cpp` (many VI state addresses at 0x8
 | M2 | First real frame: DVD reads + visible picture | `[dvd]` reads in log; `shot_stats` shows thousands of colours; screenshot of a title/logo screen |
 | M3 | Stage modules (RSO loader + code-set switching) | Starting a stage loads `stg0N.bin` and runs gameplay frames without a fatal |
 | M4 | Dual-analog aiming + setup UI | Right stick moves the reticle correctly (measured), left stick moves the character, UI persists settings |
-| M5 | Full playthrough validation and polish | All stages/bosses/menus/save/audio verified against the original; final acceptance checklist (section 8) |
+| M5 | Full playthrough validation and polish | All stages/bosses/menus/save/audio verified against the original; final acceptance checklist (section 11) |
 
 If a milestone blocks you for more than a few full attempts, stop and write what you know (evidence, hypotheses ruled out) in `docs/STATUS.md`, add a lesson, and ask the user.
 
