@@ -2783,7 +2783,7 @@ ProgramImage BuildSyntheticModProgramImage(string outDir, OverlayBuildResult ove
     var loadedProject = RequireProject();
     var rel = relFile.Value ?? throw new InvalidOperationException("Kamek mod translation currently requires the project's single configured REL.");
     var relImage = rel.BuildImage(loadedProject.Inputs.Rel!.LoadAddress);
-    var baseImage = new ProgramImageBuilder().Build(dolFile.Value, relImage, loadedProject.Memory.Base, loadedProject.Memory.Size);
+    var baseImage = new ProgramImageBuilder().Build(dolFile.Value, relImage, null, loadedProject.Memory.Base, loadedProject.Memory.Size);
     var memory = baseImage.Memory.ToArray();
 
     CopyFileToGuest(
@@ -2925,7 +2925,7 @@ int RunEmitBaseManifest(string[] argsTail)
 
     var rel = relFile.Value ?? throw new InvalidOperationException("Base mod manifest generation currently requires the project's single configured REL.");
     var relImage = rel.BuildImage(loadedProject.Inputs.Rel!.LoadAddress);
-    var baseImage = new ProgramImageBuilder().Build(dolFile.Value, relImage, loadedProject.Memory.Base, loadedProject.Memory.Size);
+    var baseImage = new ProgramImageBuilder().Build(dolFile.Value, relImage, null, loadedProject.Memory.Base, loadedProject.Memory.Size);
     var result = BaseManifestBuilder.BuildAndWrite(
         dolFile.Value,
         rel,
