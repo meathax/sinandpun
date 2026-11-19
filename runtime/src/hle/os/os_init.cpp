@@ -145,6 +145,20 @@ extern "C" void HLE___OSInitNet_801b26b0()
 }
 PPC_NATIVE_OVERRIDE_VOID(801B26B0, HLE___OSInitNet_801b26b0, (), ());
 
+// VIGetScanMode (R2VE01 0x801BC4A0): the Feb-2009 SDK body reads the VI
+// TV-mode MMIO register (0xCC00206C) directly; the engine calls it right
+// after VIGetTvFormat (fn_8003DC58+0xA8, compared against VI_PROGRESSIVE=2).
+// Retail NTSC boots 480i: report VI_INTERLACE (0).
+extern "C" uint32_t HLE_VIGetScanMode_801bc4a0()
+{
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) {
+        RT_LOG(RT_TAG_OS) << "HLE_VIGetScanMode_801bc4a0 called: returning VI_INTERLACE (0)" << std::endl;
+    }
+    return 0;
+}
+PPC_NATIVE_OVERRIDE(801BC4A0, HLE_VIGetScanMode_801bc4a0, uint32_t, (), ());
+
 REGISTER_NATIVE_FUNCTION(0x801B7AF0, SIInit_801b2de0);
 PPC_NATIVE_OVERRIDE_VOID(801B8830, HLE_SISetSamplingRate_801b8830, (uint32_t msec), (msec));
 
