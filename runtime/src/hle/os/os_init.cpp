@@ -11,6 +11,9 @@
 #include <thread>
 
 #include "abi_bridge.h"
+
+// os_scheduler.cpp exports these (extern "C"); no shared header exists.
+extern "C" void SelectThread_801a9c08(CpuContext* ctx);
 #include "memory.h"
 #include "hle_stubs.h"
 #include "ppc_runtime.h"
@@ -296,6 +299,14 @@ extern "C" void PPCMtdec_8012e594()
     // 32, not 1: a single alarm let unrelated periodic alarms backlog and delay
     // AsyncDisplay's pacing alarm by multiple retraces.
     OS_HLE_ProcessAlarms(32);
+    // The guest's raw decrementer waits are BUSY SPINS: without preemption the
+    // spinning thread starves every other runnable thread (the boot stalled
+    // here: the worker spun the audio pump while the render main thread never
+    // ran again). Make every decrementer set a cooperative yield: after
+    // servicing alarms, run the scheduler so a higher-priority READY thread
+    // (or any other runnable one) gets the CPU. If no switch is needed,
+    // SelectThread returns immediately and the spin continues.
+    SelectThread_801a9c08(&GetPersistentCpuContext());
 }
 PPC_NATIVE_OVERRIDE_VOID(8015E7D0, PPCMtdec_8012e594, (), ());
 

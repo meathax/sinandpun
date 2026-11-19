@@ -1,5 +1,6 @@
 // OSMessageQueue HLE.
 
+#include <atomic>
 #include <cstdint>
 #include <iostream>
 
@@ -113,12 +114,22 @@ template <typename Ready, typename Apply>
 int32_t MsgQueueOp(CpuContext* cpu, const char* who, uint32_t queuePtr, bool block,
                    Ready ready, Apply apply, uint32_t wakeOffset, uint32_t blockOffset)
 {
+    // Capped trace: the boot's loader/main-thread handshake is invisible
+    // otherwise (queues are guest structs; only the traffic pattern matters).
+    static std::atomic<int> s_trace{0};
+
     const int32_t irqState = OS__DisableInterrupts_801a65ac();
 
     while (true) {
         try {
             if (ready(queuePtr)) {
                 apply(queuePtr);
+                if (s_trace.load(std::memory_order_relaxed) < 40) {
+                    s_trace.fetch_add(1, std::memory_order_relaxed);
+                    RT_LOG(RT_TAG_OS) << "[msg] " << who << " queue=0x" << std::hex << queuePtr
+                              << " block=" << std::dec << (block ? 1 : 0)
+                              << " -> OK" << std::endl;
+                }
                 cpu->gpr[3] = queuePtr + wakeOffset;
                 OSWakeupThread_HLE_801aaaa4(cpu);
                 cpu->gpr[3] = 1;
@@ -133,11 +144,23 @@ int32_t MsgQueueOp(CpuContext* cpu, const char* who, uint32_t queuePtr, bool blo
         }
 
         if (!block) {
+            if (s_trace.load(std::memory_order_relaxed) < 40) {
+                s_trace.fetch_add(1, std::memory_order_relaxed);
+                RT_LOG(RT_TAG_OS) << "[msg] " << who << " queue=0x" << std::hex << queuePtr
+                          << " block=" << std::dec << (block ? 1 : 0)
+                          << " -> EMPTY/nonblocking" << std::endl;
+            }
             cpu->gpr[3] = 0;
             OS__RestoreInterrupts_801a65d4(irqState);
             return 0;
         }
 
+        if (s_trace.load(std::memory_order_relaxed) < 40) {
+            s_trace.fetch_add(1, std::memory_order_relaxed);
+            RT_LOG(RT_TAG_OS) << "[msg] " << who << " queue=0x" << std::hex << queuePtr
+                      << " block=" << std::dec << (block ? 1 : 0)
+                      << " -> PARKING" << std::endl;
+        }
         cpu->gpr[3] = queuePtr + blockOffset;
         OSSleepThread_HLE_801aa9b8(cpu);
     }

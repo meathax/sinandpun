@@ -374,7 +374,7 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
     OS__LoadContext_801a1f58(cpu);
 }
 
-SIN_DISABLED_NATIVE_OVERRIDE_VOID(801A9C08, SelectThread_801a9c08, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801AFBB0, SelectThread_801a9c08, (CpuContext* ctx), (ctx));
 
 // ============================================================================
 // OSWakeupThread HLE - drain a thread queue and mark threads runnable
