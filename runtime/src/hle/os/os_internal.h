@@ -46,7 +46,7 @@ const uint32_t kSchedulerPendingFlagAddr = MKW_GADDR(80386920);
 // RVL OS uses this as the OSDisableScheduler/OSEnableScheduler nesting count.
 // SelectThread exits early while the count is non-zero.
 const uint32_t kSchedulerIdleFlagAddr = MKW_GADDR(80386918);
-const uint32_t kAlarmQueueAddr = MKW_GADDR(803868A0);
+const uint32_t kAlarmQueueAddr = MKW_GADDR(804B2220);  // Sin AlarmQueue (reloc-transfer recovered); donor 0x803868A0 is MKWii data
 
 constexpr uint32_t kThreadStateOffset = 0x2C8u;
 constexpr uint32_t kThreadAttrOffset = 0x2CAu;
