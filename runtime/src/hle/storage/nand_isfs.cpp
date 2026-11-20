@@ -44,6 +44,14 @@ static std::string ReadGuestCString(uint32_t address, size_t maxLength = 1024) {
 using IosVector = RuntimeHle::IoVector;
 using RuntimeHle::ReadIoVector;
 
+static bool NandAcceptanceTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("SIN_NAND_LOG");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
 static IosVector ReadIosVector(uint32_t vectorPtr, uint32_t index) {
     return ReadIoVector(vectorPtr, index);
 }
@@ -132,6 +140,11 @@ extern "C" int32_t NAND_IOS_Open_HLE(uint32_t pathPtr, uint32_t mode) {
     }
     
     int32_t fd = AllocateFd(hostPath, file, mode);
+    if (NandAcceptanceTraceEnabled()) {
+        RT_LOGF(RT_TAG_NAND, "accept ios_open fd=%d mode=%u path=\"%s\"\n",
+                fd, mode, HostPathText(hostPath).c_str());
+        std::fflush(stderr);
+    }
     return fd;
 }
 PPC_NATIVE_OVERRIDE(80199D00, NAND_IOS_Open_HLE, int32_t, (uint32_t pathPtr, uint32_t mode), (pathPtr, mode));
@@ -181,6 +194,11 @@ extern "C" int32_t NAND_IOS_Read_HLE(uint32_t fd, uint32_t bufferPtr, uint32_t l
     
     size_t bytesRead = std::fread(buffer, 1, length, handle->file);
     handle->position += static_cast<uint32_t>(bytesRead);
+    if (NandAcceptanceTraceEnabled()) {
+        RT_LOGF(RT_TAG_NAND, "accept ios_read fd=%u length=%u bytes=%zu path=\"%s\"\n",
+                fd, length, bytesRead, HostPathText(handle->path).c_str());
+        std::fflush(stderr);
+    }
     
     return static_cast<int32_t>(bytesRead);
 }

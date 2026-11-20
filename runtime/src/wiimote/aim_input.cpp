@@ -112,6 +112,7 @@ float AxisValue(SDL_Gamepad* pad, int axis) {
 void ClearInputLocked(State& g) {
     g.keys.reset();
     g.mouseButtons = 0;
+    g.mouse.valid = false;
     g.wheelUpUntil = g.wheelDownUntil = 0;
     g.dx = g.dy = 0.f;
     g.pulseKeys.reset();

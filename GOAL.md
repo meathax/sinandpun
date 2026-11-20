@@ -1,54 +1,43 @@
-# GOAL — Sin & Punishment: Star Successor (R2VE01) PC recomp
+# GOAL - Sin & Punishment: Star Successor (R2VE01) PC recomp
 
-## Target (user-mandated 2026-11-19)
-Fully complete 1:1 recomp of the original game, with exactly one feature change:
-**full dual-analog Xbox One style controller support — right stick for aiming,
-with a really nice controller setup UI and great right-analog aim feel.**
+## Target
 
-Everything else must match the original (60 Hz logic tick, original behavior).
-Optional later (docs/TOOLING.md): interpolated uncapped framerate, high internal
-resolution with nearest-filtered HUD — only after 1:1 + dual-analog is complete.
+Complete a 1:1 static recompilation of the original Wii game to native x86-64, with one deliberate feature change:
+full dual-analog gamepad support. The right stick aims, the left stick moves, and the in-game controller setup is
+straightforward to use.
 
-## Non-negotiables
-- Right stick aims (synthesized absolute Wii-Remote IR pointer at the WPAD/KPAD
-  layer, BlackKnight technique; deadzone, sensitivity, response curve settings).
-- Left stick = Nunchuk movement. Aim must feel great: smoothing/ramp curves,
-  configurable, no lost pointer state, no sensor-bar fiction exposed to the user.
-- 1:1 game behavior otherwise: main.dol + all 8 stg RSO modules translated,
-  original assets read from `orig/R2VE01/files` via DVD HLE.
+Everything else must preserve original behavior, including the 60 Hz game loop, assets, menus, stages, saves, audio, and
+progression. Optional later features such as uncapped presentation or higher internal resolution are outside the
+completion target and must not mask 1:1 regressions.
 
-## Milestone ladder (state as of 2026-11-19)
-1. [x] main.dol translates (11,169 funcs, 0 unsupported insns) — generated/functions
-2. [x] stg00-07 linked flat @ 0x80800000 (tools/rso_link.py), 0 unresolved imports
-3. [x] Translator default test baseline green (767/0/8)
-4. [x] First native compile of the generated tree (compile-only pass + full link)
-5. [x] Runtime fork builds end-to-end: build/native/WiiCompiled.exe links with
-   all 11,165 translated functions + aurora/SDL3/Dawn (d48a113)
-   - music_attenuation.cpp: SMTC monitoring degrades without C++/WinRT headers
-   - recomp.yml output root moved to generated/ (donor runtime CMake contract)
-6. [~] **Sin product glue (IN PROGRESS)** — natives retarget applied:
-   - SDK evidence: final Wii SDK archives (0x4302_145 series) matched into R2VE01:
-     2,451 functions, 363 data symbols, 905 reloc-transfer globals, 36 layout.
-   - 264 registrations + 29 GADDR constants rewritten to verified Sin addresses;
-     288 donor registrations disabled (SIN_DISABLED_*); MKWii glue blocklisted.
-   - Native index regenerated at Sin addresses (500 registrations); re-translated,
-     re-sharded. Rebuild in flight; next: first boot attempt with dvd_root set.
-   - Still unresolved: GXSetVtxDesc case-label sub-natives, KPAD/THPPlayer/AX
-     internals (drift), DVD queue/context bases, 164 GADDRs pending (report:
-     tools/retarget_pending_gaddr.txt).
-7. [ ] Module translation support (drop Program.cs module guard; module image at
-   base + per-module maps; per-module code registration + dispatch)
-8. [ ] Locate game RSO loader (RSOStaticLocateObject 0x8020D990 xref) -> place
-   modules at 0x80800000 window or HLE the loader
-9. [ ] Boot to title (first pixel), then gameplay smoke test per stage module
-10. [ ] Dual-analog aim implementation + controller setup UI (the one feature)
-11. [ ] Polish: aim feel tuning, full playthrough validation vs original
+## Verified baseline
 
-## Known gaps carried
-- __OSDBJump `bla 0x60` out-of-RAM call has no target (debugger stub; ignore until it matters)
-- 4 missing extabindex relocs per stg module (CW exception tables; benign for recomp)
+- The main DOL and all eight stage modules translate and the runtime links.
+- The game boots to a rendered title screen.
+- The guest WPAD path connects the virtual remote.
+- All eight stage modules link and render in isolated idle-player runs; stages 6 and 7 are verified.
+- The game-styled recomp options overlay opens from both the title and pause OPTIONS pages.
+- Audio produces non-silent mixed PCM; save files are created.
+- The hardened `tools/clean_build.ps1` completed a local clean runtime configure/build and all 15 native tests.
+  This is workstation-local evidence, not a promise of cross-machine or package-independent reproducibility.
 
-## Working rules
-- Scratch in build/, clean per global disk rule; no game data committed (orig/ untracked)
-- Translator changes: dotnet test translator/Translator.sln -c Release must stay green
-- Lesson DB entries after each verified fix
+## Definition of done
+
+The recomp is complete only when the canonical checklist in `docs/REMAINING.md` is fully verified with run evidence.
+`docs/COMPLETION-PLAN.md` is the exhaustive execution plan, `docs/REMAINING.md` is the live open checklist,
+and `docs/STATUS.md` records evidence.
+
+In particular, completion still requires:
+
+1. A full playthrough through bosses, game-over/continue, and credits with no fatal errors or unbounded logs.
+2. Save -> quit -> reload validation.
+3. Real-device input and settings-persistence validation.
+4. Audibility validation on a real output device.
+5. Performance and visual/behavioral fidelity validation against original/reference behavior.
+
+## Rules
+
+- No game data is committed. `orig/`, `generated/`, and `build/` remain local evidence only.
+- Do not claim success from compilation, code inspection, scripted setup, or another workstream's pending QA alone.
+- Preserve strict translation/test behavior and the 1:1 baseline.
+- Record concrete logs or screenshots in `docs/STATUS.md` before removing an item from the canonical list.

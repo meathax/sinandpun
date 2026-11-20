@@ -1298,13 +1298,15 @@ void finalize_frame_interpolation() noexcept {
     const auto appendPreparedPair = [&](const Mat3x4<float>& previousPosition,
                                         const Mat3x4<float>& currentPosition,
                                         const Mat3x4<float>& previousNormal,
-                                        const Mat3x4<float>& currentNormal,
-                                        bool indexed) {
+                                        const Mat3x4<float>& currentNormal) {
       const size_t pairOffset = preparedPairs.size();
-      preparedPairs.push_back(indexed ? prepare_indexed_pair(previousPosition, currentPosition)
-                                      : prepare_affine_pair(previousPosition, currentPosition));
-      preparedPairs.push_back(indexed ? prepare_indexed_pair(previousNormal, currentNormal)
-                                      : prepare_affine_pair(previousNormal, currentNormal));
+      // PN matrices are already-composed model/view transforms. Independently
+      // decomposing and rejoining their TRS components can move shared vertices
+      // by different amounts when model pieces use different matrices. Linear
+      // coefficient interpolation preserves endpoint joins in every draw:
+      // lerp(Ma * pA, Mb * pB, t) when both endpoints coincide.
+      preparedPairs.push_back(prepare_indexed_pair(previousPosition, currentPosition));
+      preparedPairs.push_back(prepare_indexed_pair(previousNormal, currentNormal));
       return pairOffset;
     };
 
@@ -1441,7 +1443,7 @@ void finalize_frame_interpolation() noexcept {
           }
           const size_t pairOffset =
               appendPreparedPair(*resolved.position, current.indexedMatrices->position[slot],
-                                 *resolved.normal, current.indexedMatrices->normal[slot], true);
+                                 *resolved.normal, current.indexedMatrices->normal[slot]);
           prepared.indexedPairOffsets[slot] = pairOffset;
           if (!preparedPairs[pairOffset].valid || !preparedPairs[pairOffset + 1].valid) {
             allSlotsValid = false;
@@ -1457,7 +1459,7 @@ void finalize_frame_interpolation() noexcept {
         const auto& previous = s_previousFrameTransforms[previousTransformIndex].transform;
         prepared.previousProjectionEntry = previousTransformIndex;
         prepared.nonIndexedPairOffset = appendPreparedPair(
-            previous.position, current.position, previous.normal, current.normal, false);
+            previous.position, current.position, previous.normal, current.normal);
       }
     }
 

@@ -59,6 +59,11 @@ static wgpu::BindGroupLayout g_ResampleBindGroupLayout;
 static wgpu::RenderPipeline g_ResamplePipeline;
 static wgpu::Buffer g_ResampleUniformBuffer;
 static TextureWithSampler g_resampledFrameBuffer;
+static wgpu::BindGroupLayout g_GuiCompositeBindGroupLayout;
+static wgpu::RenderPipeline g_GuiCompositePipeline;
+static wgpu::Buffer g_GuiCompositeUniformBuffer;
+static wgpu::Sampler g_GuiNearestSampler;
+static TextureWithSampler g_guiCompositeFrameBuffer;
 
 static wgpu::Adapter g_adapter;
 wgpu::Instance g_instance;
@@ -192,6 +197,51 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color = sample_area(in.position);
     }
     return vec4(color.rgb, 1.0);
+}
+)"sv;
+
+constexpr std::string_view guiCompositeShaderSource = R"(
+struct Uniforms {
+    output: vec4<f32>,
+    source: vec4<f32>,
+    destination: vec4<f32>,
+};
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var nearest: sampler;
+@group(0) @binding(2) var scaled: texture_2d<f32>;
+@group(0) @binding(3) var scene: texture_2d<f32>;
+@group(0) @binding(4) var baseline: texture_2d<f32>;
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
+    let positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, 1.0), vec2<f32>(-1.0, -3.0), vec2<f32>(3.0, 1.0));
+    var output: VertexOutput;
+    output.position = vec4<f32>(positions[index], 0.0, 1.0);
+    return output;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let pixel = vec2<i32>(floor(in.position.xy));
+    let scaled_color = textureLoad(scaled, pixel, 0);
+    let output_uv = (in.position.xy) / uniforms.output.xy;
+    let destination_min = uniforms.destination.xy;
+    let destination_max = destination_min + uniforms.destination.zw;
+    let relative = clamp((output_uv - destination_min) / max(uniforms.destination.zw, vec2<f32>(0.000001)),
+                         vec2<f32>(0.0), vec2<f32>(1.0));
+    let source_uv = uniforms.source.xy + relative * uniforms.source.zw;
+    let scene_color = textureSample(scene, nearest, source_uv);
+    let baseline_color = textureSample(baseline, nearest, source_uv);
+    let inside = all(output_uv >= destination_min) && all(output_uv <= destination_max);
+    if (!inside) {
+        return scaled_color;
+    }
+    let changed = any(abs(scene_color - baseline_color) > vec4<f32>(0.0005));
+    return select(scaled_color, vec4<f32>(scene_color.rgb, 1.0), changed);
 }
 )"sv;
 
@@ -707,6 +757,92 @@ void create_resample_pipeline() {
   g_ResampleUniformBuffer = g_device.CreateBuffer(&uniformBufferDescriptor);
 }
 
+void create_gui_composite_pipeline() {
+  wgpu::ShaderSourceWGSL sourceDescriptor{};
+  sourceDescriptor.code = guiCompositeShaderSource;
+  const wgpu::ShaderModuleDescriptor moduleDescriptor{
+      .nextInChain = &sourceDescriptor,
+      .label = "Pixel-Perfect GUI Composite Module",
+  };
+  const auto module = g_device.CreateShaderModule(&moduleDescriptor);
+  const std::array colorTargets{wgpu::ColorTargetState{
+      .format = g_graphicsConfig.surfaceConfiguration.format,
+      .writeMask = wgpu::ColorWriteMask::All,
+  }};
+  const wgpu::FragmentState fragmentState{
+      .module = module,
+      .entryPoint = "fs_main",
+      .targetCount = colorTargets.size(),
+      .targets = colorTargets.data(),
+  };
+  const std::array entries{
+      wgpu::BindGroupLayoutEntry{
+          .binding = 0,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .buffer = wgpu::BufferBindingLayout{.type = wgpu::BufferBindingType::Uniform},
+      },
+      wgpu::BindGroupLayoutEntry{
+          .binding = 1,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .sampler = wgpu::SamplerBindingLayout{.type = wgpu::SamplerBindingType::Filtering},
+      },
+      wgpu::BindGroupLayoutEntry{
+          .binding = 2,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .texture = wgpu::TextureBindingLayout{.sampleType = wgpu::TextureSampleType::Float,
+                                                .viewDimension = wgpu::TextureViewDimension::e2D},
+      },
+      wgpu::BindGroupLayoutEntry{
+          .binding = 3,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .texture = wgpu::TextureBindingLayout{.sampleType = wgpu::TextureSampleType::Float,
+                                                .viewDimension = wgpu::TextureViewDimension::e2D},
+      },
+      wgpu::BindGroupLayoutEntry{
+          .binding = 4,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .texture = wgpu::TextureBindingLayout{.sampleType = wgpu::TextureSampleType::Float,
+                                                .viewDimension = wgpu::TextureViewDimension::e2D},
+      },
+  };
+  const wgpu::BindGroupLayoutDescriptor layoutDescriptor{
+      .entryCount = entries.size(),
+      .entries = entries.data(),
+  };
+  g_GuiCompositeBindGroupLayout = g_device.CreateBindGroupLayout(&layoutDescriptor);
+  const std::array layouts{g_GuiCompositeBindGroupLayout};
+  const wgpu::PipelineLayoutDescriptor pipelineLayoutDescriptor{
+      .bindGroupLayoutCount = layouts.size(),
+      .bindGroupLayouts = layouts.data(),
+  };
+  const auto pipelineLayout = g_device.CreatePipelineLayout(&pipelineLayoutDescriptor);
+  const wgpu::RenderPipelineDescriptor descriptor{
+      .label = "Pixel-Perfect GUI Composite Pipeline",
+      .layout = pipelineLayout,
+      .vertex = wgpu::VertexState{.module = module, .entryPoint = "vs_main"},
+      .primitive = wgpu::PrimitiveState{.topology = wgpu::PrimitiveTopology::TriangleList},
+      .multisample = wgpu::MultisampleState{.count = 1, .mask = UINT32_MAX},
+      .fragment = &fragmentState,
+  };
+  g_GuiCompositePipeline = g_device.CreateRenderPipeline(&descriptor);
+  const wgpu::BufferDescriptor bufferDescriptor{
+      .label = "Pixel-Perfect GUI Composite Uniforms",
+      .usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
+      .size = 48,
+  };
+  g_GuiCompositeUniformBuffer = g_device.CreateBuffer(&bufferDescriptor);
+  const wgpu::SamplerDescriptor samplerDescriptor{
+      .label = "Pixel-Perfect GUI Nearest Sampler",
+      .addressModeU = wgpu::AddressMode::ClampToEdge,
+      .addressModeV = wgpu::AddressMode::ClampToEdge,
+      .addressModeW = wgpu::AddressMode::ClampToEdge,
+      .magFilter = wgpu::FilterMode::Nearest,
+      .minFilter = wgpu::FilterMode::Nearest,
+      .mipmapFilter = wgpu::MipmapFilterMode::Nearest,
+  };
+  g_GuiNearestSampler = g_device.CreateSampler(&samplerDescriptor);
+}
+
 wgpu::BindGroup create_copy_bind_group(const TextureWithSampler& source) {
   const std::array bindGroupEntries{
       wgpu::BindGroupEntry{
@@ -786,6 +922,67 @@ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& en
   pass.End();
 
   return g_resampledFrameBuffer;
+}
+
+const TextureWithSampler& composite_pixel_perfect_gui(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
+                                                      const TextureWithSampler& scaled,
+                                                      const TextureWithSampler& scene,
+                                                      const TextureWithSampler& baseline,
+                                                      const gfx::pixel_perfect::GuiCopyMapping& mapping) {
+  const uint32_t width = viewport_extent(viewport.width);
+  const uint32_t height = viewport_extent(viewport.height);
+  if (!g_guiCompositeFrameBuffer.view || g_guiCompositeFrameBuffer.size.width != width ||
+      g_guiCompositeFrameBuffer.size.height != height || g_guiCompositeFrameBuffer.format != scaled.format) {
+    g_guiCompositeFrameBuffer = create_render_texture(width, height, false);
+  }
+
+  struct GuiUniforms {
+    float output[4];
+    float source[4];
+    float destination[4];
+  };
+  const GuiUniforms uniforms{
+      .output = {static_cast<float>(width), static_cast<float>(height), 0.f, 0.f},
+      .source = {mapping.sourceLeft, mapping.sourceTop, mapping.sourceWidth, mapping.sourceHeight},
+      .destination = {mapping.destinationLeft, mapping.destinationTop, mapping.destinationWidth,
+                      mapping.destinationHeight},
+  };
+  AURORA_ASSERT(gfx::render_worker::is_worker_thread(), "GUI composite queue write must run on the render worker");
+  g_queue.WriteBuffer(g_GuiCompositeUniformBuffer, 0, &uniforms, sizeof(uniforms));
+
+  const std::array entries{
+      wgpu::BindGroupEntry{.binding = 0, .buffer = g_GuiCompositeUniformBuffer, .size = 48},
+      wgpu::BindGroupEntry{.binding = 1, .sampler = g_GuiNearestSampler},
+      wgpu::BindGroupEntry{.binding = 2, .textureView = scaled.view},
+      wgpu::BindGroupEntry{.binding = 3, .textureView = scene.view},
+      wgpu::BindGroupEntry{.binding = 4, .textureView = baseline.view},
+  };
+  const wgpu::BindGroupDescriptor descriptor{
+      .layout = g_GuiCompositeBindGroupLayout,
+      .entryCount = entries.size(),
+      .entries = entries.data(),
+  };
+  const auto bindGroup = g_device.CreateBindGroup(&descriptor);
+  const std::array attachments{
+      wgpu::RenderPassColorAttachment{
+          .view = g_guiCompositeFrameBuffer.view,
+          .loadOp = wgpu::LoadOp::Clear,
+          .storeOp = wgpu::StoreOp::Store,
+      },
+  };
+  const wgpu::RenderPassDescriptor renderPassDescriptor{
+      .label = "Pixel-Perfect GUI Composite",
+      .colorAttachmentCount = attachments.size(),
+      .colorAttachments = attachments.data(),
+      .timestampWrites = gpu_prof::pass_writes("GUI nearest composite"),
+  };
+  const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
+  pass.SetPipeline(g_GuiCompositePipeline);
+  pass.SetBindGroup(0, bindGroup);
+  pass.SetViewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height), 0.f, 1.f);
+  pass.Draw(3);
+  pass.End();
+  return g_guiCompositeFrameBuffer;
 }
 
 static wgpu::BackendType to_wgpu_backend(AuroraBackend backend) {
@@ -1204,6 +1401,7 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   };
   create_copy_pipeline();
   create_resample_pipeline();
+  create_gui_composite_pipeline();
   gpu_prof::initialize();
   resize_swapchain(size.fb_width, size.fb_height, size.native_fb_width, size.native_fb_height, true);
   g_initialized = true;
@@ -1224,6 +1422,11 @@ void shutdown() {
   g_ResamplePipeline = {};
   g_ResampleUniformBuffer = {};
   g_resampledFrameBuffer = {};
+  g_GuiCompositeBindGroupLayout = {};
+  g_GuiCompositePipeline = {};
+  g_GuiCompositeUniformBuffer = {};
+  g_GuiNearestSampler = {};
+  g_guiCompositeFrameBuffer = {};
   g_frameBuffer = {};
   g_frameBufferResolved = {};
   g_depthBuffer = {};

@@ -56,6 +56,7 @@ struct FrameRecorder {
   ClipRect cachedScissor;
   bool suppressRenderWorker = false;
   bool normalRequested = false;
+  pixel_perfect::GuiProjectionTracker projectionTracker;
 #ifdef AURORA_GFX_DEBUG_GROUPS
   std::vector<std::string> debugGroupStack;
 #endif
@@ -234,6 +235,15 @@ PassSnapshotEntry& acquire_pass_snapshot(uint32_t width, uint32_t height, bool w
     };
   }
   return entry;
+}
+
+void snapshot_current_pass_color(webgpu::TextureWithSampler& output) {
+  auto& pass = g_recorder.passes()[g_recorder.currentRenderPass];
+  const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
+  auto& entry = acquire_pass_snapshot(size.width, size.height, true, false, false);
+  AURORA_ASSERT(!pass.snapshotColorDst, "Pixel-perfect GUI snapshot collided with another color consumer");
+  pass.snapshotColorDst = entry.color.texture;
+  output = entry.color;
 }
 
 FramePacket& current_frame_packet() { return g_recorder.frame(); }
@@ -449,6 +459,7 @@ void resume_efb_pass_loading(const RenderPass& prevPass) {
       .clearDepth = false,
       .hasDepth = prevPass.hasDepth,
       .hasStencil = prevPass.hasStencil,
+      .suppressDlssJitter = prevPass.suppressDlssJitter,
   };
   for (uint32_t i = 0; i < newPass.colorAttachmentCount; ++i) {
     newPass.colorAttachments[i].loadOp = wgpu::LoadOp::Undefined;
@@ -586,6 +597,7 @@ void begin_recording(FramePacket& packet, size_t frameSlot) {
   g_recorder.drawCallCount = 0;
   g_recorder.mergedDrawCallCount = 0;
   g_recorder.suspendedEfbPass.reset();
+  g_recorder.projectionTracker.reset();
 
   current_render_passes().emplace_back();
   auto& pass = current_render_passes()[0];
@@ -902,6 +914,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
       .clearDepth = clearDepth && fullTarget,
       .hasDepth = prevPass.hasDepth,
       .hasStencil = prevPass.hasStencil,
+      .suppressDlssJitter = prevPass.suppressDlssJitter,
       .requireReadyPipelines = g_recorder.inOffscreen,
   };
   const bool fullColorClear = clearColor && clearAlpha && fullTarget;
@@ -1112,6 +1125,62 @@ bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out) {
   return true;
 }
 
+void note_projection_draw(bool orthographic) noexcept {
+  if (!g_recorder.active() || g_recorder.inOffscreen || g_recorder.currentRenderPass == UINT32_MAX) {
+    return;
+  }
+
+  const bool wasOrthographic = g_recorder.projectionTracker.known && g_recorder.projectionTracker.orthographic;
+  const auto transition = g_recorder.projectionTracker.observe(orthographic);
+  if (transition == pixel_perfect::GuiProjectionTransition::BeginThreeD) {
+    current_frame_packet().pixelPerfectGui = {};
+    if (wasOrthographic) {
+      auto& frame = current_frame_packet();
+      auto& previous = current_render_passes()[g_recorder.currentRenderPass];
+      previous.discardable = false;
+      enqueue_pass(frame, g_recorder.currentRenderPass);
+      resume_efb_pass_loading(previous);
+    }
+    return;
+  }
+  if (transition != pixel_perfect::GuiProjectionTransition::BeginGui) {
+    return;
+  }
+
+  auto& frame = current_frame_packet();
+  frame.pixelPerfectGui = {};
+  snapshot_current_pass_color(frame.pixelPerfectGui.baseline);
+  auto& previous = current_render_passes()[g_recorder.currentRenderPass];
+  previous.discardable = false;
+  enqueue_pass(frame, g_recorder.currentRenderPass);
+  resume_efb_pass_loading(previous);
+  current_render_passes()[g_recorder.currentRenderPass].suppressDlssJitter = true;
+}
+
+void capture_pixel_perfect_gui_scene(const pixel_perfect::GuiCopyMapping& mapping) {
+  if (!g_recorder.active() || g_recorder.inOffscreen || g_recorder.currentRenderPass == UINT32_MAX) {
+    return;
+  }
+  auto& gui = current_frame_packet().pixelPerfectGui;
+  if (!gui.baseline.texture || !gui.baseline.view) {
+    return;
+  }
+  snapshot_current_pass_color(gui.scene);
+  gui.mapping = mapping;
+}
+
+PixelPerfectGuiPresent pixel_perfect_gui_present() noexcept {
+  if (!g_recorder.active()) {
+    return {};
+  }
+  const auto& gui = current_frame_packet().pixelPerfectGui;
+  return {
+      .baseline = gui.baseline,
+      .scene = gui.scene,
+      .mapping = gui.mapping,
+  };
+}
+
 ReadbackCapture readback_capture() noexcept {
   if (!g_recorder.active() || g_recorder.currentRenderPass == UINT32_MAX) {
     return {};
@@ -1247,6 +1316,15 @@ void finish() {
   AURORA_ASSERT(!g_recorder.inOffscreen, "finish called while offscreen rendering is active");
   if (g_recorder.currentRenderPass != UINT32_MAX) {
     auto& frame = current_frame_packet();
+    auto& gui = frame.pixelPerfectGui;
+    if (gui.baseline.texture && !gui.scene.texture) {
+      if (gx::g_gxState.displayCopyProduced) {
+        gui = {};
+      } else {
+        gui.scene = webgpu::present_source();
+        gui.mapping = pixel_perfect::GuiCopyMapping{};
+      }
+    }
     frame.uniforms.append_zeroes(gx::MaxUniformSize);
     frame.renderPasses[g_recorder.currentRenderPass].captureDepthSnapshot = true;
     enqueue_pass(frame, g_recorder.currentRenderPass);

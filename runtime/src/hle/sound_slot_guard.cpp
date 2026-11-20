@@ -12,6 +12,7 @@
 // Called from the translator-inserted GuestEntryHook for 0x8003B950 (projects/r2ve01/recomp.yml translation.entry_hooks).
 
 #include "guest_abi/dispatch.h"
+#include "hle/sound_slot_guard.h"
 #include "memory.h"
 #include "runtime_log.h"
 
@@ -26,14 +27,11 @@ constexpr uint32_t kGameOverRate = 0xBB80;
 constexpr uint32_t kLoadMusic = 0x8003B7F4u;  // fn_8003B7F4(musicId, slot, flags, rate) -> slot
 constexpr uint32_t kEntryStride = 68;
 constexpr uint32_t kEntryStateOffset = 40;
-constexpr uint32_t kEntryUnloaded = 5;
+constexpr uint32_t kEntryHandleOffset = 44;
+constexpr uint32_t kEntryDataOffset = 48;
 
 bool GuardRd32(uint32_t address, uint32_t& value) {
-    if (!Memory::Contains(address, 4)) {
-        return false;
-    }
-    value = Memory::Read32(address);
-    return true;
+    return Memory::TryRead32(address, value);
 }
 
 }  // namespace
@@ -46,10 +44,11 @@ void SinSoundSlotGuard(CpuContext* ctx) {
         return;
     }
     if (!GuardRd32(ctx->gpr[13] - 23904u, smallData) || !GuardRd32(smallData + 92u, soundMgr) ||
-        !GuardRd32(soundMgr + 1004u, entries) || !GuardRd32(entries + slot * kEntryStride + kEntryStateOffset, state)) {
+        !GuardRd32(soundMgr + 1004u, entries)) {
         return;
     }
-    if (state != kEntryUnloaded) {
+    const uint32_t resolvedEntry = entries + slot * kEntryStride;
+    if (!GuardRd32(resolvedEntry + kEntryStateOffset, state) || state != SoundSlotGuard::kEntryUnloaded) {
         return;
     }
     if (s_budget > 0) {
@@ -57,18 +56,48 @@ void SinSoundSlotGuard(CpuContext* ctx) {
         RT_LOGF(RT_TAG_HLE, "sound-slot-guard: slot %u is unloaded at the readiness check; requesting music %u\n", slot,
                 kGameOverMusicId);
     }
-    // Call the game's own loader, preserving every register the interrupted function may still need.
-    const uint32_t savedGpr[13] = {ctx->gpr[0], ctx->gpr[1], ctx->gpr[2], ctx->gpr[3], ctx->gpr[4], ctx->gpr[5],
-                                   ctx->gpr[6], ctx->gpr[7], ctx->gpr[8], ctx->gpr[9], ctx->gpr[10], ctx->gpr[11],
-                                   ctx->gpr[12]};
-    const uint32_t savedLr = ctx->lr;
+
+    // The entry hook runs after the translated function has copied its live inputs but before its prologue. Restore
+    // the complete context after the nested guest call, not only the argument registers: the loader legitimately
+    // clobbers volatile GPRs, condition state, FP state, and LR.
+    const CpuContext saved = *ctx;
     ctx->gpr[3] = kGameOverMusicId;
     ctx->gpr[4] = kGameOverSlot;
     ctx->gpr[5] = kGameOverFlags;
     ctx->gpr[6] = kGameOverRate;
+
+    uint32_t loadedSlot = 0xFFFFFFFFu;
     InvokeIndirectCpu(kLoadMusic, ctx);
-    for (int i = 0; i < 13; ++i) {
-        ctx->gpr[i] = savedGpr[i];
+    loadedSlot = ctx->gpr[3];
+    *ctx = saved;
+
+    uint32_t postState = state, handle = 0, data = 0, vptr = 0;
+    const bool readsSucceeded = GuardRd32(resolvedEntry + kEntryStateOffset, postState) &&
+        GuardRd32(resolvedEntry + kEntryHandleOffset, handle) &&
+        GuardRd32(resolvedEntry + kEntryDataOffset, data);
+    const bool handleIsReadable = readsSucceeded && handle != 0 && GuardRd32(handle, vptr);
+    const bool safe = readsSucceeded &&
+        SoundSlotGuard::IsLoadResultSafe(slot, loadedSlot, postState, handle, data, handleIsReadable);
+
+    if (s_budget > 0) {
+        --s_budget;
+        RT_LOGF(RT_TAG_HLE,
+                "sound-slot-guard: loader %s result=%d state=%u handle=%08X vptr=%08X data=%08X\n",
+                safe ? "succeeded" : "failed", static_cast<int32_t>(loadedSlot), postState, handle, vptr, data);
     }
-    ctx->lr = savedLr;
+
+    if (!safe && readsSucceeded) {
+        // An unloaded entry has no valid object at +44; preserve the original function's control flow by pointing the
+        // shared handle at an in-entry zero word. The readiness function treats a zero pointee as "not ready".
+        if (Memory::TryWrite32(resolvedEntry + kEntryDataOffset, 0) &&
+            Memory::TryWrite32(resolvedEntry + kEntryHandleOffset, resolvedEntry + kEntryDataOffset)) {
+            if (s_budget > 0) {
+                --s_budget;
+                RT_LOGF(RT_TAG_HLE, "sound-slot-guard: installed unloaded-slot sentinel after loader failure\n");
+            }
+        } else if (s_budget > 0) {
+            --s_budget;
+            RT_LOGF(RT_TAG_HLE, "sound-slot-guard: failed to install unloaded-slot sentinel\n");
+        }
+    }
 }

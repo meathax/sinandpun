@@ -1,6 +1,7 @@
 #pragma once
 
 #include <aurora/aurora.h>
+#include "../gfx/pixel_perfect.hpp"
 #include <aurora/math.hpp>
 
 #include "wgpu.hpp"
@@ -84,6 +85,11 @@ Viewport calculate_present_viewport_for_aspect(uint32_t surface_width, uint32_t 
                                                float content_aspect) noexcept;
 const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
                                                   const TextureWithSampler& source);
+const TextureWithSampler& composite_pixel_perfect_gui(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
+                                                      const TextureWithSampler& scaled,
+                                                      const TextureWithSampler& scene,
+                                                      const TextureWithSampler& baseline,
+                                                      const gfx::pixel_perfect::GuiCopyMapping& mapping);
 void draw_clear(const wgpu::RenderPassEncoder& pass, bool clearColor, bool clearAlpha, bool clearDepth,
                 const Vec4<float>& clearColorValue, float clearDepthValue);
 

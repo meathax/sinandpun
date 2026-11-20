@@ -5,10 +5,12 @@
 //
 // Output (stderr/console.log), all lines prefixed "[audio-dbg]":
 //   voice START/STOP pb=.. rate=..Hz vol=L/R fmt=..   first kMaxVoiceLines transitions only
+//   backend opened ...                                 when the SDL playback stream opens
 //   1s: ...                                            once per second while the AI DMA runs
 // A healthy run shows aiBlocks ~ 333/s, axFrames ~ 333/s, a non-zero voices count and peak > 0.
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -36,6 +38,10 @@ struct Counters {
     std::atomic<uint32_t> voicesLastFrame{0};
     std::atomic<uint32_t> peak{0};          // max |sample| pushed since the last 1 s line
     std::atomic<uint64_t> nonSilentBlocks{0};
+    std::atomic<uint64_t> backendOpens{0};
+    std::atomic<uint64_t> sdlBlocks{0};
+    std::atomic<uint64_t> sdlNonSilentBlocks{0};
+    std::atomic<uint32_t> sdlPeak{0};
     std::atomic<uint32_t> lastRateHz{0};
     std::atomic<uint32_t> voiceLines{0};
     std::atomic<uint32_t> mails{0};
@@ -100,11 +106,41 @@ inline void NoteBlock(const uint8_t* beSamples, uint32_t bytes, uint32_t sampleR
     }
 }
 
+inline void NoteBackendOpen(uint32_t sampleRate, uint32_t channels) {
+    C().backendOpens.fetch_add(1, std::memory_order_relaxed);
+    std::fprintf(stderr,
+                 "[audio-dbg] backend opened sdl=S16LE rate=%uHz channels=%u\n",
+                 sampleRate, channels);
+    std::fflush(stderr);
+}
+
+// Called only after SDL_PutAudioStreamData accepted the PCM.  Queue overflow and SDL
+// errors therefore cannot satisfy the software audio-output acceptance check.
+inline void NoteSdlQueued(const int16_t* samples, size_t sampleCount) {
+    uint32_t peak = 0;
+    for (size_t i = 0; i < sampleCount; ++i) {
+        const int32_t sample = samples[i];
+        const uint32_t magnitude = sample < 0
+                                       ? static_cast<uint32_t>(-sample)
+                                       : static_cast<uint32_t>(sample);
+        peak = std::max(peak, magnitude);
+    }
+    C().sdlBlocks.fetch_add(1, std::memory_order_relaxed);
+    if (peak != 0) {
+        C().sdlNonSilentBlocks.fetch_add(1, std::memory_order_relaxed);
+    }
+    uint32_t current = C().sdlPeak.load(std::memory_order_relaxed);
+    while (peak > current &&
+           !C().sdlPeak.compare_exchange_weak(current, peak, std::memory_order_relaxed)) {
+    }
+}
+
 // Cheap enough to call on every tick; prints at most once per second.
 inline void MaybeReport(bool dmaEnabled, bool callbackSet) {
     using Clock = std::chrono::steady_clock;
     static Clock::time_point last = Clock::now();
     static uint64_t lastBlocks = 0, lastCallbacks = 0, lastFrames = 0, lastNonSilent = 0;
+    static uint64_t lastSdlBlocks = 0, lastSdlNonSilent = 0;
     const Clock::time_point now = Clock::now();
     if (now - last < std::chrono::seconds(1)) {
         return;
@@ -112,14 +148,19 @@ inline void MaybeReport(bool dmaEnabled, bool callbackSet) {
     last = now;
     Counters& c = C();
     const uint64_t blocks = c.aiBlocks.load(), callbacks = c.aiCallbacks.load(), frames = c.axFrames.load(),
-                   nonSilent = c.nonSilentBlocks.load();
+                   nonSilent = c.nonSilentBlocks.load(), sdlBlocks = c.sdlBlocks.load(),
+                   sdlNonSilent = c.sdlNonSilentBlocks.load();
     std::fprintf(stderr,
                  "[audio-dbg] 1s: aiBlocks=+%llu axFrames=+%llu aiCallbacks=+%llu nonSilentBlocks=+%llu "
+                 "sdlBlocks=+%llu sdlNonSilentBlocks=+%llu sdlPeak=%u backendOpens=%llu "
                  "voices=%u (started %llu stopped %llu) peak=%u rate=%uHz dma=%d cb=%d\n",
                  static_cast<unsigned long long>(blocks - lastBlocks),
                  static_cast<unsigned long long>(frames - lastFrames),
                  static_cast<unsigned long long>(callbacks - lastCallbacks),
                  static_cast<unsigned long long>(nonSilent - lastNonSilent),
+                 static_cast<unsigned long long>(sdlBlocks - lastSdlBlocks),
+                 static_cast<unsigned long long>(sdlNonSilent - lastSdlNonSilent),
+                 c.sdlPeak.exchange(0), static_cast<unsigned long long>(c.backendOpens.load()),
                  c.voicesLastFrame.load(), static_cast<unsigned long long>(c.voiceStarts.load()),
                  static_cast<unsigned long long>(c.voiceStops.load()), c.peak.exchange(0), c.lastRateHz.load(),
                  dmaEnabled ? 1 : 0, callbackSet ? 1 : 0);
@@ -128,6 +169,8 @@ inline void MaybeReport(bool dmaEnabled, bool callbackSet) {
     lastCallbacks = callbacks;
     lastFrames = frames;
     lastNonSilent = nonSilent;
+    lastSdlBlocks = sdlBlocks;
+    lastSdlNonSilent = sdlNonSilent;
 }
 
 } // namespace AudioDebug

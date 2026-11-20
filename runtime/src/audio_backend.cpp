@@ -1,5 +1,6 @@
 #include "audio_backend.h"
 
+#include "hle/audio/audio_debug.h"
 #include "runtime_log.h"
 
 #include <algorithm>
@@ -85,6 +86,9 @@ bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channel
     m_sampleRate = sampleRate;
     m_channels = channels;
     m_initialized = true;
+    if (AudioDebug::Enabled()) {
+        AudioDebug::NoteBackendOpen(sampleRate, channels);
+    }
     return true;
 }
 
@@ -182,6 +186,9 @@ bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
         RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
         return false;
     }
+    if (AudioDebug::Enabled()) {
+        AudioDebug::NoteSdlQueued(m_convertBuffer.data(), frameCount * 2);
+    }
 
     return true;
 }
@@ -203,6 +210,9 @@ bool AudioBackend::PushSamplesLE16(const int16_t* samples, size_t sampleCount) {
     if (!SDL_PutAudioStreamData(m_stream, samples, lenBytes)) {
         RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
         return false;
+    }
+    if (AudioDebug::Enabled()) {
+        AudioDebug::NoteSdlQueued(samples, sampleCount);
     }
 
     return true;

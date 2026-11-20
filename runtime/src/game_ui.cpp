@@ -182,6 +182,15 @@ std::string Ellipsize(const std::string& text, float sizeU, float maxWidthPx, bo
     return dots;
 }
 
+float FittedTextSize(const std::string& text, float preferredU, float minimumU, float maxWidthPx) {
+    if (maxWidthPx <= 0.0f) return minimumU;
+    float size = preferredU;
+    while (size > minimumU && TextSize(size, text.c_str()).x > maxWidthPx) {
+        size = std::max(minimumU, size - 1.0f);
+    }
+    return size;
+}
+
 // ---- input -------------------------------------------------------------------------------------------
 namespace {
 
@@ -620,10 +629,16 @@ void ListView::DrawLabel(const Row& row, const char* label, uint32_t flags, cons
     if (flags & kRowDanger) colour = row.focused ? IM_COL32(255, 214, 206, 255) : IM_COL32(255, 176, 168, 255);
     if (dim) colour = kTextDim;
     const float alpha = m_alpha * (dim ? 0.7f : 1.0f);
-    const ImVec2 ts = TextSize(32.0f, label);
-    Text(m_dl, 32.0f, ImVec2(row.x0, row.cy - ts.y * 0.5f), colour, label, Outline::Thick, alpha);
-    float x = row.x0 + ts.x + Px(16.0f);
     const float limit = row.vx0 - Px(8.0f);
+    float badgeWidth = 0.0f;
+    if (flags & kRowRestart) badgeWidth += BadgeWidth("RESTART") + Px(8.0f);
+    if (flags & kRowNextLaunch) badgeWidth += BadgeWidth("NEXT LAUNCH") + Px(8.0f);
+    if (flags & kRowConfirm) badgeWidth += BadgeWidth("CONFIRM") + Px(8.0f);
+    if (flags & kRowExperimental) badgeWidth += BadgeWidth("EXPERIMENTAL") + Px(8.0f);
+    const float labelSize = FittedTextSize(label, 32.0f, 20.0f, limit - row.x0 - badgeWidth - Px(16.0f));
+    const ImVec2 ts = TextSize(labelSize, label);
+    Text(m_dl, labelSize, ImVec2(row.x0, row.cy - ts.y * 0.5f), colour, label, Outline::Thick, alpha);
+    float x = row.x0 + ts.x + Px(16.0f);
     auto badge = [&](const char* text, Badge kind) {
         if (x + BadgeWidth(text) > limit) return;
         x += DrawBadge(m_dl, ImVec2(x, row.cy - Px(13.0f)), text, kind, m_alpha) + Px(8.0f);
@@ -647,10 +662,11 @@ int ListView::DrawChevronValue(const Row& row, const std::string& value, bool ca
         DrawChevron(m_dl, cr, r, 1, hotR, canRight && row.usable, m_alpha);
     }
     const float maxW = (cr.x - cl.x) - r * 2.0f - Px(24.0f);
-    const std::string text = Ellipsize(value, 32.0f, maxW);
-    const ImVec2 ts = TextSize(32.0f, text.c_str());
+    const float valueSize = FittedTextSize(value, 32.0f, 20.0f, maxW);
+    const std::string text = Ellipsize(value, valueSize, maxW);
+    const ImVec2 ts = TextSize(valueSize, text.c_str());
     const ImVec2 centre((cl.x + cr.x) * 0.5f, row.cy);
-    Text(m_dl, 32.0f, ImVec2(centre.x - ts.x * 0.5f, centre.y - ts.y * 0.5f), colour, text.c_str(), Outline::Thick,
+    Text(m_dl, valueSize, ImVec2(centre.x - ts.x * 0.5f, centre.y - ts.y * 0.5f), colour, text.c_str(), Outline::Thick,
              m_alpha * (dim ? 0.7f : 1.0f));
     if (row.clicked && row.usable) {
         if (std::fabs(m_in.mouse.x - cl.x) < r * 1.3f && m_in.mouse.x < cl.x + r * 1.3f) return -1;
@@ -689,18 +705,23 @@ void ListView::Note(const std::string& text, ImU32 colour) {
 
 void ListView::Info(const char* label, const std::string& value, ImU32 valueColour, bool middle) {
     const float top = m_y;
-    m_y += 48.0f;
-    const float yTop = m_min.y + top * m_s - m_state.scroll;
-    const float cy = yTop + Px(24.0f);
-    if (cy + Px(24.0f) < m_min.y || cy - Px(24.0f) > m_max.y) return;
     const float x0 = m_min.x + Px(44.0f) + m_xOff;
     const float x1 = m_max.x - Px(44.0f + 18.0f) + m_xOff;
-    const ImVec2 ts = TextSize(28.0f, label);
-    Text(m_dl, 28.0f, ImVec2(x0, cy - ts.y * 0.5f), kTextDim, label, Outline::Thick, m_alpha);
-    const float maxW = (x1 - x0) - ts.x - Px(30.0f);
-    const std::string text = Ellipsize(value, 28.0f, maxW, middle);
-    TextRight(m_dl, 28.0f, ImVec2(x1, cy - TextSize(28.0f, text.c_str()).y * 0.5f), valueColour, text.c_str(),
-                  Outline::Thick, m_alpha);
+    const float valueX = x0 + (x1 - x0) * 0.50f;
+    const float valueW = x1 - valueX;
+    const float labelW = valueX - x0 - Px(16.0f);
+    const float labelSize = FittedTextSize(label, 28.0f, 20.0f, labelW);
+    const float valueSize = FittedTextSize(value, 28.0f, 20.0f, valueW);
+    const float valueHeight = WrappedHeight(valueSize, valueW, value);
+    const float rowHeightPx = std::max(Px(48.0f), valueHeight + Px(12.0f));
+    m_y += rowHeightPx / m_s;
+    const float yTop = m_min.y + top * m_s - m_state.scroll;
+    const float cy = yTop + rowHeightPx * 0.5f;
+    if (yTop + rowHeightPx < m_min.y || yTop > m_max.y) return;
+    const ImVec2 labelSizePx = TextSize(labelSize, label);
+    Text(m_dl, labelSize, ImVec2(x0, cy - labelSizePx.y * 0.5f), kTextDim, label, Outline::Thick, m_alpha);
+    DrawWrapped(m_dl, valueSize, ImVec2(valueX, cy - valueHeight * 0.5f), valueW, valueColour, value,
+                    Outline::Thick, m_alpha, false);
 }
 
 void ListView::Block(float heightU, const std::function<void(ImDrawList*, ImVec2, ImVec2)>& draw) {

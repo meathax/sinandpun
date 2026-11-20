@@ -21,6 +21,8 @@
 //   SIN_AUTOSTAGE_FORCE=0    never redirect a stage that is already loading/loaded (default 1)
 //   SIN_AUTOSTAGE_SEED=0     do not pre-seed the GameData stage bytes (default 1)
 //   SIN_AUTOSTAGE_TRACE=1    log scene / game-over jingle slot / sound-manager entry changes (see TraceSoundSlot)
+//   SIN_AUTOSTAGE_SEQ=a,b    select each stage through fn_800C2704; active scenes are closed through
+//                            fn_8003D35C's normal object flags before the next module loads
 //   SIN_QA_DEATH_EVERY=sec  QA: while the stage runs (flow state 4) set the game-data "player dead" bit (GM+100 |= 4,
 //                           what Player::_dead_chk reads) every <sec> seconds, i.e. a death that bypasses the jingle load
 //                           in fn_800F6830 (docs/QA-LOG.md, game-over crash repro)
@@ -59,27 +61,29 @@ constexpr uint32_t kFlowStage = 55;
 std::atomic<bool> g_stop{false};
 
 bool Rd32(uint32_t a, uint32_t& v) {
-    try {
-        return Memory::TryRead32(a, v);
-    } catch (...) {
-        return false;
-    }
+    return Memory::TryRead32(a, v);
 }
 
 bool Rd8(uint32_t a, uint8_t& v) {
     try {
         v = Memory::Read8(a);
         return true;
-    } catch (...) {
+    } catch (const Memory::AccessViolation&) {
         return false;
     }
 }
 
-void Wr8(uint32_t a, uint8_t v) {
+bool Wr8(uint32_t a, uint8_t v) {
     try {
         Memory::Write8(a, v);
-    } catch (...) {
+        return true;
+    } catch (const Memory::AccessViolation&) {
+        return false;
     }
+}
+
+bool Wr32(uint32_t a, uint32_t v) {
+    return Memory::TryWrite32(a, v);
 }
 
 bool IsFlow(uint32_t f) {
@@ -151,6 +155,50 @@ void TraceSoundSlot(uint32_t gm, double now) {
     const bool dangling = slot < 32 && st == 5 && d48 == 0 && ph < 0x90000000u;
     RT_LOGF("autostage", "t=%.2f scene=%08X vptr=%08X '%s' slotvar=%d entry.state=%u h=%08X *h=%08X data=%08X flags=%08X%s\n",
             now, scene, vp, label, static_cast<int>(slot), st, h, ph, d48, flags, dangling ? " DANGLING" : "");
+}
+
+// fn_8003D35C(scene, 0) requests a normal scene-manager exit by setting the close bit and target 0 on
+// the current +0x40 chain, from child to root. cbResume__7TcStage uses this exact path when its stage
+// is allowed to finish. Reproduce the state transition here instead of invoking translated guest code
+// from the watcher thread.
+bool RequestSceneExit(uint32_t gm) {
+    uint32_t root = 0;
+    if (!Rd32(gm + 96, root) || root < 0x80000000u || root >= 0x81800000u) {
+        return false;
+    }
+
+    struct SceneExit {
+        uint32_t address;
+        uint8_t flags;
+    };
+    std::vector<SceneExit> scenes;
+    for (uint32_t scene = root; scene >= 0x80000000u && scene < 0x81800000u && scenes.size() < 64;) {
+        const auto duplicate =
+            std::find_if(scenes.begin(), scenes.end(), [scene](const SceneExit& item) { return item.address == scene; });
+        if (duplicate != scenes.end()) {
+            return false;
+        }
+        uint8_t objectFlags = 0;
+        if (!Rd8(scene + 46, objectFlags)) {
+            return false;
+        }
+        scenes.push_back({scene, objectFlags});
+        uint32_t child = 0;
+        if (!Rd32(scene + 40, child)) {
+            return false;
+        }
+        if (child == 0) {
+            break;
+        }
+        scene = child;
+    }
+
+    for (auto it = scenes.rbegin(); it != scenes.rend(); ++it) {
+        if (!Wr8(it->address + 46, it->flags | 2u) || !Wr32(it->address + 76, 0)) {
+            return false;
+        }
+    }
+    return !scenes.empty();
 }
 
 void Watcher() {
@@ -241,10 +289,8 @@ void Watcher() {
             uint32_t fl = 0;
             uint8_t fst = 0;
             if (f && IsFlow(f) && Rd8(f + kFlowState, fst) && fst == 4 && Rd32(gm + kGameData, fl) && !(fl & 4u)) {
-                try {
-                    Memory::Write32(gm + kGameData, fl | 4u);
+                if (Memory::TryWrite32(gm + kGameData, fl | 4u)) {
                     RT_LOGF("autostage", "t=%.2f QA death: GM flags %08X -> %08X\n", now, fl, fl | 4u);
-                } catch (...) {
                 }
                 nextDeath = now + deathEvery;
             }
@@ -322,15 +368,17 @@ void Watcher() {
                 uint32_t fl = 0;
                 if (Rd32(gm + kGameData, fl)) {
                     fl = (fl | kFlagStartSelected) & ~0x80000000u;
-                    try {
-                        Memory::Write32(gm + kGameData, fl);
-                    } catch (...) {
-                    }
+                    Wr32(gm + kGameData, fl);
                 }
+                const bool sceneExit = RequestSceneExit(gm);
+                if (!sceneExit) {
+                    continue;
+                }
+                RT_LOGF("autostage", "t=%.2f requested guest scene exit before stage %d\n", now, stage);
                 Wr8(f + kFlowState, 5);
                 forced = true;
-                RT_LOGF("autostage", "t=%.2f forced stage change F=%08X state %u -> 5, next=%d,%u,%u\n", now, f, st,
-                        stage, pa, pb);
+                RT_LOGF("autostage", "t=%.2f forced stage change F=%08X state %u -> 5, next=%d,%u,%u sceneExit=%d\n",
+                        now, f, st, stage, pa, pb, sceneExit ? 1 : 0);
             }
         }
 

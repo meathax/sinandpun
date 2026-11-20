@@ -34,6 +34,15 @@ def funcs_in(d):
     return out
 
 
+def is_actionable_gap(addr, module, sources, classification):
+    """Return whether an uncovered target is expected to be a function entry."""
+    if "map-skipped" in sources:
+        return True
+    if not module.in_text(addr):
+        return True
+    return classification == "ok"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("names", nargs="*")
@@ -60,6 +69,7 @@ def main():
         for fn in json.load(open(mp))["functions"]:
             local_labels.update(fn.get("localLabelAddresses", []))
         unc = {}
+        suspects = 0
 
         def note(addr, src):
             unc.setdefault(addr, set()).add(src)
@@ -105,8 +115,12 @@ def main():
             else:
                 kind = "external"
             cat.setdefault(kind, []).append(addr)
-        n_real = sum(len(v) for k, v in cat.items() if k != "jt-case")
-        line = f"{name}: candidates={len(cands)} translated(mod)={len(mod_entries)} UNCOVERED={n_real} " + " ".join(
+        for addr, srcs in unc.items():
+            cl = ms.classify(m, addr, srcs, jt_labels) if m.in_text(addr) else "-"
+            if not is_actionable_gap(addr, m, srcs, cl):
+                suspects += 1
+        n_real = len(unc) - suspects
+        line = f"{name}: candidates={len(cands)} translated(mod)={len(mod_entries)} UNCOVERED={n_real} suspects={suspects} " + " ".join(
             f"{k}={len(v)}" for k, v in sorted(cat.items()))
         print(line)
         report.append(line)
@@ -116,7 +130,11 @@ def main():
             for addr in sorted(v):
                 cl = ms.classify(m, addr, unc[addr], jt_labels) if m.in_text(addr) else "-"
                 fw = m.w(addr) if m.in_text(addr) else 0
-                row = f"  {name} {addr:08X} {k:9} {cl:14} src={','.join(sorted(unc[addr]))} first={fw:08X}"
+                actionable = is_actionable_gap(addr, m, unc[addr], cl)
+                row = (
+                    f"  {name} {addr:08X} {'ACTION' if actionable else 'suspect':7} "
+                    f"{k:9} {cl:14} src={','.join(sorted(unc[addr]))} first={fw:08X}"
+                )
                 report.append(row)
                 if a.list:
                     print(row)

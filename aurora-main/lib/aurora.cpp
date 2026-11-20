@@ -69,11 +69,13 @@ std::atomic<AuroraMetalFXStatus> g_metalfxStatus{AURORA_METALFX_DISABLED};
 struct MetalFXSlot {
   webgpu::metalfx::Size size{};
   std::unique_ptr<webgpu::metalfx::SpatialScaler> scaler;
+  webgpu::TextureWithSampler output;
   wgpu::BindGroup bindGroup;
 };
 std::array<MetalFXSlot, gx::MaxInterpolatedFrames + 1> g_metalfxSlots;
 size_t g_metalfxNextSlot = 0;
 webgpu::metalfx::SpatialScaler* g_metalfxPendingOutput = nullptr;
+const webgpu::TextureWithSampler* g_metalfxPendingImage = nullptr;
 bool g_metalfxFailed = false;
 
 void metalfx_failed(const std::string& reason) {
@@ -81,6 +83,7 @@ void metalfx_failed(const std::string& reason) {
   g_metalfxFailed = true;
   g_metalfxStatus.store(AURORA_METALFX_ERROR);
   g_metalfxPendingOutput = nullptr;
+  g_metalfxPendingImage = nullptr;
   g_metalfxSlots = {};
 }
 
@@ -161,6 +164,7 @@ webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgp
 wgpu::BindGroup upscale_presentation(wgpu::CommandEncoder& encoder,
                                      const webgpu::TextureWithSampler& source,
                                      const webgpu::Viewport& viewport, bool enabled) {
+  g_metalfxPendingImage = nullptr;
   if (!enabled) {
     g_metalfxSlots = {};
     g_metalfxFailed = false;
@@ -200,9 +204,13 @@ wgpu::BindGroup upscale_presentation(wgpu::CommandEncoder& encoder,
     samplerDescriptor.magFilter = wgpu::FilterMode::Linear;
     samplerDescriptor.minFilter = wgpu::FilterMode::Linear;
     webgpu::TextureWithSampler output{};
+    output.size = {size.outputWidth, size.outputHeight, 1};
+    output.format = size.format;
+    output.texture = slot.scaler->output_texture();
     output.view = slot.scaler->output_view();
     output.sampler = g_device.CreateSampler(&samplerDescriptor);
-    slot.bindGroup = webgpu::create_copy_bind_group(output);
+    slot.output = std::move(output);
+    slot.bindGroup = webgpu::create_copy_bind_group(slot.output);
     Log.info("MetalFX spatial slot: {}x{} -> {}x{}", size.inputWidth, size.inputHeight,
              size.outputWidth, size.outputHeight);
   }
@@ -236,6 +244,7 @@ wgpu::BindGroup upscale_presentation(wgpu::CommandEncoder& encoder,
     return {};
   }
   g_metalfxPendingOutput = slot.scaler.get();
+  g_metalfxPendingImage = &slot.output;
   g_metalfxStatus.store(AURORA_METALFX_ACTIVE);
   return slot.bindGroup;
 }
@@ -588,6 +597,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
   gx::fifo::end_frame();
   gx::texture::end_frame();
   gfx::finish();
+  const auto pixelPerfectGui = gfx::pixel_perfect_gui_present();
 
   // A display copy (the XFB) is what reaches the screen; post-copy EFB draws must not leak in.
   webgpu::TextureWithSampler presentSource = webgpu::present_source();
@@ -630,8 +640,8 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
   const bool black = video::is_black();
   const float brightness = video::brightness();
   const bool metalfxEnabled = g_metalfxRequested.load();
-  gfx::end_frame([black, brightness, metalfxEnabled, rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport, presentSource,
-                  displayCopy = std::move(displayCopy), schedule,
+  gfx::end_frame([black, brightness, metalfxEnabled, rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport,
+                  presentSource, displayCopy = std::move(displayCopy), pixelPerfectGui, schedule,
                   imguiDrawData = std::move(imguiDrawData)](
                      wgpu::CommandEncoder& encoder, std::vector<gfx::AfterSubmitCallback> afterSubmitCallbacks,
                      const gfx::InterpolationReplay& replay) {
@@ -689,11 +699,21 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
             gameImage = fsr.image;
           } else {
             presentBindGroup = upscale_presentation(encoder, presentSource, viewport, metalfxEnabled);
+            if (presentBindGroup) {
+              gameImage = g_metalfxPendingImage;
+            }
           }
           if (!presentBindGroup) {
             const auto& resampledSource = webgpu::resample_present_source(encoder, viewport, presentSource);
             presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
             gameImage = &resampledSource;
+          }
+          if (gameImage != nullptr && pixelPerfectGui.scene.view && pixelPerfectGui.baseline.view) {
+            const auto& composited = webgpu::composite_pixel_perfect_gui(
+                encoder, viewport, *gameImage, pixelPerfectGui.scene, pixelPerfectGui.baseline,
+                pixelPerfectGui.mapping);
+            presentBindGroup = webgpu::create_copy_bind_group(composited);
+            gameImage = &composited;
           }
           if (gameImage != nullptr) {
             webgpu::upscale::capture_encode(encoder, *gameImage);

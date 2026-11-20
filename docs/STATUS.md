@@ -1,127 +1,98 @@
 # Sin & Punishment: Star Successor recomp - status
 
-Last updated 2026-11-20 (M3 stage modules working for stages 0-5; M4 code written, in-game verification pending). Source of truth for the plan: `docs/PLAN-NEXT.md`.
+Last reconciled 2026-11-20. This file records current repository evidence only. The single authoritative completion
+checklist is in `docs/REMAINING.md`; `docs/PLAN-NEXT.md` is the ordered plan for closing it.
 
-## Milestones
+## Verified milestones
 
 | ID | Milestone | State | Evidence |
 |----|-----------|-------|----------|
-| M0 | Commit current work | DONE | commits `5479e53`, `8120dca`, `98f875d`, `7b8e3f4`; `git status` clean of source |
-| M1 | Real guest WPAD connects the virtual remote | DONE | log: `Virtual Wii Remote + Nunchuk connected to the game (gamepad)`; guest handshake: EEPROM cal reads, extension init (0xA400F0/FB), Nunchuk ID `00 00 A4 20 00 00`, IR block writes, report mode 0x33 then 0x37, continuous 0x37 reports (`[bt] in id=0x37`) |
-| M2 | First real frame | DONE | `build/screenshots/m2-first-frame.png`: 49,750 colours, 80.7% non-black, real title screen (Sin & Punishment: Star Successor logo + background); `[dvd] read ...` lines (fonts, texture.arc, comdat.arc, titdat.arc, stream/title.brstm, s01dat20.arc) |
-| M3 | Stage modules (RSO loader + code-set switching) | PARTIAL | all 8 modules prelinked at MEM2 window 0x97DC0000, translated per module (`tools/module_shards.py`), `RSOLinkListFixed`/`RSOUnLinkList` natives in `hle/os/os_rso.cpp`; stages 0-5 ran 17k-19k frames each with gameplay screenshots (`build/screenshots/stage*.png`); stages 6,7 and A->B->A swaps: see stage table |
-| M4 | Dual-analog aiming + setup UI | CODE WRITTEN | aim curves/deadzones, Classic Controller + pointer schemes, keyboard/mouse/gamepad remap, tabbed settings overlay (`settings_overlay.cpp`, `controls_menu.cpp`, `input_map.h`, `aim_input.cpp`); `mkw_controls_tests` passes; stick direction verified in game earlier; Classic extension, mouse pointer, menu navigation NOT verified in game |
-| M5 | Full playthrough validation | IN PROGRESS | top-left rectangle fixed (GXSetViewport native); audio mixer produces PCM; see checklist |
+| M0 | Source translation | DONE | main DOL and `stg00`-`stg07` translate; translator baseline recorded as 767 passed, 0 failed, 8 skipped |
+| M1 | Guest WPAD connection | DONE | guest handshake logs show the virtual Wii Remote/Nunchuk, EEPROM and extension setup, report mode 0x33 then 0x37, and continuous input reports |
+| M2 | First rendered frame | DONE | `build/screenshots/m2-first-frame.png` is a rendered title frame; DVD reads are present in the corresponding run |
+| M3 | Isolated stage-module execution | DONE (isolated runs) | all eight modules loaded and presented gameplay in the stage table below; stages 6 and 7 are no longer open |
+| M3b | Repeated module swapping | DONE (scripted QA) | `autopilot-swap3`: stage order `[1, 2, 1]`, two normal scene-exit transitions, two unlink/relink pairs, no fatal marker, 0.38 MiB/min maximum log growth |
+| M4 | Input feature and options UI | PARTIAL | virtual right-stick aiming and the Nunchuk path run through the guest; title and pause OPTIONS both open the recomp overlay; physical-device and persistence coverage remains open |
+| M5 | End-to-end validation | OPEN | A->B->A, full playthrough, save/quit/reload, real-device input/persistence, audible output, and performance/fidelity still need runs |
 
-## What was wrong, in order (all recorded in the lessons DB)
+## Stage-module evidence
 
-1. `WPADInit` hung in `BTA_Init` (busy-poll): the BTE periodic alarm never fired because alarms were only pumped
-   from the scheduler idle path. Fix: periodic alarm service on the guest-call path (`abi_bridge.cpp`,
-   `dispatch.h`), plus the simulated decrementer `rfi` restores PPCMtdec's host snapshot (`os_context.cpp`).
-2. The guest refused the remote (L2CAP result 3 / disconnect): `SCGet/SetBtDeviceInfoArray` natives were disabled
-   donor addresses. Real Sin addresses `0x801B6BC0/BD0` (DINF) and `0x801B6BE0/BF0` (CmpDev) found by scanning
-   `main.dol` for the `addi r4,0,0x461; addi r5,0,0x1C; b SCFindByteArrayItem` thunk.
-3. VI retrace callbacks never ran: HLE ignored guest-memory slots `0x804B2410/0x804B240C` and guarded on a donor
-   EGG `sSystem` address (`vi.cpp`).
-4. The main loop body ran once: the game paces on the GP breakpoint interrupt (`GXEnableBreakPt` +
-   `GXSetBreakPtCallback`, callback `fn_8003EB9C` sets the frame flag at `r13-32208`). Emulated in
-   `hle/gx/gx_breakpoint.cpp`, delivered from the VI retrace service.
-5. No DVD reads: the game's OS idle function (`0x800380D8`, via `OSSetIdleFunction`) IS the asset loader. It is a
-   call-free spin loop and the SDK idle thread is never scheduled. Fix: translator option
-   `translation.loop_poll_functions` (inserts `GuestLoopPoll(ctx)` at every basic-block entry of the listed
-   functions) + `hle/os/os_idle.cpp` (host-owned fiber resumed from the scheduler idle loop).
-6. Permanently black window: the donor startup cover waited on a Mario Kart strap-scene hook (auto-dismissed
-   after 120 presented frames now), and `dynamic_aspect.cpp` wrote MKWii EGG records into Sin memory (disabled).
-7. Black picture although draws were submitted: `GXSetProjection` (`0x801DAFE0`) and `GXFlush` (`0x801D6BB0`)
-   natives were at disabled donor addresses.
+Runs used scripted idle input and prove module loading/rendering, not completion of the stage.
 
-## Controller (M4) measured so far
+| Autostage id | Linked module | Presented frames | Screenshot evidence | Notes |
+|---|---|---:|---|---|
+| 0 | `stg00`, 1729 translated functions | 19,200 | `build/screenshots/m8a.png` | "The Basics" tutorial and gameplay |
+| 1 | `stg01`, 3050 functions | 17,400 | `build/screenshots/stage1.png`, `build/screenshots/rfix1s.png` | bridge gameplay and cutscene |
+| 2 | `stg02`, 2773 functions | 18,000 | `build/screenshots/stage2.png`, `build/screenshots/rfix2s.png` | underwater gameplay and HUD; a longer isolated run reached 290 s |
+| 3 | `stg05`, 3643 functions | 17,400 | `build/screenshots/stage3.png` | stage id 3 maps to `stg05` |
+| 4 | `stg04`, 2223 functions | 18,000 | `build/screenshots/stage4.png` | `build/stage_matrix.txt` records the link and frame count |
+| 5 | `stg03`, 2164 functions | 17,400 | `build/screenshots/stage5.png`, `build/screenshots/rfix5s.png` | desert bike gameplay; stage id 5 maps to `stg03` |
+| 6 | `stg06`, 4896 functions | 9,000 | `build/screenshots/g6_90s.png` | lava level, HUD, enemies |
+| 7 | `stg07`, 2775 functions | 9,000 | `build/screenshots/g7_90s.png` | space stage |
 
-`SIN_VREMOTE_SCRIPT` (`seconds[:buttons[:rx/ry[:lx/ly]]]` segments joined by `|`; `/` for pairs) drives the
-virtual remote deterministically. Log lines `[bt] pointer cam=(x,y) stick R=.. L=.. buttons=..`:
+`build/qa/autopilot-swap3` proves `A -> B -> A` through the guest scene-exit path. The run reached `[1, 2, 1]`,
+unlinked `stg01`, linked `stg02`, unlinked `stg02`, linked `stg01`, continued for 151 seconds, and produced no fatal
+or missing-target marker. `qa_report.py` measured 0.38 MiB/min maximum log growth.
 
-* stick R=(1,0)  -> camera x 512 -> 60 (clamped); R=(-1,0) -> x 60 -> 600
-* stick R=(0,1)  -> camera y 384 -> 60; R=(0,-1) -> y 60 -> 480
-* A pulse -> buttons=0x0008 (A bit) reaches the guest as input report 0x37
-* the camera x/y are inverted relative to the stick by design (sensor-bar logic); whether the on-screen cursor moves
-  the right way is NOT verified yet (needs a menu with a visible cursor).
+## Other verified evidence
 
+- Final integrated local clean build: configure 50 s, full build 222 s, exit 0. `build/clean/WiiCompiled.exe` is
+  132,228,608 bytes with SHA-256 `09B487635ADB7360ED2DE5D7A24E1BE9D3DBE2BAB9FB74FC89EAEDA6382E28FF`.
+- The clean tree passed 15/15 native tests. Translator tests passed 767, failed 0, skipped 8. Seven QA-tool tests passed,
+  `qa_acceptance.py self-test` passed, and all eight modules report zero actionable coverage gaps.
+- `ready/` was regenerated from that clean executable and passed `tools/release_audit.py` with zero errors and zero
+  warnings. Its packaged smoke boot rendered `build/screenshots/ready-final.png` and exited cleanly with code 0.
+- The title/pause options integration is verified by `build/screenshots/nav2_sheet.png` and
+  `build/screenshots/pa2_sheet.png`. Closing the overlay also returns the stock page correctly
+  (`build/screenshots/pa3_sheet.png`).
+- `SIN_AUDIO_LOG=1` observed non-silent PCM for 103-112 of 150 logged seconds in stages 6 and 7, up to 8 voices. This
+  proves mixer activity, not audible device output.
+- NAND save files are created and a slot can show progress. It does not prove save -> quit -> reload.
+- Scripted stick directions are observed in guest input reports and in-game pointer behavior. It does not prove a
+  physical gamepad, Classic Controller acceptance, mouse arbitration/remapping, or settings persistence after restart.
+- Synthetic Classic Controller acceptance is verified in `autopilot-classic-hot-swap`: the guest reports `dev=2`, accepts
+  extension encryption, reads calibration, hot-swaps, and continues at 60.0 average guest FPS with no fatal marker.
+  This is not physical-controller acceptance.
+- Model-join interpolation was changed to coefficient interpolation so non-indexed pieces preserve coincident
+  endpoints. The 150 s cutscene/gameplay replay completed without renderer/fatal errors. User/reference visual
+  acceptance remains required.
+- Terminal orthographic GUI is recomposited with nearest-neighbor after 3D upscaling. The FSR run logged
+  `2432x1244 -> 3840x2160`, and its `Play as Kachi` file-select GUI remained crisp in
+  `build/qa/autopilot-hud-fsr/s62.png`. Physical visual sign-off remains required.
 
-## Stage module results (autostage run, 90-150 s each, scripted idle player; fatal = crash artifact or fatal log line)
+## Remaining work
 
-| Autostage id | Module loaded (RSOLinkListFixed log) | Fatal | Frames presented | Screenshot evidence | Notes |
-|---|---|---|---|---|---|
-| 0 (normal menu path) | stg00, 1729 fns | none | 19,200 | uild/screenshots/m8a.png ("The Basics" tutorial, 60.1 fps) | tutorial, then gameplay |
-| 1 | stg01, 3050 fns | none | 17,400 | stage1.png, ix1s.png (HUD, bridge), fix1s.png (cutscene) | |
-| 2 | stg02, 2773 fns | none | 18,000 | stage2.png, fix2s.png (underwater gameplay + HUD) | |
-| 3 | stg05, 3643 fns | none | 17,400 | stage3.png (sepia HUD), fix4s.png boss | autostage 3 loads stg05 (id != module number) |
-| 4 | stg04, 2223 fns | none | 18,000 | no gameplay screenshot kept | run completed, see batch log uild/stage_matrix.txt |
-| 5 | stg03, 2164 fns | none | 17,400 | stage5.png, fix5s.png (desert bike gameplay) | autostage 5 loads stg03 |
-| 6 | stg06, 4896 fns | none | 9,000 | g6_90s.png (lava level, HUD, enemies) | |
-| 7 | stg07, 2775 fns | none | 9,000 | g7_90s.png (space stage) | |
+Do not duplicate or reinterpret the list here. The canonical open checklist is `docs/REMAINING.md`:
 
-Audio mixer (SIN_AUDIO_LOG=1): 103-112 of 150 logged seconds had non-silent PCM blocks in stages 6 and 7 (up to 8 voices). Audibility on the real device is NOT verified.
-Not yet tested: A -> B -> A module swap, boss/credits/continue flow, save -> quit -> reload, Classic extension / mouse / aim sweep in game, the tabbed options menu in game.
-## Acceptance checklist (docs/PLAN-NEXT.md section 11) - evidence as of 2026-11-20
-
-| Item | State | Evidence |
-|---|---|---|
-| Clean build from scratch with documented commands | PASS | `tools/clean_build.ps1`: fresh configure 34 s + full build 157 s total, exit 0; `build/clean/WiiCompiled.exe` 131,651,072 bytes, SHA-256 `9E11C5976188E15EA11B21480DAA93975A1F90BF990475310B41CD7D9C2F6ED5`; that exe boots to the title at 60 fps with 0 fatal lines (`build/screenshots/clean_boots.png`) |
-| Translator tests pass | PASS | `dotnet test translator`: Passed 767, Failed 0, Skipped 8 (after the budget/entry_hooks translator changes) |
-| Boot to title with picture and audio | PASS (audio: mixer only) | `rfixTs.png`, `clean_boots.png`; `SIN_AUDIO_LOG=1`: ~333 AX frames/s, non-silent PCM in 103-112 of 150 s; audibility on a real device not verified |
-| All 8 stages load and play | PASS (idle player) | stage table above (8/8 modules link and render, `g6_90s.png`, `g7_90s.png`, `pz3_124s.png`, ...); module swap A -> B proven (`RSOUnLinkList: stg01 unlinked`, `RSOLinkListFixed: stg02`); A -> B -> A NOT proven: the second, forced swap crashed (see `docs/SWAP-CRASH-NOTES.md`); stage 2 alone ran 290 s without a crash |
-| Right stick aims, left stick moves, buttons mapped, setup UI persists | PARTIAL | stick direction verified in game earlier (cursor follows stick); recomp options overlay opens from the game's title and pause OPTIONS (`nav2_sheet.png`, `pa2_sheet.png`); Classic Controller extension, mouse pointer, remapping with a real device and persistence across a restart NOT verified |
-| Save/load works | NOT VERIFIED | save files are created; file 1 shows `A (STAGE 1 - ISA)` progress after runs; save -> quit -> reload not run |
-| No fatal errors in a full playthrough, no unbounded log growth | NOT VERIFIED | stages 0-7 ran 90-290 s each with 0 fatals under an idle scripted player; no full playthrough |
-| `git status` clean, committed, nothing pushed | PASS | no remote is configured; `git log` shows local commits only |
-
-## Known problems / not done
-
-* FIXED: top-left rectangle (native `GXSetViewport` at 0x801DB3B0 + partial EFB texture copies written 1:1 in aurora);
-  title shows the full picture and "Press A" (`build/screenshots/rfixTs.png`). A sepia game-over scene was not re-checked.
-* NOT VERIFIED: A -> B -> A stage swap (A -> B proven: `RSOUnLinkList: stg01 unlinked`, `RSOLinkListFixed: stg02`),
-  Classic Controller extension accepted by the game, aim sweep, mouse pointer, keyboard/mouse/gamepad remapping with a
-  real device, save -> quit -> reload, HOME/quit flow, audio audibility on a real output device, a full playthrough
-  (bosses, credits), performance (frame-time) pass.
-* Audio: AX/AI pipeline fixed (AI callback + donor DSP/AX addresses); 103-112 of 150 logged seconds are non-silent PCM
-  (`SIN_AUDIO_LOG=1`). Per-category sliders were removed (they only worked for Mario Kart).
-* Save files `sdat0..3.bin` are created on first boot; file 1 shows "STAGE 7 - ISA" progress after earlier runs.
-* The game's own Options page stays alive under the recomp overlay; the hook presses B on the virtual remote when the
-  overlay closes (`VirtualRemote::InjectCancel`, verified in `pa3_sheet.png`).
-* Debug logging is rate-limited; `[bt]`, `[trace]`, `[prof]`, `[copylog]`, `[audio-dbg]` lines are diagnostics only.
+1. Full playthrough.
+2. Save -> quit -> reload.
+3. Real-device input and settings persistence.
+4. Audio audibility.
+5. Performance and fidelity.
+6. Final source/evidence hygiene after the physical/manual gates settle.
 
 ## Debug switches and tools
 
-* `SIN_CALLTRACE=1` writes `build/native/calltrace.txt` (first-seen guest call targets).
-* `SIN_CALLPROF=1` (with CALLTRACE) prints the hottest call targets every 10 s (`[prof]`, `[prof-game]`).
-* `SIN_TRACE_ARGS=hex+hex` logs r3..r6/lr on entry to listed targets (200 hits each).
-* `SIN_WATCHDOG_SECS=N` writes a crash-style snapshot and host-RIP samples every N s (3 times).
-* `SIN_GX_COPYLOG=<frame>` (+ `SIN_GX_COPYLOG_EVERY=<n>`) logs texture copies, viewport, scissor and draw state for 3 frames.
-* `SIN_AUTOSTAGE=<0..7>` redirects the stage the game loads (after the menu run; the game stage id to module map is not identity: 3->stg05, 5->stg03). `SIN_AUDIO_LOG=1` logs AX/AI mixer stats per second. `SIN_DUMP_ON=<hex>` + `SIN_DUMP_EXIT=1` snapshot memory at first entry of a traced target and exit.
-* `SIN_AUTOSTAGE_SEQ=a,b,c` (+`SIN_AUTOSTAGE_GAP=<s>`) swaps stages in sequence via the game's own stage-change path; `SIN_OPEN_OPTIONS_AT=<s>`, `SIN_OPEN_OPTIONS=1`, `SIN_MENU_AUTOCLOSE=<s>`, `SIN_MENU_HOOK_LOG=1`, `SIN_MENU_HOOK=0` drive/inspect the menu hook; script field `@u/v` places the pointer at screen fractions.
-* `SIN_VIRTUAL_REMOTE=1` forces the virtual remote; `SIN_VREMOTE_SCRIPT=...` scripted input; `SIN_GX_TEST_RED=1`
-  is an unreliable renderer probe (see lesson).
-* `tools/run_game.ps1 -Env "A=1,B=2"` (ONE quoted string; `-Env` is split on commas), `tools/xref_up.py`,
-  `tools/callees.py`, `tools/gx_retarget_report.py`, `tools/find_sc_funcs.py`, `tools/thread_dump.py`,
-  `tools/calltrace_sym.py`, `tools/shot_stats.py`.
+- `SIN_CALLTRACE=1`, `SIN_CALLPROF=1`, `SIN_TRACE_ARGS`, `SIN_WATCHDOG_SECS`.
+- `SIN_AUTOSTAGE=<0..7>` and `SIN_AUTOSTAGE_SEQ=a,b,c`.
+- `SIN_AUDIO_LOG=1`.
+- `SIN_VREMOTE_SCRIPT` for deterministic input; script field `@u/v` gives an absolute pointer position.
+- `SIN_OPEN_OPTIONS_AT`, `SIN_OPEN_OPTIONS`, `SIN_MENU_AUTOCLOSE`, `SIN_MENU_HOOK_LOG`, `SIN_MENU_HOOK`.
+- `tools/run_game.ps1`, `tools/shot_stats.py`, `tools/thread_dump.py`, `tools/calltrace_sym.py`.
 
 ## Build
 
-```
-# full chain (needed after adding/changing/removing any native override or recomp.yml)
-$t = 'translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll'
-dotnet $t emit-native-index --project projects/r2ve01/recomp.yml --out runtime/native-index.json
-dotnet $t translate-recursive 0x80006310 --project projects/r2ve01/recomp.yml --threads 12 --output-metadata generated/base_translation_output.json
-dotnet $t generate-data-init --project projects/r2ve01/recomp.yml
-dotnet $t emit-build-shards --project projects/r2ve01/recomp.yml
-cmake --build build/native --parallel 30
+After translating/generated code is current and the hardened helper has settled:
 
-# stage modules (after changing tools/rso_link.py, module maps or the translator): for each stgNN
-python tools/rso_link.py orig/R2VE01/files/stgNN.rso orig/R2VE01/sys/main.dol orig/R2VE01/files/gs2.sel 0x97DC0000 build/modules/stgNN
-python tools/module_seeds.py stgNN --write --prune-jt   # then keep only text-range + farjump_ map entries
-dotnet $t translate-recursive 0x80006310 --project projects/r2ve01/stgNN.yml --threads 12 --output-metadata build/generated-stgNN/base_translation_output.json
-python tools/module_coverage.py ; python tools/module_shards.py ; then the full chain above
+```powershell
+powershell -File tools\clean_build.ps1 -Keep
+dotnet test translator
 ```
 
-Point `dvd_root` in `UserData/Config.toml` at the extracted disc (`orig/R2VE01/files`). License: GPL-3 (forked from
-Wiicompiled). No game data is included.
+The helper is intended to support an explicit `-ToolchainBin`, `MKW_TOOLCHAIN_BIN`, the managed local toolchain, or
+tools on `PATH`. With `-Keep`, the output is under `build\clean`; without it, the executable is copied to
+`build\WiiCompiled-clean.exe` and the temporary tree is removed. The hardened helper completed the current clean
+checkpoint successfully.
+
+Point `dvd_root` in `UserData/Config.toml` at the extracted `R2VE01` disc root containing `sys/` and `files/`.
+No game data is included. License: GPL-3; the translator and runtime are forked from Wiicompiled.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pipeline_cache.hpp"
+#include "pixel_perfect.hpp"
 #include "types.hpp"
 #include "tex_palette_conv.hpp"
 #include "texture.hpp"
@@ -113,6 +114,7 @@ struct RenderPass {
   bool hasDraws = false;
   bool discardable = false;
   bool sealed = false;
+  bool suppressDlssJitter = false;
   // The pass feeds a texture the guest keeps, so its draws wait for pipelines instead of skipping.
   bool requireReadyPipelines = false;
   std::vector<tex_palette_conv::ConvRequest> paletteConvs;
@@ -205,6 +207,11 @@ struct FramePacket {
   std::deque<ReadbackTask> readbackTasks;
   std::deque<FrameOp> ops;
   std::deque<TextureUpload> textureUploads;
+  struct PixelPerfectGui {
+    webgpu::TextureWithSampler baseline;
+    webgpu::TextureWithSampler scene;
+    pixel_perfect::GuiCopyMapping mapping;
+  } pixelPerfectGui;
 #ifdef AURORA_GFX_DEBUG_GROUPS
   std::vector<std::string> debugMarkers;
 #endif

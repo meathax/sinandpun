@@ -22,7 +22,20 @@ if (-not (Test-Path $exe)) { throw "no exe at $exe - build first" }
 if (Get-Process WiiCompiled -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $dst "WiiCompiled.exe") }) {
     throw "the game in $Target is running; close it first"
 }
+$moduleNames = 0..7 | ForEach-Object { "stg0$_.bin" }
+$moduleSources = @{}
+foreach ($moduleName in $moduleNames) {
+    $modulePath = Join-Path "$root\build\modules" $moduleName
+    if (-not (Test-Path $modulePath)) { throw "missing linked stage module: $modulePath" }
+    $moduleSources[$moduleName] = $modulePath
+}
 New-Item -ItemType Directory -Force $dst | Out-Null
+Remove-Item (Join-Path $dst "*.dll") -Force -ErrorAction SilentlyContinue
+Copy-Item $exe (Join-Path $dst "WiiCompiled.exe") -Force
+Get-ChildItem $src -File -Filter "*.dll" | ForEach-Object {
+    Copy-Item $_.FullName $dst -Force
+}
+Copy-Item (Join-Path $root "LICENSE") $dst -Force
 
 $dlssDir = Join-Path $root "third_party\nvidia\streamline"
 if ($FetchDlss -and -not (Test-Path (Join-Path $dlssDir "bin\x64\sl.interposer.dll"))) {
@@ -72,7 +85,10 @@ if (Test-Path (Join-Path $src "wii_bootstrap")) {
     Copy-Item (Join-Path $src "wii_bootstrap") $dst -Recurse -Force
 }
 New-Item -ItemType Directory -Force (Join-Path $dst "modules") | Out-Null
-Get-ChildItem build\modules -Filter "stg0?.bin" | ForEach-Object { Copy-Item $_.FullName (Join-Path $dst "modules") -Force }
+Remove-Item (Join-Path $dst "modules\stg0?.bin") -Force -ErrorAction SilentlyContinue
+foreach ($moduleName in $moduleNames) {
+    Copy-Item $moduleSources[$moduleName] (Join-Path $dst "modules") -Force
+}
 
 # portable mode marker: user state (Config.toml, NAND saves, Cache, Logs) lives in ready\UserData, not %LOCALAPPDATA%
 Set-Content (Join-Path $dst "portable.txt") "portable"

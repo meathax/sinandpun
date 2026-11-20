@@ -10,9 +10,12 @@ runtime were forked from the Wiicompiled project, from which all Mario Kart spec
 
 ## Status
 
-See `docs/STATUS.md` (stage table, acceptance checklist with evidence) and `docs/REMAINING.md`. In short: the game boots,
-all eight stage modules load and render, audio is mixed, saves work, and the in-game options menu replaces the old F10
-overlay. A full playthrough, audio audibility on a real output device and several input paths are not yet verified.
+See `docs/COMPLETION-PLAN.md` for the full completion workflow, `docs/STATUS.md` for verified evidence, and
+`docs/REMAINING.md` for the one canonical remaining-task list. The game
+boots, all eight stage modules load and render in isolated runs, audio produces mixed PCM, save files are created, and
+the game-styled options overlay opens from both the title and pause OPTIONS pages, and a deterministic A->B->A module
+swap now passes. A full playthrough, save/quit/reload, physical-device input and persistence, audible output, and
+performance/fidelity validation remain open.
 
 ## Layout
 
@@ -38,11 +41,12 @@ dotnet $t emit-native-index --project projects/r2ve01/recomp.yml --out runtime/n
 dotnet $t translate-recursive 0x80006310 --project projects/r2ve01/recomp.yml --threads 12 --output-metadata generated/base_translation_output.json
 dotnet $t generate-data-init --project projects/r2ve01/recomp.yml
 dotnet $t emit-build-shards --project projects/r2ve01/recomp.yml
-powershell -File tools\clean_build.ps1 -Keep      # fresh configure + full build into build\clean
+powershell -File tools\clean_build.ps1 -Keep      # clean local configure + runtime build into build\clean
 ```
 
 Stage modules (`stg00..07`) are pre-linked and translated separately; the commands are in `docs/STATUS.md` ("Build").
-Run the translator tests with `dotnet test translator`.
+Run the translator tests with `dotnet test translator`. The current verified checkpoint includes a successful hardened
+local clean runtime build. This is workstation-local evidence, not a cross-machine reproducibility claim.
 
 ## Running
 
@@ -74,8 +78,12 @@ open in a panel styled like the game. `F10`/`F1` and `Back+Start` remain as a de
 
 ## Known issues
 
-- A full playthrough (bosses, credits) has not been done; the stage-2 game-over sound-slot crash has a guard that has not yet
-  been triggered in a real run (`docs/SWAP-CRASH-NOTES.md`).
-- Audio is mixed but its audibility on a real output device is not verified.
-- Classic Controller emulation (opt-in) is not accepted by the game's file-select screen in scripted tests; mouse pointer and
-  remapping with physical devices are implemented but not verified in game.
+- Save creation is proven, but save -> quit -> reload has not been completed.
+- Repeated A -> B -> A module swapping is proven in an automated QA run; a full gameplay progression run remains open.
+- A full playthrough, including bosses, cutscenes, continue/game-over, and credits, has not been completed.
+- Audio produces non-silent PCM, but audibility on a real output device is not verified.
+- Physical-device input, including Classic Controller acceptance, mouse aiming, remapping, and config persistence across a
+  restart, remains unverified. The options overlay itself is verified from the title and pause menus.
+- A dedicated performance and visual-fidelity pass against original behavior/reference output remains open.
+
+The complete canonical list is in `docs/REMAINING.md`; avoid treating older plans or this summary as additional checklists.

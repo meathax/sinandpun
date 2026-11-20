@@ -487,6 +487,8 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
                          u32 numIndices) noexcept {
   auto& state = g_gxState;
   auto& cache = sDrawCache;
+  const bool pixelPerfectTextures = state.projType == GX_ORTHOGRAPHIC;
+  gfx::note_projection_draw(pixelPerfectTextures);
 
   DrawImmediateData immediates{.vtxStart = vertRange.offset, .currentPnMtx = state.currentPnMtx};
   for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {

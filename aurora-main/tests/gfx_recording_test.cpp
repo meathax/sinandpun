@@ -324,5 +324,26 @@ TEST_F(GfxRecordingTest, OffscreenKeyIncludesColorAndDepthFormats) {
   }
 }
 
+TEST(PixelPerfectGuiTest, TracksTerminalOrthographicRun) {
+  pixel_perfect::GuiProjectionTracker tracker;
+  EXPECT_EQ(tracker.observe(false), pixel_perfect::GuiProjectionTransition::BeginThreeD);
+  EXPECT_EQ(tracker.observe(true), pixel_perfect::GuiProjectionTransition::BeginGui);
+  EXPECT_EQ(tracker.observe(true), pixel_perfect::GuiProjectionTransition::None);
+  EXPECT_EQ(tracker.observe(false), pixel_perfect::GuiProjectionTransition::BeginThreeD);
+  EXPECT_EQ(tracker.observe(true), pixel_perfect::GuiProjectionTransition::BeginGui);
+}
+
+TEST(PixelPerfectGuiTest, MapsCroppedDisplayCopyBackToEfb) {
+  const auto mapping = pixel_perfect::display_copy_mapping(1280, 960, 80, 48, 1120, 864, 1280, 960, true);
+  EXPECT_FLOAT_EQ(mapping.sourceLeft, 0.0625f);
+  EXPECT_FLOAT_EQ(mapping.sourceTop, 0.05f);
+  EXPECT_FLOAT_EQ(mapping.sourceWidth, 0.875f);
+  EXPECT_FLOAT_EQ(mapping.sourceHeight, 0.9f);
+  EXPECT_FLOAT_EQ(mapping.destinationWidth, 0.875f);
+  EXPECT_FLOAT_EQ(mapping.destinationHeight, 0.9f);
+  EXPECT_TRUE(pixel_perfect::integer_scale(640, 1920));
+  EXPECT_FALSE(pixel_perfect::integer_scale(640, 1366));
+}
+
 } // namespace
 } // namespace aurora::gfx

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include "pixel_perfect.hpp"
 
 #include <cstddef>
 #include <span>
@@ -134,6 +135,17 @@ struct ResolveOptions {
 void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat,
                        GXPixelFmt sourceFormat, const ResolveOptions& options = {});
+// Records the current GX projection draw class. A terminal orthographic run is preserved at presentation as
+// a pixel-nearest GUI overlay over the selected 3D scaler.
+void note_projection_draw(bool orthographic) noexcept;
+// Snapshots the final scene and records how the GX display-copy rectangle maps that scene into the XFB.
+void capture_pixel_perfect_gui_scene(const pixel_perfect::GuiCopyMapping& mapping);
+struct PixelPerfectGuiPresent {
+  webgpu::TextureWithSampler baseline;
+  webgpu::TextureWithSampler scene;
+  pixel_perfect::GuiCopyMapping mapping;
+};
+PixelPerfectGuiPresent pixel_perfect_gui_present() noexcept;
 uint32_t align_uniform(uint32_t value);
 Vec2<uint32_t> get_render_target_size() noexcept;
 void set_viewport(const Viewport& viewport) noexcept;

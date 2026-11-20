@@ -91,8 +91,8 @@ bool interpolate_transform(const Mat3x4<float>& previous, const Mat3x4<float>& c
                            float weight, Mat3x4<float>& output) noexcept;
 bool interpolate_transform_midpoint(const Mat3x4<float>& previous, const Mat3x4<float>& current,
                                     Mat3x4<float>& output) noexcept;
-// Matrix palettes are already-composed skinning transforms, so interpolating their coefficients
-// keeps shared boundaries intact. Ordinary one-matrix draws keep the rigid TRS path above.
+// GX PN matrices are already-composed model/view transforms. Coefficient interpolation preserves
+// shared model boundaries across independently submitted draws whose matrices differ.
 bool interpolate_indexed_transform(const Mat3x4<float>& previous,
                                    const Mat3x4<float>& current, float weight,
                                    Mat3x4<float>& output) noexcept;

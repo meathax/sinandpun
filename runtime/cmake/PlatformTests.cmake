@@ -42,6 +42,38 @@ target_include_directories(mkw_controls_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/i
 target_compile_features(mkw_controls_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_controls_tests COMMAND mkw_controls_tests)
 
+if(AURORA_SDL3_TARGET)
+    find_package(Threads REQUIRED)
+    if(TARGET "${AURORA_SDL3_TARGET}")
+        add_executable(mkw_aim_input_focus_tests
+            "${MKW_TEST_RUNTIME_DIR}/tests/aim_input_focus_tests.cpp"
+            "${MKW_TEST_RUNTIME_DIR}/src/wiimote/aim_input.cpp")
+        target_include_directories(mkw_aim_input_focus_tests PRIVATE
+            "${MKW_TEST_RUNTIME_DIR}/include"
+            "${MKW_TEST_RUNTIME_DIR}/src"
+            "${MKW_AURORA_DIR}/include"
+            "${MKW_TEST_RUNTIME_DIR}/third_party/toml11")
+        target_compile_features(mkw_aim_input_focus_tests PRIVATE cxx_std_20)
+        target_compile_definitions(mkw_aim_input_focus_tests PRIVATE TARGET_PC)
+        target_compile_options(mkw_aim_input_focus_tests PRIVATE -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(mkw_aim_input_focus_tests PRIVATE -Wl,-dead_strip)
+        else()
+            target_link_options(mkw_aim_input_focus_tests PRIVATE -Wl,--gc-sections)
+        endif()
+        set_target_properties(mkw_aim_input_focus_tests PROPERTIES UNITY_BUILD OFF)
+        target_link_libraries(mkw_aim_input_focus_tests PRIVATE ${AURORA_SDL3_TARGET} Threads::Threads)
+        if(WIN32)
+            add_custom_command(TARGET mkw_aim_input_focus_tests POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    $<TARGET_RUNTIME_DLLS:mkw_aim_input_focus_tests>
+                    $<TARGET_FILE_DIR:mkw_aim_input_focus_tests>
+                COMMAND_EXPAND_LISTS)
+        endif()
+        add_test(NAME mkw_aim_input_focus_tests COMMAND mkw_aim_input_focus_tests)
+    endif()
+endif()
+
 add_executable(mkw_nand_save_tests "${MKW_TEST_RUNTIME_DIR}/tests/nand_save_tests.cpp")
 target_include_directories(mkw_nand_save_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
 target_compile_features(mkw_nand_save_tests PRIVATE cxx_std_17)
@@ -63,6 +95,12 @@ add_executable(mkw_sc_serial_tests "${MKW_TEST_RUNTIME_DIR}/tests/sc_serial_test
 target_include_directories(mkw_sc_serial_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
 target_compile_features(mkw_sc_serial_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_sc_serial_tests COMMAND mkw_sc_serial_tests)
+
+add_executable(mkw_sound_slot_guard_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/sound_slot_guard_tests.cpp")
+target_include_directories(mkw_sound_slot_guard_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_sound_slot_guard_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_sound_slot_guard_tests COMMAND mkw_sound_slot_guard_tests)
 
 # The input expression engine is self-contained, so it can be exercised without
 # linking the runtime or SDL.

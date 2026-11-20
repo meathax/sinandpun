@@ -1,7 +1,7 @@
 param(
     [string]$Name = "qa",
     [int]$Seconds = 300,
-    [string]$Env = "",             # ONE string, comma-joined K=V (extra env; SIN_AUTOSTAGE etc.)
+    [string]$Env = "",             # ONE string, comma-joined K=V; use ';' when a value contains commas
     [int]$Stage = -1,              # SIN_AUTOSTAGE
     [string]$Style = "fight",
     [int]$Seed = 1,
@@ -28,7 +28,8 @@ if (-not $Script) {
 $envs = @{ SIN_VIRTUAL_REMOTE = "1"; SIN_PERF_LOG = "1"; SIN_VREMOTE_SCRIPT = "1"; SIN_VREMOTE_SCRIPT_FILE = $scriptFile; SIN_AUTOSTAGE_TRACE = "1" }
 if ($Stage -ge 0) { $envs.SIN_AUTOSTAGE = "$Stage" }
 if (-not $phased) { $envs.SIN_VREMOTE_SCRIPT = $Script; $envs.Remove("SIN_VREMOTE_SCRIPT_FILE") }
-foreach ($e in ($Env -split ',')) { if ($e) { $k, $v = $e -split '=', 2; $envs[$k] = $v } }
+$envEntries = if ($Env.Contains(';')) { $Env -split ';' } else { $Env -split ',' }
+foreach ($e in $envEntries) { if ($e) { $k, $v = $e -split '=', 2; $envs[$k] = $v } }
 Take-Lock "qa-$Name"
 try {
     $src = "$root\build\native\WiiCompiled.exe"; $exe = "$root\build\native\SinQA.exe"
@@ -38,12 +39,27 @@ try {
     $logsBefore = @(Get-ChildItem build\native\UserData\Logs -Directory -ErrorAction SilentlyContinue | % Name)
     $p = Start-Process -FilePath $exe -WorkingDirectory "$root\build\native" `
         -RedirectStandardOutput "$dir\out.log" -RedirectStandardError "$dir\err.log" -PassThru
-    $t0 = Get-Date; $nextShot = $ShotEvery; $shots = 0; $ended = "timeout"
+    $t0 = Get-Date; $nextShot = $ShotEvery; $shots = 0; $ended = "timeout"; $nextGrowth = 0
+    $growthFile = "$dir\log_growth.csv"
+    "elapsed_s,err_bytes,out_bytes,runtime_bytes" | Set-Content $growthFile -Encoding UTF8
     while (((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
         Start-Sleep -Seconds 2
         if ($phased -and -not $fight -and ((Select-String -Path "$dir\err.log" -Pattern "F state \S+ -> 4 " -Quiet))) { $Script | Set-Content $scriptFile -NoNewline; $fight = $true; "fight phase at $([int]((Get-Date) - $t0).TotalSeconds)s" | Add-Content "$dir\summary.txt" }
         if ($p.HasExited) { $ended = "EXITED code $($p.ExitCode) at $([int]((Get-Date) - $t0).TotalSeconds)s"; break }
         $el = ((Get-Date) - $t0).TotalSeconds
+        if ($el -ge $nextGrowth) {
+            $runtimeBytes = 0L
+            $runLogDirs = @(Get-ChildItem build\native\UserData\Logs -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $logsBefore -notcontains $_.Name })
+            foreach ($runLogDir in $runLogDirs) {
+                $runtimeBytes += (Get-ChildItem $runLogDir.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                    Measure-Object Length -Sum).Sum
+            }
+            $errBytes = if (Test-Path "$dir\err.log") { (Get-Item "$dir\err.log").Length } else { 0 }
+            $outBytes = if (Test-Path "$dir\out.log") { (Get-Item "$dir\out.log").Length } else { 0 }
+            "$([int]$el),$errBytes,$outBytes,$runtimeBytes" | Add-Content $growthFile -Encoding UTF8
+            $nextGrowth = $el + 10
+        }
         if ($ShotEvery -gt 0 -and $el -ge $nextShot) {
             $nextShot += $ShotEvery
             $j = Start-Job { param($r, $o) Set-Location $r; powershell -File "$r\tools\screenshot.ps1" -ProcessName SinQA -OutFile $o } -ArgumentList $root, "$dir\s$([int]$el).png"
