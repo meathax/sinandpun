@@ -1,89 +1,196 @@
-# Sin & Punishment: Star Successor - static recompilation (PC port)
+# Sin & Punishment: Star Successor Recomp
 
-A 1:1 static recompilation of *Sin & Punishment: Star Successor* (Wii, `R2VE01`) to native x86-64. The game's PowerPC code is
-translated to C++ ahead of time; the Wii's OS, GX graphics, audio, input and storage are provided by a host runtime. The one
-deliberate change from the original is input: a virtual Wii Remote is driven by a normal gamepad, keyboard and mouse
-(right stick or mouse aims, left stick moves), with a full controller setup menu.
+<p align="center">
+  <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2EA44F?logo=gnu&amp;logoColor=white"></a>
+  <img alt="Windows x64" src="https://img.shields.io/badge/Windows-10%20%2F%2011%20%C2%B7%20x64-0078D4">
+  <img alt="PowerPC static recompilation" src="https://img.shields.io/badge/PowerPC-static%20recompilation-FF9F0A">
+  <img alt="Status: testing" src="https://img.shields.io/badge/status-testing-8B5CF6">
+</p>
 
-**No game data is included.** You need your own legally dumped disc. The code is GPL-3 (see `LICENSE`); the translator and
-runtime were forked from the Wiicompiled project, from which all Mario Kart specific code has been removed.
+A native PC port of *Sin & Punishment: Star Successor* for Wii, made with static recompilation.
 
-## Status
+The PowerPC code from the game is translated to C++ ahead of time. The Wii OS, GX graphics, audio, input, DVD and NAND
+interfaces are provided by a host runtime. There is no emulator, interpreter, JIT, or PowerPC CPU in the runtime loop.
 
-See `docs/COMPLETION-PLAN.md` for the full completion workflow, `docs/STATUS.md` for verified evidence, and
-`docs/REMAINING.md` for the one canonical remaining-task list. The game
-boots, all eight stage modules load and render in isolated runs, audio produces mixed PCM, save files are created, and
-the game-styled options overlay opens from both the title and pause OPTIONS pages, and a deterministic A->B->A module
-swap now passes. A full playthrough, save/quit/reload, physical-device input and persistence, audible output, and
-performance/fidelity validation remain open.
+> [!IMPORTANT]
+> This repository contains no Nintendo code, no game data, no extracted assets, and no compiled game binary. You must
+> provide your own legally dumped copy of **Sin & Punishment: Star Successor**, NTSC-U (`R2VE01`).
 
-## Layout
+<p align="center">
+  <img src="docs/screenshots/title.png" alt="Recomp title screen" width="900">
+</p>
 
-| Path | What |
-|---|---|
-| `translator/` | .NET 8 PowerPC-to-C++ translator and its tests (`dotnet test translator`) |
-| `projects/r2ve01/` | translation manifests: `recomp.yml` (main DOL) and `stg00..07.yml` (stage modules) |
-| `runtime/` | host runtime (OS, GX/aurora graphics, audio, input, storage HLE), settings overlay |
-| `aurora-main/` | rendering backend |
-| `tools/` | analysis and run helpers (`run_game.ps1`, `run_shots.ps1`, `clean_build.ps1`, ...) |
-| `docs/` | status, plans, reverse-engineering notes |
-| `orig/`, `generated/`, `build/` | local only: your disc files, translator output, build output (not committed) |
+## Current status
 
-## Build (Windows, clang + Ninja toolchain)
+The project is in active gameplay testing:
 
-Prerequisites: the .NET 8 SDK, CMake and a clang/Ninja toolchain (see `tools/clean_build.ps1` for the exact toolchain
-paths used here), and your game files extracted to `orig/R2VE01` (`sys/main.dol` plus `files/`).
+- boots to the rendered title screen;
+- all eight stage modules load and render;
+- deterministic `A -> B -> A` module swaps pass;
+- guest Wii Remote, Nunchuk and Classic Controller handshakes run;
+- gamepad, keyboard and mouse input are implemented;
+- the title and pause menus open the recomp settings overlay;
+- audio produces non-silent mixed PCM;
+- saves are created through the NAND HLE path;
+- the release package builds and boots without bundled game data.
+
+A full human playthrough, physical-device acceptance, audible-output testing and save/quit/reload validation remain open.
+See [the current remaining work](docs/REMAINING.md) and [the full completion plan](docs/COMPLETION-PLAN.md).
+
+<p align="center">
+  <img src="docs/screenshots/gameplay.png" alt="Native gameplay rendering" width="900">
+</p>
+
+## Features
+
+### Native runtime
+
+- Ahead-of-time PowerPC-to-C++ translation.
+- Static translation of the main DOL and all eight stage RSO modules.
+- Native Aurora/GX rendering through WebGPU/D3D12/Vulkan-compatible backends.
+- DVD and NAND high-level emulation against a locally extracted disc.
+- Native SDL audio output, threaded AX/DSP mixing and Wii timing behavior.
+
+### Controls
+
+The one intentional gameplay change is modern controller support:
+
+- left stick: Nunchuk movement;
+- right stick: Wii Remote pointer aiming;
+- normal gamepad triggers, bumpers and face buttons;
+- absolute or relative mouse aiming;
+- keyboard/mouse bindings;
+- virtual Wii Remote + Nunchuk and experimental Classic Controller paths;
+- remappable controls with a controller-first in-game setup UI.
+
+### Display and graphics
+
+- Native, 1.5x, 2x, 3x and 4x internal rendering.
+- Optional FSR 1 spatial upscaling and NVIDIA DLSS where available.
+- Original 60 Hz mode, match-display mode and interpolated presentation.
+- VRR/G-SYNC/FreeSync support.
+- Game-styled Display, Graphics, Audio, Controls, System and About pages.
+- Settings are staged until **Apply and confirm** is selected, followed by a single Keep/Revert safety prompt.
+- HUD/GUI/text is recomposited after 3D upscaling with nearest-neighbor sampling.
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="In-game graphics settings" width="900">
+</p>
+
+## Requirements
+
+- Windows 10 or 11, 64-bit.
+- A D3D12/Vulkan-capable GPU.
+- .NET 8 SDK, CMake, Ninja and a 64-bit Clang/LLVM toolchain for building from source.
+- Your own legally dumped **NTSC-U R2VE01** disc, extracted into a folder containing `sys/` and `files/`.
+
+> [!NOTE]
+> This project does not provide or link to game data. Do not redistribute Nintendo code or assets.
+
+## Running
+
+The final executable expects an extracted disc folder in `UserData/Config.toml`:
+
+```toml
+[paths]
+dvd_root = 'D:/path/to/R2VE01'
+```
+
+Run `WiiCompiled.exe`. On first launch, the runtime creates its local NAND save tree under `UserData/NAND`.
+
+## Building
+
+Build the translator:
 
 ```powershell
-cd translator ; dotnet build -c Release ; cd ..
+dotnet build translator/Translator.sln -c Release
+```
+
+Run the data-free translator suite:
+
+```powershell
+dotnet test translator
+```
+
+Generate the translated source and build graph:
+
+```powershell
 $t = 'translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll'
 dotnet $t emit-native-index --project projects/r2ve01/recomp.yml --out runtime/native-index.json
 dotnet $t translate-recursive 0x80006310 --project projects/r2ve01/recomp.yml --threads 12 --output-metadata generated/base_translation_output.json
 dotnet $t generate-data-init --project projects/r2ve01/recomp.yml
 dotnet $t emit-build-shards --project projects/r2ve01/recomp.yml
-powershell -File tools\clean_build.ps1 -Keep      # clean local configure + runtime build into build\clean
+powershell -File tools\clean_build.ps1 -Keep
 ```
 
-Stage modules (`stg00..07`) are pre-linked and translated separately; the commands are in `docs/STATUS.md` ("Build").
-Run the translator tests with `dotnet test translator`. The current verified checkpoint includes a successful hardened
-local clean runtime build. This is workstation-local evidence, not a cross-machine reproducibility claim.
-
-## Running
-
-1. Put the extracted disc root in `UserData/Config.toml` next to the executable:
-   ```toml
-   [paths]
-   dvd_root = 'D:/path/to/R2VE01'   # the folder that contains sys/ and files/
-   ```
-2. Start `WiiCompiled.exe`. The first launch creates the save area under `UserData/NAND`.
+The eight stage modules are pre-linked and translated separately. The exact commands and expected evidence are documented
+in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Controls
 
-The default scheme (`[input] scheme = "pointer"`) presents a virtual Wii Remote + Nunchuk: the right stick or mouse moves the
-pointer, the left stick is the Nunchuk stick. A Wii Classic Controller emulation (`"classic"`) exists but is **experimental**:
-in testing the game did not accept its A button on the file-select screen, so it is not the default. Everything is remappable in the in-game options menu (Controls tab) for gamepad,
-keyboard and mouse. Defaults on an Xbox-style pad: left stick move, right stick aim, RB shoot/sword, RT lock-on,
-LB jump, LT evade, Start pause. The mouse can drive the pointer directly (absolute or relative mode).
+The default control scheme is pointer mode:
 
-## In-game options menu
+| Xbox-style input | Action |
+|---|---|
+| Left stick | Move |
+| Right stick / mouse | Aim |
+| RB | Shoot / sword |
+| RT | Lock-on |
+| LB | Jump |
+| LT | Evade |
+| Start | Pause |
 
-Choose **OPTIONS** on the title menu or on the pause menu: the recomp settings (display, graphics, audio, controls, system)
-open in a panel styled like the game. `F10`/`F1` and `Back+Start` remain as a developer fallback. Settings are stored in
-`UserData/Config.toml`; display changes ask you to keep them (auto-revert after 10 seconds).
+Classic Controller emulation is available as an experimental option. Open the in-game settings from the game's title
+or pause **OPTIONS** page; everything is remappable.
 
-## Debug switches
+## Layout
 
-`SIN_CALLTRACE`, `SIN_WATCHDOG_SECS`, `SIN_AUDIO_LOG`, `SIN_GX_COPYLOG`, `SIN_AUTOSTAGE`/`SIN_AUTOSTAGE_SEQ`,
-`SIN_VREMOTE_SCRIPT` (scripted input), `SIN_MENU_HOOK_LOG` and more are listed in `docs/STATUS.md`.
+| Path | Contents |
+|---|---|
+| `translator/` | PowerPC-to-C++ translator and tests |
+| `projects/r2ve01/` | Main DOL and stage-module translation manifests |
+| `runtime/` | Guest ABI, OS/GX/audio/input/storage HLE and settings UI |
+| `aurora-main/` | Native GameCube/Wii rendering and platform backend |
+| `tools/` | Translation, QA, capture, profiling and release helpers |
+| `docs/` | Status, completion plan, notes and evidence summaries |
+| `orig/`, `generated/`, `build/` | Ignored local disc, generated and build output |
 
-## Known issues
+## FAQ
 
-- Save creation is proven, but save -> quit -> reload has not been completed.
-- Repeated A -> B -> A module swapping is proven in an automated QA run; a full gameplay progression run remains open.
-- A full playthrough, including bosses, cutscenes, continue/game-over, and credits, has not been completed.
-- Audio produces non-silent PCM, but audibility on a real output device is not verified.
-- Physical-device input, including Classic Controller acceptance, mouse aiming, remapping, and config persistence across a
-  restart, remains unverified. The options overlay itself is verified from the title and pause menus.
-- A dedicated performance and visual-fidelity pass against original behavior/reference output remains open.
+**Is this an emulator?**
+No. The guest PowerPC code is translated to native C++ before launch.
 
-The complete canonical list is in `docs/REMAINING.md`; avoid treating older plans or this summary as additional checklists.
+**Does this repository contain the game?**
+No. You must legally own and dump the disc yourself.
+
+**Is it complete?**
+Not yet. All stages render and the core runtime is playable, but the final human playthrough, physical-controller
+acceptance, audible-output and save/quit/reload gates remain open.
+
+**Why is generated output not committed?**
+Translation depends on the user's local disc. Ignoring generated code and local assets keeps copyrighted game data out of
+the repository and keeps builds reproducible from each owner's inputs.
+
+## AI usage
+
+AI-assisted coding tools were used during development. Generated code and runtime behavior are validated with automated
+tests, structured QA runs, screenshots and guest traces. Remaining human-only acceptance work is listed explicitly rather
+than inferred from compilation.
+
+## Credits
+
+- The runtime and translator originated from [WiiCompiled](https://github.com/patchzyy/Wiicompiled).
+- [Aurora](https://github.com/encounter/aurora) provides the GX rendering/windowing backend.
+- [Dawn](https://dawn.googlesource.com/dawn) provides WebGPU.
+- [Dolphin Emulator](https://github.com/dolphin-emu/dolphin) is used as a reference for Wii hardware behavior.
+- The static-recompilation community and upstream open-source core contributors.
+
+Bundled third-party components retain their original licenses.
+
+## License
+
+This project is licensed under the [GNU General Public License, version 3](LICENSE).
+
+Not affiliated with, endorsed by, or associated with Nintendo or Treasure. Sin & Punishment: Star Successor is a trademark
+of its respective rights holders. No Nintendo intellectual property is contained in, distributed with, or obtainable from
+this repository.
