@@ -55,8 +55,9 @@ Run the translator tests with `dotnet test translator`.
 
 ## Controls
 
-The default scheme emulates a Wii Classic Controller (`[input] scheme = "classic"`); the Wii Remote + Nunchuk pointer
-scheme is available as `"pointer"`. Everything is remappable in the in-game options menu (Controls tab) for gamepad,
+The default scheme (`[input] scheme = "pointer"`) presents a virtual Wii Remote + Nunchuk: the right stick or mouse moves the
+pointer, the left stick is the Nunchuk stick. A Wii Classic Controller emulation (`"classic"`) exists but is **experimental**:
+in testing the game did not accept its A button on the file-select screen, so it is not the default. Everything is remappable in the in-game options menu (Controls tab) for gamepad,
 keyboard and mouse. Defaults on an Xbox-style pad: left stick move, right stick aim, RB shoot/sword, RT lock-on,
 LB jump, LT evade, Start pause. The mouse can drive the pointer directly (absolute or relative mode).
 
@@ -76,4 +77,5 @@ open in a panel styled like the game. `F10`/`F1` and `Back+Start` remain as a de
 - A full playthrough (bosses, credits) has not been done; the stage-2 game-over sound-slot crash has a guard that has not yet
   been triggered in a real run (`docs/SWAP-CRASH-NOTES.md`).
 - Audio is mixed but its audibility on a real output device is not verified.
-- Classic Controller extension, mouse pointer and remapping with physical devices are implemented but not verified in game.
+- Classic Controller emulation (opt-in) is not accepted by the game's file-select screen in scripted tests; mouse pointer and
+  remapping with physical devices are implemented but not verified in game.

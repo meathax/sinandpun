@@ -121,7 +121,7 @@ struct MouseConfig {
 };
 
 struct Settings {
-    Scheme scheme = Scheme::Classic;
+    Scheme scheme = Scheme::Pointer;  // Pointer is the verified path; Classic is opt-in (see docs/STATUS.md)
     DualAnalog::Config aim;
     MouseConfig mouse;
     InputMap::Table<kActionCount> bindings;

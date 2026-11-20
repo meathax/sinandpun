@@ -677,7 +677,7 @@ private:
     AimSettings::Settings m_settings;
     uint32_t m_settingsGeneration = 0;
     bool m_settingsLoaded = false;
-    AimSettings::Scheme m_scheme = AimSettings::Scheme::Classic;
+    AimSettings::Scheme m_scheme = AimSettings::Scheme::Pointer;
     InputMap::Arbiter m_arbiter;
     DualAnalog::StickFilter m_classicFilter;
     bool m_prevRecenter = false;
