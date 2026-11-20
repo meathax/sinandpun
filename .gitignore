@@ -21,3 +21,6 @@ build_translate.log
 decomp/build/
 translator/**/bin/
 translator/**/obj/
+
+__pycache__/
+*.pyc
