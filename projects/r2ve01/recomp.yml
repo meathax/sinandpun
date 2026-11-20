@@ -33,6 +33,7 @@ translation:
     - 0x8010BC48
     - 0x8010C1E4
     - 0x8010C6C8
+    - 0x8003B950
 
 output:
   # Donor contract: the runtime CMake hard-codes <workspace>/generated for

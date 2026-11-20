@@ -33,6 +33,8 @@
 #include <cstring>
 #include <thread>
 
+void SinSoundSlotGuard(CpuContext* ctx);  // hle/sound_slot_guard.cpp
+
 namespace {
 
 // Debug aid: SIN_OPEN_OPTIONS_AT=<seconds> opens the overlay from a timer, so it can be inspected in any scene.
@@ -182,6 +184,10 @@ static void TitleRoot(CpuContext* ctx) {
 // Called by the translated handlers listed in projects/r2ve01/recomp.yml translation.entry_hooks. The menu page
 // handlers are only reached through an indirect call, so a registry wrapper cannot see them.
 void GuestEntryHook(uint32_t address, CpuContext* ctx) {
+    if (address == 0x8003B950u && ctx != nullptr) {
+        SinSoundSlotGuard(ctx);  // hle/sound_slot_guard.cpp
+        return;
+    }
     if (!g_enabled || ctx == nullptr) {
         return;
     }
