@@ -24,3 +24,5 @@ translator/**/obj/
 
 __pycache__/
 *.pyc
+
+ready/
