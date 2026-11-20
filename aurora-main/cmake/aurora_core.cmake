@@ -89,6 +89,7 @@ if (AURORA_ENABLE_GX)
             lib/webgpu/gpu.cpp
             lib/webgpu/gpu_cache.cpp
             lib/webgpu/gpu_prof.cpp
+            lib/webgpu/upscale.cpp
             lib/gfx/presentation.cpp
             lib/dawn/BackendBinding.cpp
             lib/dawn/TracyPlatform.cpp
@@ -107,6 +108,17 @@ if (AURORA_ENABLE_GX)
         target_link_libraries(aurora_core PRIVATE "-framework IOSurface")
     else ()
         target_sources(aurora_core PRIVATE lib/webgpu/metalfx_stub.cpp)
+    endif ()
+    # NVIDIA DLSS Super Resolution / DLAA (docs/DLSS-NOTES.md). Needs Windows and the Streamline SDK headers staged in
+    # third_party/nvidia/streamline/include (gitignored, MIT-licensed headers); nothing is linked, sl.interposer.dll is
+    # loaded at run time. Without the headers a stub reports DLSS as unavailable and the build is unaffected.
+    set(AURORA_STREAMLINE_INCLUDE "${CMAKE_CURRENT_LIST_DIR}/../../third_party/nvidia/streamline/include" CACHE PATH
+            "Streamline SDK headers for the DLSS backend")
+    if (WIN32 AND EXISTS "${AURORA_STREAMLINE_INCLUDE}/sl.h")
+        target_sources(aurora_core PRIVATE lib/webgpu/dlss.cpp lib/webgpu/motion_flow.cpp)
+        target_include_directories(aurora_core SYSTEM PRIVATE "${AURORA_STREAMLINE_INCLUDE}")
+    else ()
+        target_sources(aurora_core PRIVATE lib/webgpu/dlss_stub.cpp)
     endif ()
     if (DAWN_ENABLE_VULKAN)
         target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_VULKAN)

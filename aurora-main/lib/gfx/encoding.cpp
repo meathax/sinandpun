@@ -13,6 +13,7 @@
 #ifdef AURORA_ENABLE_RMLUI
 #include "../rmlui/pipeline.hpp"
 #endif
+#include "../webgpu/dlss.hpp"
 #include "../webgpu/gpu.hpp"
 #include "../webgpu/gpu_prof.hpp"
 
@@ -38,7 +39,12 @@ WGPURenderPipeline g_currentPipeline = nullptr;
 void apply_viewport(const wgpu::RenderPassEncoder& pass, const Viewport& vp) {
   const float minDepth = gx::UseReversedZ ? 1.f - vp.zfar : vp.znear;
   const float maxDepth = gx::UseReversedZ ? 1.f - vp.znear : vp.zfar;
-  pass.SetViewport(vp.left, vp.top, vp.width, vp.height, std::clamp(minDepth, 0.f, 1.f), std::clamp(maxDepth, 0.f, 1.f));
+  // DLSS sub-pixel jitter: shifting the viewport origin shifts the whole rasterised picture (zero unless DLSS is on).
+  float jitterX = 0.f;
+  float jitterY = 0.f;
+  webgpu::dlss::current_jitter(jitterX, jitterY);
+  pass.SetViewport(vp.left + jitterX, vp.top + jitterY, vp.width, vp.height, std::clamp(minDepth, 0.f, 1.f),
+                   std::clamp(maxDepth, 0.f, 1.f));
 }
 
 void apply_scissor(const wgpu::RenderPassEncoder& pass, const ClipRect& sc, const wgpu::Extent3D& size) {

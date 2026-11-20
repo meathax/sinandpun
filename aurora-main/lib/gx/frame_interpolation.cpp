@@ -2,7 +2,10 @@
 
 #include "../internal.hpp"
 #include "aurora/gfx.h"
+#include "../gfx/presentation.hpp"
 #include "../gfx/recording.hpp"
+#include "../webgpu/gpu.hpp"
+#include "../window.hpp"
 
 // Guest matrices really do carry NaN/Inf, and the isfinite guards here keep them
 // out of the MatchEdge sort. Needs -fno-finite-math-only (see runtime/CMakeLists.txt).
@@ -185,8 +188,7 @@ struct PendingUniformInterpolation {
   size_t positionOffset = 0;
   size_t normalOffset = 0;
   size_t currentMatrix = 0;
-  uint32_t numerator = 0;
-  uint32_t denominator = 1;
+  float weight = 1.0f;
   bool indexedMatrices = false;
 };
 
@@ -276,12 +278,134 @@ constexpr uint32_t kPacingWindowFrames = 60; // ~1 second of guest frames
 constexpr uint32_t kPacingReducePercent = 75;
 constexpr uint32_t kPacingRestorePercent = 25;
 
+// Frame-rate configuration (see aurora_set_frame_rate). Written from any thread, read by the
+// producer when it plans a frame.
+std::atomic_uint32_t s_rateMode{AURORA_FRAME_RATE_OFF};
+std::atomic_uint32_t s_rateFixedFps{0};
+std::atomic_uint32_t s_rateCapFps{1000};
+// EMA of the render worker's per-present cost; the uncapped mode derives its rate from it.
+std::atomic_uint64_t s_presentCostNanos{0};
+std::atomic_bool s_gridReset{true};
+std::atomic_uint32_t s_diagFrameRateMode{AURORA_FRAME_RATE_OFF};
+std::atomic<float> s_diagPlannedFps{0.f};
+std::atomic_uint32_t s_diagPlannedPresents{0};
+// Producer thread only: position, in guest-frame fractions from the start of the next guest frame,
+// of the next point on the present grid, and the plan of the frame being recorded.
+double s_gridPos = 1.0;
+gfx::InterpolationPlan s_plan;
+
+constexpr uint32_t kHardCapFps = 1000;
+constexpr uint32_t kUncappedStartSamples = 3;
+constexpr double kUncappedCostHeadroom = 0.8;
+constexpr double kGridSnap = 1.0e-4;
+
+uint32_t slots_for_fps(uint32_t fps) noexcept {
+  // Present points per guest frame at `fps`, minus the native frame when the grid lands on it.
+  const uint32_t points = (fps + 59) / 60;
+  return std::min(points > 0 ? points - 1 : 0u, MaxInterpolatedFrames);
+}
+
 uint32_t maximum_interpolation_samples() noexcept {
-  const uint32_t targetFps = frame_interpolation_fps();
-  if (targetFps == 0) {
+  const auto mode = static_cast<AuroraFrameRateMode>(s_rateMode.load(std::memory_order_acquire));
+  const uint32_t cap = s_rateCapFps.load(std::memory_order_acquire);
+  switch (mode) {
+  case AURORA_FRAME_RATE_FIXED:
+    return slots_for_fps(std::min(s_rateFixedFps.load(std::memory_order_acquire), cap));
+  case AURORA_FRAME_RATE_DISPLAY:
+  case AURORA_FRAME_RATE_UNCAPPED:
+    return slots_for_fps(cap);
+  default:
     return 0;
   }
-  return std::min(targetFps / 60 - 1, MaxInterpolatedFrames);
+}
+
+uint32_t initial_interpolation_samples() noexcept {
+  const uint32_t maximum = maximum_interpolation_samples();
+  // Uncapped has no natural ceiling, so it ramps up through the pacing controller instead of
+  // staging the full slot count on the first frame.
+  return s_rateMode.load(std::memory_order_acquire) == AURORA_FRAME_RATE_UNCAPPED
+             ? std::min(maximum, kUncappedStartSamples)
+             : maximum;
+}
+
+// Target present rate for the next guest frame after the display, VSync, slot-budget and cap limits.
+double effective_target_fps(uint32_t sampleBudget) noexcept {
+  const auto mode = static_cast<AuroraFrameRateMode>(s_rateMode.load(std::memory_order_acquire));
+  if (mode == AURORA_FRAME_RATE_OFF) {
+    return 60.0;
+  }
+  const uint64_t period = window::refresh_period_nanos();
+  const double displayHz = period != 0 ? 1.0e9 / static_cast<double>(period) : 0.0;
+  // Same rule as presentation::display_shows_interpolation: a display that cannot show frames between
+  // two native frames gets native pacing.
+  if (displayHz > 0.0 && displayHz <= 63.2) {
+    return 60.0;
+  }
+  double fps = 60.0;
+  switch (mode) {
+  case AURORA_FRAME_RATE_FIXED:
+    fps = static_cast<double>(s_rateFixedFps.load(std::memory_order_acquire));
+    // A blocking present cannot go faster than the display.
+    if (webgpu::vsync_enabled() && displayHz > 0.0) {
+      fps = std::min(fps, displayHz);
+    }
+    break;
+  case AURORA_FRAME_RATE_DISPLAY:
+    fps = displayHz > 0.0 ? displayHz : 60.0;
+    break;
+  case AURORA_FRAME_RATE_UNCAPPED: {
+    const uint64_t cost = s_presentCostNanos.load(std::memory_order_acquire);
+    fps = cost != 0 ? kUncappedCostHeadroom * 1.0e9 / static_cast<double>(cost) : 120.0;
+    break;
+  }
+  default:
+    break;
+  }
+  fps = std::min(fps, static_cast<double>(s_rateCapFps.load(std::memory_order_acquire)));
+  // VRR limiter: keep presents inside the display's variable-refresh window (refresh - margin).
+  if (const double vrrLimit = gfx::presentation::vrr_limit_fps(); vrrLimit > 0.0) {
+    fps = std::min(fps, vrrLimit);
+  }
+  fps = std::min(fps, 60.0 * (std::min(sampleBudget, MaxInterpolatedFrames) + 1));
+  return std::max(fps, 60.0);
+}
+
+// Lays the next guest frame's present points on a continuous grid of period 60/fps guest frames, so
+// the presented cadence is exactly `fps` whether or not it is a multiple of 60.
+void plan_frame(uint32_t sampleBudget) noexcept {
+  const double fps = effective_target_fps(sampleBudget);
+  const double step = 60.0 / fps;
+  if (s_gridReset.exchange(false, std::memory_order_acq_rel)) {
+    s_gridPos = step;
+  }
+  double position = std::clamp(s_gridPos, 1.0e-6, step);
+  std::array<float, MaxInterpolatedFrames + 1> points{};
+  uint32_t count = 0;
+  while (count < points.size()) {
+    double weight = position;
+    if (weight > 1.0 + kGridSnap) {
+      break;
+    }
+    if (weight > 1.0 - kGridSnap) {
+      weight = 1.0;
+    }
+    points[count++] = static_cast<float>(weight);
+    position = weight + step;
+  }
+  s_gridPos = position > 1.0 + kGridSnap ? position - 1.0 : step;
+
+  const bool nativeOnGrid = count != 0 && points[count - 1] == 1.0f;
+  uint32_t slots = nativeOnGrid ? count - 1 : count;
+  slots = std::min(slots, MaxInterpolatedFrames);
+  s_plan = {};
+  s_plan.slots = slots;
+  s_plan.nativeShown = nativeOnGrid || slots == 0;
+  s_plan.step = static_cast<float>(step);
+  for (uint32_t i = 0; i < slots; ++i) {
+    s_plan.weight[i] = points[i];
+  }
+  s_diagPlannedFps.store(static_cast<float>(fps), std::memory_order_relaxed);
+  s_diagPlannedPresents.store(slots + (s_plan.nativeShown ? 1u : 0u), std::memory_order_relaxed);
 }
 
 constexpr float kMinimumScale = 1.0e-5f;
@@ -729,13 +853,46 @@ float snapshot_match_distance_squared(const FrameTransformEntry& previousEntry,
 }
 
 void set_frame_interpolation_fps(uint32_t targetFps) noexcept {
-  if (targetFps != 120 && targetFps != 180 && targetFps != 240) {
-    targetFps = 0;
+  set_frame_rate(targetFps > 60 ? AURORA_FRAME_RATE_FIXED : AURORA_FRAME_RATE_OFF, targetFps,
+                 s_rateCapFps.load(std::memory_order_acquire));
+}
+
+void get_frame_rate(AuroraFrameRateMode& mode, uint32_t& fixedFps, uint32_t& capFps) noexcept {
+  mode = static_cast<AuroraFrameRateMode>(s_rateMode.load(std::memory_order_acquire));
+  fixedFps = s_rateFixedFps.load(std::memory_order_acquire);
+  capFps = s_rateCapFps.load(std::memory_order_acquire);
+}
+
+gfx::InterpolationPlan current_interpolation_plan() noexcept { return s_plan; }
+
+void report_present_cost(uint64_t nanos) noexcept {
+  // Single writer (the render worker), so a plain load/store EMA is race-free.
+  const uint64_t previous = s_presentCostNanos.load(std::memory_order_relaxed);
+  nanos = std::max<uint64_t>(nanos, 1);
+  s_presentCostNanos.store(previous == 0 ? nanos : previous - previous / 8 + nanos / 8, std::memory_order_release);
+}
+
+void set_frame_rate(AuroraFrameRateMode mode, uint32_t fixedFps, uint32_t capFps) noexcept {
+  capFps = capFps == 0 ? kHardCapFps : std::clamp(capFps, 60u, kHardCapFps);
+  if (mode == AURORA_FRAME_RATE_FIXED && fixedFps <= 60) {
+    mode = AURORA_FRAME_RATE_OFF;
   }
-  detail::g_frameInterpolationFps.store(targetFps, std::memory_order_release);
-  // Start at the configured quality; the controller only ever backs off from here.
-  s_interpolationSampleTarget.store(targetFps == 0 ? 0u : std::min(targetFps / 60 - 1, MaxInterpolatedFrames),
-                                    std::memory_order_release);
+  if (mode != AURORA_FRAME_RATE_FIXED && mode != AURORA_FRAME_RATE_DISPLAY && mode != AURORA_FRAME_RATE_UNCAPPED) {
+    mode = AURORA_FRAME_RATE_OFF;
+  }
+  fixedFps = std::min(fixedFps, kHardCapFps);
+  s_rateCapFps.store(capFps, std::memory_order_release);
+  s_rateFixedFps.store(fixedFps, std::memory_order_release);
+  s_rateMode.store(mode, std::memory_order_release);
+  s_diagFrameRateMode.store(mode, std::memory_order_relaxed);
+  s_presentCostNanos.store(0, std::memory_order_release);
+  s_gridReset.store(true, std::memory_order_release);
+  webgpu::set_present_uncapped(mode == AURORA_FRAME_RATE_UNCAPPED);
+  const uint32_t active =
+      mode == AURORA_FRAME_RATE_OFF ? 0u : (mode == AURORA_FRAME_RATE_FIXED ? std::min(fixedFps, capFps) : capFps);
+  detail::g_frameInterpolationFps.store(active, std::memory_order_release);
+  // Start at the configured quality; the controller backs off from here (and, for uncapped, climbs).
+  s_interpolationSampleTarget.store(initial_interpolation_samples(), std::memory_order_release);
   s_dropInterpolationAtSeal.store(false, std::memory_order_release);
   s_pacingWindowFrames.store(0, std::memory_order_release);
   s_pacingWindowMisses.store(0, std::memory_order_release);
@@ -800,10 +957,9 @@ void begin_frame_interpolation() noexcept {
   }
   // Latch the slot count for the frame starting here; see s_activeInterpolationSamples
   // for why it cannot move again until the seal.
-  s_activeInterpolationSamples.store(
-      std::min(s_interpolationSampleTarget.load(std::memory_order_acquire),
-               maximum_interpolation_samples()),
-      std::memory_order_release);
+  plan_frame(std::min(s_interpolationSampleTarget.load(std::memory_order_acquire),
+                      maximum_interpolation_samples()));
+  s_activeInterpolationSamples.store(targetFps == 0 ? 0u : s_plan.slots, std::memory_order_release);
   // Normally empty (finalize swapped and recycled); an aborted frame can leave
   // entries behind, whose matrix blocks go back to the pool here.
   recycle_transform_entries(s_currentFrameTransforms);
@@ -1323,8 +1479,7 @@ void finalize_frame_interpolation() noexcept {
         return;
       }
       const auto& previous = s_previousFrameTransforms[previousTransformIndex].transform;
-      const float weight =
-          static_cast<float>(task.numerator) / static_cast<float>(task.denominator);
+      const float weight = task.weight;
       const auto interpolatedProjection =
           interpolate_projection(previous.projection, current.projection, weight);
       std::memcpy(task.uniformData + task.projectionOffset, &interpolatedProjection,
@@ -1391,6 +1546,9 @@ void get_frame_interpolation_diagnostics(AuroraFrameInterpolationDiagnostics& di
   diagnostics.framesReplayUnsafe = s_diagFramesReplayUnsafe.load(std::memory_order_relaxed);
   diagnostics.slotReductions = s_diagSlotReductions.load(std::memory_order_relaxed);
   diagnostics.lateSealDrops = s_diagLateSealDrops.load(std::memory_order_relaxed);
+  diagnostics.frameRateMode = s_diagFrameRateMode.load(std::memory_order_relaxed);
+  diagnostics.plannedFps = s_diagPlannedFps.load(std::memory_order_relaxed);
+  diagnostics.plannedPresents = s_diagPlannedPresents.load(std::memory_order_relaxed);
 }
 
 bool has_interpolated_frame() noexcept {
@@ -1530,8 +1688,7 @@ std::array<gfx::Range, MaxInterpolatedFrames> record_interpolation_draw(
           .positionOffset = uniformLayout.positionOffset,
           .normalOffset = uniformLayout.normalOffset,
           .currentMatrix = uniformLayout.currentMatrix,
-          .numerator = sample + 1,
-          .denominator = sampleCount + 1,
+          .weight = s_plan.weight[sample],
           .indexedMatrices = uniformLayout.indexedMatrices,
       });
       interpolatedRanges[sample] = interpolatedRange;

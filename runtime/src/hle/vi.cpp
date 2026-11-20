@@ -1,5 +1,6 @@
 #include "hle_stubs.h"
 #include "memory.h"
+#include "perf_pacing.h"
 #include "abi_bridge.h"
 #include "guest_interrupt_context.h"
 #include "ppc_runtime.h"
@@ -433,6 +434,12 @@ void VI_HLE_ForceRetrace(CpuContext* ctx) {
     AdvanceRetrace(ctx, target, true);
 }
 
+// Guest VI retrace count (the 60 Hz guest clock), for the SIN_PERF_LOG guest-time ratio.
+uint32_t VI_HLE_GetRetraceCount() {
+    std::lock_guard<std::mutex> lock(g_viMutex);
+    return g_vi.retraceCount;
+}
+
 bool VI_HLE_IsAdvancingRetrace() {
     return s_inAdvanceRetrace.load(std::memory_order_acquire);
 }
@@ -511,12 +518,15 @@ void PaceToRetraceBoundary(Clock::time_point deadline) {
         }
         if (deadline - now > kServiceSlice + kFinalSpinWindow) {
             SleepPreciselyUntil(now + kServiceSlice);
-            OS_HLE_ProcessAlarmsDeferred(8);
+            {
+                PerfPacing::PhaseScope alarmScope(PerfPacing::kPhaseAlarm);
+                OS_HLE_ProcessAlarmsDeferred(8);
             // Audio DMA is a 3 ms cadence and this wait is up to a full display
             // period long. Without a pump here the blocks that came due during
             // the wait are all delivered at once when the guest next reaches
             // idle, which the guest observes as AI slack jitter.
-            Audio_HLE_PollDeferred();
+                Audio_HLE_PollDeferred();
+            }
             continue;
         }
         SleepPreciselyUntil(deadline, true, kFinalSpinWindow);
@@ -592,9 +602,15 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         aurora_set_present_schedule(0, 0);
     }
 
-    EndAuroraFrame();
+    {
+        PerfPacing::PhaseScope scope(PerfPacing::kPhaseEndFrame);
+        EndAuroraFrame();
+    }
     if (paceThisFrame) {
-        PaceToRetraceBoundary(paceDeadline);
+        {
+            PerfPacing::PhaseScope scope(PerfPacing::kPhasePace);
+            PaceToRetraceBoundary(paceDeadline);
+        }
         std::lock_guard<std::mutex> lock(g_viMutex);
         s_lastPacedRetraceCount = g_vi.retraceCount;
     }
@@ -609,11 +625,13 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     }
     // Pre-warm the next frame so subsequent GX work has a valid frame context.
     {
+        PerfPacing::PhaseScope scope(PerfPacing::kPhasePrewarm);
         UpdateAuroraAndProcessEvents();
         if (BeginAuroraFrame()) {
             g_auroraFrameActive.store(true, std::memory_order_release);
         }
     }
+    PerfPacing::OnGuestFrame();
 }
 
 // -----------------------------------------------------------------------------

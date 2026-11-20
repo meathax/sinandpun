@@ -1,6 +1,7 @@
 #include "gx_worker.h"
 
 #include "perf_stats.h"
+#include "perf_sched.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
 
@@ -177,6 +178,7 @@ void ReplayFifo(void* payload) {
 
 void WorkerMain() {
     detail::t_onWorker = true;
+    PerfSched::TuneThread("gx");
     struct SignalExit {
         ~SignalExit() {
             std::lock_guard lock{g_tailMutex};

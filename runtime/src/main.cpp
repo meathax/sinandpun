@@ -60,6 +60,7 @@
 #endif
 
 #include "abi_bridge.h"
+#include "perf_sched.h"
 #include "audio_backend.h"
 #include "guest_abi/guest_region.h"
 #include "guest_flat_memory.h"
@@ -70,6 +71,7 @@
 #include "aurora_events.h"
 #include "wiimote_host.h"
 #include "steam_input_layout.h"
+#include "first_run_launcher.h"
 #include "fiber_manager.h"
 #include "gx_worker.h"
 #include "hle_stubs.h"
@@ -79,6 +81,8 @@
 #include "runtime_product.h"
 #include "recomp_mod_loader.h"
 #include <aurora/aurora.h>
+#include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_video.h>
 #include <aurora/gfx.h>
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/vi.h>
@@ -1356,6 +1360,8 @@ int RuntimeMain(int argc, char** argv) {
     ConfigureWindowsFatalDialogBehavior();
     InstallSehLogger();
     WindowsTimerResolutionGuard timerResolutionGuard;
+    PerfSched::InitProcess();
+    PerfSched::TuneThread("guest");
 #else
     InstallPosixMemoryFaultHandler();
 #endif
@@ -1539,6 +1545,30 @@ int RuntimeMain(int argc, char** argv) {
             throw std::runtime_error(auroraInfo.initializationError != nullptr
                 ? auroraInfo.initializationError : "No supported graphics backend is available");
         }
+        // A saved position (or a monitor that is gone) can leave the window outside every display, unreachable.
+        if (SDL_Window* sdlWindow = aurora_get_window();
+            sdlWindow && aurora_get_display_mode() == AURORA_DISPLAY_MODE_WINDOWED) {
+            int wx = 0, wy = 0, ww = 0, wh = 0;
+            SDL_GetWindowPosition(sdlWindow, &wx, &wy);
+            SDL_GetWindowSize(sdlWindow, &ww, &wh);
+            bool visible = false;
+            int displayCount = 0;
+            if (SDL_DisplayID* displays = SDL_GetDisplays(&displayCount)) {
+                for (int i = 0; i < displayCount && !visible; ++i) {
+                    SDL_Rect bounds{};
+                    if (!SDL_GetDisplayBounds(displays[i], &bounds)) continue;
+                    const int overlapW = std::min(wx + ww, bounds.x + bounds.w) - std::max(wx, bounds.x);
+                    const int overlapH = std::min(wy + wh, bounds.y + bounds.h) - std::max(wy, bounds.y);
+                    visible = overlapW >= 100 && overlapH >= 50;  // enough of the title bar to grab
+                }
+                SDL_free(displays);
+            }
+            if (!visible) {
+                RT_LOG(RT_TAG_RUNTIME) << "window at " << wx << "," << wy << " (" << ww << "x" << wh
+                                       << ") is outside every display; centering it" << std::endl;
+                SDL_SetWindowPosition(sdlWindow, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+            }
+        }
         if (requestedBackend != BACKEND_AUTO && auroraInfo.backend != requestedBackend) {
             RT_LOG(RT_TAG_RUNTIME) << "graphics_api=\"" << backend
                       << "\" is not available on this system; aurora fell back to \""
@@ -1554,6 +1584,10 @@ int RuntimeMain(int argc, char** argv) {
         UpdateDynamicAspectSurface(auroraInfo.windowSize.native_fb_width,
                                       auroraInfo.windowSize.native_fb_height);
         settings_overlay::InitializeRuntimeSettings();
+        // No usable game data yet: ask for the disc image and import it instead of failing in dvd.cpp.
+        if (!g_headless && !first_run_launcher::GameDataAvailable()) {
+            first_run_launcher::Run();
+        }
         if (!g_headless) {
             SteamInputLayout::Initialize(RuntimeConfigFile::SteamInputOverrideEnabled(),
                                          RuntimeConfigFile::SteamInputAppId());

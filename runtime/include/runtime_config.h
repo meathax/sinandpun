@@ -43,7 +43,26 @@ struct RuntimeUserConfig {
     std::optional<std::string> graphicsApi;
     std::optional<std::string> displayMode;
     std::optional<uint32_t> frameInterpolationFps;
+    // video.frame_rate: "original", "display", "uncapped" or a number of fps (see ParseFrameRate).
+    std::optional<std::string> frameRate;
+    std::optional<uint32_t> frameRateCap;
+    // video.vrr: "auto", "on" or "off"; video.vrr_margin_fps: latency limiter margin below the refresh rate;
+    // video.vrr_limiter: false lets the frame rate run unlimited inside the VRR present mode.
+    std::optional<std::string> vrr;
+    std::optional<uint32_t> vrrMarginFps;
+    std::optional<bool> vrrLimiter;
     std::optional<bool> metalFxSpatialUpscaling;
+    // video.upscaler: "off", "fsr1", "fsr3" or "dlss"; video.fsr_quality: see kFsrQualities;
+    // video.fsr_sharpness: 0-100 (0 = no RCAS sharpening).
+    std::optional<std::string> upscaler;
+    std::optional<std::string> fsrQuality;
+    std::optional<uint32_t> fsrSharpness;
+    // video.dlss_mode (used when video.upscaler = "dlss"): ultra_performance, performance, balanced, quality or dlaa;
+    // video.dlss_sharpness: 0-100 (0 = no sharpening after DLSS); video.dlss_motion_vectors: estimate motion vectors from
+    // the images (the game has no velocity buffer; docs/DLSS-NOTES.md).
+    std::optional<std::string> dlssMode;
+    std::optional<uint32_t> dlssSharpness;
+    std::optional<bool> dlssMotionVectors;
     std::optional<bool> skipUnreadyPipelines;
     std::optional<bool> vsync;
     std::optional<bool> gxWorker;
@@ -159,10 +178,162 @@ inline bool IsSupportedDisplayMode(std::string_view value) {
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
-// 240 was offered by an early build and is no longer supported; a saved 240 is
-// migrated to 180 at the parse site.
+// Legacy key video.frame_interpolation_fps: 0 (off) or a target above 60. Any such value is
+// accepted now (240 included); it is only read when video.frame_rate is absent.
+inline constexpr uint32_t kFrameRateHardCap = 1000;
 inline bool IsSupportedFrameInterpolationFps(uint32_t value) {
-    return value == 0 || value == 120 || value == 180;
+    return value == 0 || (value > 60 && value <= kFrameRateHardCap);
+}
+
+// Host presentation rate. The game's logic, physics, audio and time base always run at the original
+// 60 Hz; this only decides how many frames are shown per game frame.
+enum class FrameRateKind : uint8_t { Original, Display, Fixed, Uncapped };
+struct FrameRateSetting {
+    FrameRateKind kind = FrameRateKind::Original;
+    uint32_t fps = 0; // Fixed only
+    bool operator==(const FrameRateSetting& o) const { return kind == o.kind && fps == o.fps; }
+};
+
+// Accepts "original"/"off"/"60", "display"/"match"/"refresh"/"auto", "uncapped"/"unlimited"/"max" and
+// a number with an optional "fps"/"hz" suffix. Numbers up to 60 mean original pacing; larger ones are
+// clamped to the hard cap.
+inline bool ParseFrameRate(std::string text, FrameRateSetting& out) {
+    std::string t;
+    for (const char c : text) {
+        if (!std::isspace(static_cast<unsigned char>(c)) && c != '"' && c != '_' && c != '-') {
+            t.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+    }
+    for (const char* suffix : {"fps", "hz"}) {
+        const std::string s = suffix;
+        if (t.size() > s.size() && t.compare(t.size() - s.size(), s.size(), s) == 0) {
+            t.resize(t.size() - s.size());
+        }
+    }
+    if (t == "original" || t == "off" || t == "native" || t == "default" || t == "false" || t == "none") {
+        out = {FrameRateKind::Original, 0};
+        return true;
+    }
+    if (t == "display" || t == "match" || t == "matchdisplay" || t == "refresh" || t == "auto" || t == "vsync") {
+        out = {FrameRateKind::Display, 0};
+        return true;
+    }
+    if (t == "uncapped" || t == "unlimited" || t == "max" || t == "unlocked") {
+        out = {FrameRateKind::Uncapped, 0};
+        return true;
+    }
+    if (t.empty() || t.size() > 9 || !std::all_of(t.begin(), t.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+        return false;
+    }
+    const uint64_t value = std::stoull(t);
+    if (value <= 60) {
+        out = {FrameRateKind::Original, 0};
+    } else {
+        out = {FrameRateKind::Fixed, static_cast<uint32_t>(std::min<uint64_t>(value, kFrameRateHardCap))};
+    }
+    return true;
+}
+
+inline std::string FormatFrameRate(const FrameRateSetting& value) {
+    switch (value.kind) {
+    case FrameRateKind::Display:
+        return "display";
+    case FrameRateKind::Uncapped:
+        return "uncapped";
+    case FrameRateKind::Fixed:
+        return std::to_string(value.fps);
+    default:
+        return "original";
+    }
+}
+
+// Upscaler selector shared by FSR and DLSS: video.upscaler = off | fsr1 | fsr3 | dlss, plus the FSR quality
+// preset (AMD's standard per-axis scale factors) and the RCAS sharpness. Parsing is tolerant: case, spaces,
+// '_' '-' '.' are ignored and a few aliases are accepted ("fsr" = fsr1, "ultra quality", "UltraQuality").
+struct FsrQualityInfo {
+    const char* name;
+    float factor;
+};
+inline constexpr std::array<FsrQualityInfo, 6> kFsrQualities{{
+    {"native", 1.0f},
+    {"ultra_quality", 1.3f},
+    {"quality", 1.5f},
+    {"balanced", 1.7f},
+    {"performance", 2.0f},
+    {"ultra_performance", 3.0f},
+}};
+inline constexpr uint32_t kDefaultFsrSharpness = 80;
+
+inline std::string CompactToken(std::string_view text) {
+    std::string t;
+    for (const char c : text) {
+        if (!std::isspace(static_cast<unsigned char>(c)) && c != '"' && c != '_' && c != '-' && c != '.') {
+            t.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+    }
+    return t;
+}
+
+inline std::optional<std::string> ParseUpscaler(std::string_view text) {
+    const std::string t = CompactToken(text);
+    if (t == "off" || t == "none" || t == "false" || t == "0" || t == "native") return "off";
+    if (t == "fsr1" || t == "fsr" || t == "fsr10" || t == "easu" || t == "fsrspatial" || t == "fsr1spatial") return "fsr1";
+    if (t == "fsr3" || t == "fsr31" || t == "fsr3temporal" || t == "fsr2") return "fsr3";
+    if (t == "dlss") return "dlss";
+    return std::nullopt;
+}
+
+inline std::optional<std::string> ParseFsrQuality(std::string_view text) {
+    const std::string t = CompactToken(text);
+    for (const FsrQualityInfo& q : kFsrQualities) {
+        if (t == CompactToken(q.name)) return std::string(q.name);
+    }
+    if (t == "ultraqual" || t == "uq") return "ultra_quality";
+    if (t == "perf") return "performance";
+    if (t == "ultraperf" || t == "up") return "ultra_performance";
+    return std::nullopt;
+}
+
+// NVIDIA DLSS quality modes: per-axis output / render ratio (Ultra Performance 33%, Performance 50%, Balanced 58%,
+// Quality 67%, DLAA 100%). The ratios are the ones DLSS itself reports.
+struct DlssModeInfo {
+    const char* name;
+    float factor;
+};
+inline constexpr std::array<DlssModeInfo, 5> kDlssModes{{
+    {"ultra_performance", 3.0f},
+    {"performance", 2.0f},
+    {"balanced", 1.0f / 0.58f},
+    {"quality", 1.5f},
+    {"dlaa", 1.0f},
+}};
+inline constexpr size_t kDefaultDlssModeIndex = 3;
+inline constexpr uint32_t kDefaultDlssSharpness = 0;
+
+inline std::optional<std::string> ParseDlssMode(std::string_view text) {
+    const std::string t = CompactToken(text);
+    for (const DlssModeInfo& m : kDlssModes) {
+        if (t == CompactToken(m.name)) return std::string(m.name);
+    }
+    if (t == "ultraperf" || t == "up" || t == "ultra") return "ultra_performance";
+    if (t == "perf" || t == "maxperformance") return "performance";
+    if (t == "maxquality") return "quality";
+    if (t == "native") return "dlaa";
+    return std::nullopt;
+}
+
+inline size_t DlssModeIndex(std::string_view name) {
+    for (size_t i = 0; i < kDlssModes.size(); ++i) {
+        if (name == kDlssModes[i].name) return i;
+    }
+    return kDefaultDlssModeIndex;
+}
+
+inline float FsrScaleFactor(std::string_view quality) {
+    for (const FsrQualityInfo& q : kFsrQualities) {
+        if (quality == q.name) return q.factor;
+    }
+    return 1.0f;
 }
 
 inline std::optional<std::filesystem::path> ExecutableDirectory() {
@@ -275,7 +446,28 @@ inline void EnsureConfigFile() {
               "widescreen = true\n"
               "force_aspect = false\n"
               "resolution_multiplier = 1.0\n"
-              "frame_interpolation_fps = 0\n"
+              "# Presentation rate: \"original\" (60), \"display\" (match the monitor), \"uncapped\" or an fps\n"
+              "# number such as 90/120/144/165/180/240. Game logic, physics and audio stay at 60 Hz.\n"
+              "frame_rate = \"original\"\n"
+              "# Hard safety cap for every rate above original (60..1000).\n"
+              "frame_rate_cap = 1000\n"
+              "# Variable refresh rate (G-SYNC / FreeSync): \"auto\" (on for a >60 Hz display with a frame rate above\n"
+              "# original), \"on\" or \"off\". VRR bypasses VSync and limits presents to refresh - vrr_margin_fps.\n"
+              "vrr = \"auto\"\n"
+              "vrr_margin_fps = 3\n"
+              "vrr_limiter = true\n"
+              "# Upscaler: \"off\" or \"fsr1\" (AMD FSR 1.0 EASU + RCAS; renders at a lower internal resolution and\n"
+              "# upscales to the window). fsr_quality: native, ultra_quality (1.3x), quality (1.5x), balanced (1.7x),\n"
+              "# performance (2x), ultra_performance (3x). fsr_sharpness: 0-100 (0 = no RCAS sharpening).\n"
+              "upscaler = \"off\"\n"
+              "fsr_quality = \"quality\"\n"
+              "fsr_sharpness = 80\n"
+              "# NVIDIA DLSS (upscaler = \"dlss\"; Windows, Direct3D 12, RTX GPU, nvngx_dlss.dll next to the exe). dlss_mode:\n"
+              "# ultra_performance (33%), performance (50%), balanced (58%), quality (67%), dlaa (100%, anti-aliasing only).\n"
+              "# dlss_motion_vectors: estimate motion vectors from the images (experimental; the game has no velocity buffer).\n"
+              "dlss_mode = \"quality\"\n"
+              "dlss_sharpness = 0\n"
+              "dlss_motion_vectors = false\n"
               "display_mode = \"windowed\"\n"
               "graphics_api = \"auto\"\n"
               "skip_unready_pipelines = true\n"
@@ -408,10 +600,10 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     config.windowPosX = FindConfigInt(document, "video", "window_x");
     config.windowPosY = FindConfigInt(document, "video", "window_y");
-    if (auto value = FindConfigUint(document, "video", "window_width"); value && *value != 0) {
+    if (auto value = FindConfigUint(document, "video", "window_width"); value && *value >= 160 && *value <= 16384) {
         config.windowWidth = *value;
     }
-    if (auto value = FindConfigUint(document, "video", "window_height"); value && *value != 0) {
+    if (auto value = FindConfigUint(document, "video", "window_height"); value && *value >= 120 && *value <= 16384) {
         config.windowHeight = *value;
     }
     if (auto value = FindConfigFloat(document, "video", "resolution_multiplier");
@@ -431,13 +623,99 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
         config.displayMode = *value;
     }
     if (auto value = FindConfigUint(document, "video", "frame_interpolation_fps")) {
-        const uint32_t migrated = *value == 240u ? 180u : *value;
-        if (IsSupportedFrameInterpolationFps(migrated)) {
-            config.frameInterpolationFps = migrated;
+        if (IsSupportedFrameInterpolationFps(*value)) {
+            config.frameInterpolationFps = *value;
         }
     }
+    {
+        FrameRateSetting parsed;
+        std::optional<std::string> text = FindConfigValue<std::string>(document, "video", "frame_rate");
+        if (!text) {
+            if (const auto number = FindConfigValue<int64_t>(document, "video", "frame_rate")) {
+                text = std::to_string(*number);
+            }
+        }
+        if (text) {
+            if (ParseFrameRate(*text, parsed)) {
+                config.frameRate = FormatFrameRate(parsed);
+            } else {
+                std::cerr << "[runtime] Unknown video.frame_rate=\"" << *text
+                          << "\", using the original frame rate" << std::endl;
+            }
+        }
+    }
+    if (auto value = FindConfigUint(document, "video", "frame_rate_cap")) {
+        config.frameRateCap = std::clamp<uint32_t>(*value, 60u, kFrameRateHardCap);
+    }
+    {
+        std::optional<std::string> text = FindConfigValue<std::string>(document, "video", "vrr");
+        if (!text) {
+            if (const auto flag = FindConfigValue<bool>(document, "video", "vrr")) {
+                text = *flag ? "on" : "off";
+            }
+        }
+        if (text) {
+            std::string t;
+            for (const char c : *text) {
+                if (!std::isspace(static_cast<unsigned char>(c)) && c != '"') {
+                    t.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                }
+            }
+            if (t == "auto" || t == "on" || t == "off") {
+                config.vrr = t;
+            } else if (t == "true" || t == "1" || t == "yes") {
+                config.vrr = "on";
+            } else if (t == "false" || t == "0" || t == "no") {
+                config.vrr = "off";
+            } else {
+                std::cerr << "[runtime] Unknown video.vrr=\"" << *text << "\", using auto" << std::endl;
+            }
+        }
+    }
+    if (auto value = FindConfigUint(document, "video", "vrr_margin_fps")) {
+        config.vrrMarginFps = std::min<uint32_t>(*value, 30u);
+    }
+    config.vrrLimiter = FindConfigValue<bool>(document, "video", "vrr_limiter");
     config.metalFxSpatialUpscaling =
         FindConfigValue<bool>(document, "video", "metalfx_spatial_upscaling");
+    {
+        std::optional<std::string> text = FindConfigValue<std::string>(document, "video", "upscaler");
+        if (!text) {
+            if (const auto flag = FindConfigValue<bool>(document, "video", "upscaler")) {
+                text = *flag ? "fsr1" : "off";
+            }
+        }
+        if (text) {
+            if (const auto parsed = ParseUpscaler(*text)) {
+                config.upscaler = *parsed;
+            } else {
+                std::cerr << "[runtime] Unknown video.upscaler=\"" << *text << "\", using off" << std::endl;
+            }
+        }
+        if (const auto quality = FindConfigValue<std::string>(document, "video", "fsr_quality")) {
+            if (const auto parsed = ParseFsrQuality(*quality)) {
+                config.fsrQuality = *parsed;
+            } else {
+                std::cerr << "[runtime] Unknown video.fsr_quality=\"" << *quality << "\", using quality" << std::endl;
+            }
+        }
+        if (const auto sharpness = FindConfigFloat(document, "video", "fsr_sharpness")) {
+            config.fsrSharpness =
+                static_cast<uint32_t>(std::lround(std::clamp(*sharpness, 0.0f, 100.0f)));
+        }
+        if (const auto mode = FindConfigValue<std::string>(document, "video", "dlss_mode")) {
+            if (const auto parsed = ParseDlssMode(*mode)) {
+                config.dlssMode = *parsed;
+            } else {
+                std::cerr << "[runtime] Unknown video.dlss_mode=\"" << *mode << "\", using quality" << std::endl;
+            }
+        }
+        if (const auto sharpness = FindConfigFloat(document, "video", "dlss_sharpness")) {
+            config.dlssSharpness =
+                static_cast<uint32_t>(std::lround(std::clamp(*sharpness, 0.0f, 100.0f)));
+        }
+        config.dlssMotionVectors = FindConfigValue<bool>(document, "video", "dlss_motion_vectors");
+    }
     config.skipUnreadyPipelines = FindConfigValue<bool>(document, "video", "skip_unready_pipelines");
     config.vsync = FindConfigValue<bool>(document, "video", "vsync");
     config.gxWorker = FindConfigValue<bool>(document, "video", "gx_worker");
@@ -495,10 +773,63 @@ inline RuntimeUserConfig ParseConfig(std::istream& input, std::string sourceName
     }
 }
 
+inline bool WriteSetting(std::string_view section, std::string_view key, std::string_view value);
+
+// A Config.toml that is not valid TOML (hand-edited, truncated by a crash or a full disk) would otherwise turn every
+// later settings write into a silent no-op ("Not updating invalid ..."). Keep the broken file as Config.toml.invalid,
+// start a fresh default file and carry the two path keys over, so the game still finds its data.
+inline void RecoverInvalidConfigFile(const std::filesystem::path& path, const std::string& text) {
+    std::error_code ec;
+    auto keep = path;
+    keep += ".invalid";
+    std::filesystem::copy_file(path, keep, std::filesystem::copy_options::overwrite_existing, ec);
+    std::filesystem::remove(path, ec);
+    EnsureConfigFile();
+    std::istringstream lines(text);
+    for (std::string line; std::getline(lines, line);) {
+        const size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos || line[start] == '#') {
+            continue;
+        }
+        for (const std::string_view key : {std::string_view("dvd_root"), std::string_view("nand_root")}) {
+            if (line.compare(start, key.size(), key) != 0) {
+                continue;
+            }
+            const size_t eq = line.find('=', start + key.size());
+            if (eq == std::string::npos || line.find_first_not_of(" \t", start + key.size()) != eq) {
+                continue;
+            }
+            size_t end = line.find_last_not_of(" \t\r");
+            const std::string literal = line.substr(eq + 1, end == std::string::npos ? 0 : end - eq);
+            WriteSetting("paths", key, literal);  // ignored when the literal does not parse
+        }
+    }
+    std::cerr << "[runtime-config] " << PathToUtf8(path) << " was not valid TOML. It was kept as "
+              << PathToUtf8(keep) << " and a fresh default file was written." << std::endl;
+}
+
 inline RuntimeUserConfig LoadConfigFile() {
     EnsureConfigFile();
-    std::ifstream file(ResolveConfigPath(), std::ios::binary);
-    return file ? ParseConfig(file, PathToUtf8(ResolveConfigPath())) : RuntimeUserConfig{};
+    const std::filesystem::path path = ResolveConfigPath();
+    std::string text;
+    if (std::ifstream input(path, std::ios::binary); input) {
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        text = buffer.str();
+    } else {
+        return RuntimeUserConfig{};
+    }
+    try {
+        std::istringstream probe(text);
+        (void)toml::parse(probe, PathToUtf8(path));
+    } catch (const std::exception& exception) {
+        std::cerr << "[runtime-config] Invalid TOML: " << exception.what() << std::endl;
+        RecoverInvalidConfigFile(path, text);
+        std::ifstream fresh(path, std::ios::binary);
+        return fresh ? ParseConfig(fresh, PathToUtf8(path)) : RuntimeUserConfig{};
+    }
+    std::istringstream file(text);
+    return ParseConfig(file, PathToUtf8(path));
 }
 
 inline const RuntimeUserConfig& Get() {
@@ -616,9 +947,64 @@ inline bool SetFrameInterpolationFps(uint32_t value) {
     return WriteSetting("video", "frame_interpolation_fps", std::to_string(value));
 }
 
+inline bool SetFrameRate(const FrameRateSetting& value) {
+    Mutable().frameRate = FormatFrameRate(value);
+    return WriteSetting("video", "frame_rate", FormatString(*Mutable().frameRate));
+}
+
+inline bool SetFrameRateCap(uint32_t value) {
+    value = std::clamp<uint32_t>(value, 60u, kFrameRateHardCap);
+    Mutable().frameRateCap = value;
+    return WriteSetting("video", "frame_rate_cap", std::to_string(value));
+}
+
 inline bool SetMetalFxSpatialUpscaling(bool value) {
     Mutable().metalFxSpatialUpscaling = value;
     return WriteSetting("video", "metalfx_spatial_upscaling", value ? "true" : "false");
+}
+
+inline bool SetUpscaler(const std::string& value) {
+    const auto parsed = ParseUpscaler(value);
+    if (!parsed) {
+        return false;
+    }
+    Mutable().upscaler = *parsed;
+    return WriteSetting("video", "upscaler", FormatString(*parsed));
+}
+
+inline bool SetFsrQuality(const std::string& value) {
+    const auto parsed = ParseFsrQuality(value);
+    if (!parsed) {
+        return false;
+    }
+    Mutable().fsrQuality = *parsed;
+    return WriteSetting("video", "fsr_quality", FormatString(*parsed));
+}
+
+inline bool SetFsrSharpness(uint32_t value) {
+    value = std::min<uint32_t>(value, 100u);
+    Mutable().fsrSharpness = value;
+    return WriteSetting("video", "fsr_sharpness", std::to_string(value));
+}
+
+inline bool SetDlssMode(const std::string& value) {
+    const auto parsed = ParseDlssMode(value);
+    if (!parsed) {
+        return false;
+    }
+    Mutable().dlssMode = *parsed;
+    return WriteSetting("video", "dlss_mode", FormatString(*parsed));
+}
+
+inline bool SetDlssSharpness(uint32_t value) {
+    value = std::min<uint32_t>(value, 100u);
+    Mutable().dlssSharpness = value;
+    return WriteSetting("video", "dlss_sharpness", std::to_string(value));
+}
+
+inline bool SetDlssMotionVectors(bool value) {
+    Mutable().dlssMotionVectors = value;
+    return WriteSetting("video", "dlss_motion_vectors", value ? "true" : "false");
 }
 
 inline bool SetDisplayMode(std::string value) {
@@ -632,6 +1018,22 @@ inline bool SetDisplayMode(std::string value) {
 inline bool SetSkipUnreadyPipelines(bool value) {
     Mutable().skipUnreadyPipelines = value;
     return WriteSetting("video", "skip_unready_pipelines", value ? "true" : "false");
+}
+
+inline bool SetVrr(std::string_view value) {
+    Mutable().vrr = std::string(value);
+    return WriteSetting("video", "vrr", FormatString(value));
+}
+
+inline bool SetVrrMarginFps(uint32_t value) {
+    value = std::min<uint32_t>(value, 30u);
+    Mutable().vrrMarginFps = value;
+    return WriteSetting("video", "vrr_margin_fps", std::to_string(value));
+}
+
+inline bool SetVrrLimiter(bool value) {
+    Mutable().vrrLimiter = value;
+    return WriteSetting("video", "vrr_limiter", value ? "true" : "false");
 }
 
 inline bool SetVsync(bool value) {
@@ -853,6 +1255,30 @@ inline bool MetalFxSpatialUpscaling(bool fallback = false) {
     return Get().metalFxSpatialUpscaling.value_or(fallback);
 }
 
+inline std::string Upscaler(std::string fallback = "off") {
+    return Get().upscaler.value_or(std::move(fallback));
+}
+
+inline std::string FsrQuality(std::string fallback = "quality") {
+    return Get().fsrQuality.value_or(std::move(fallback));
+}
+
+inline uint32_t FsrSharpness(uint32_t fallback = kDefaultFsrSharpness) {
+    return std::min<uint32_t>(Get().fsrSharpness.value_or(fallback), 100u);
+}
+
+inline std::string DlssMode(std::string fallback = kDlssModes[kDefaultDlssModeIndex].name) {
+    return Get().dlssMode.value_or(std::move(fallback));
+}
+
+inline uint32_t DlssSharpness(uint32_t fallback = kDefaultDlssSharpness) {
+    return std::min<uint32_t>(Get().dlssSharpness.value_or(fallback), 100u);
+}
+
+inline bool DlssMotionVectors(bool fallback = false) {
+    return Get().dlssMotionVectors.value_or(fallback);
+}
+
 inline float AudioVolume(float fallback = 1.0f) {
     return std::clamp(Get().audioVolume.value_or(fallback), 0.0f, 1.0f);
 }
@@ -963,9 +1389,40 @@ inline uint32_t FrameInterpolationFps(uint32_t fallback = 0) {
     return Get().frameInterpolationFps.value_or(fallback);
 }
 
+// Configured presentation rate. video.frame_rate wins; otherwise the legacy
+// video.frame_interpolation_fps value is migrated (0 -> original, N -> fixed N).
+inline FrameRateSetting FrameRate() {
+    const RuntimeUserConfig& config = Get();
+    FrameRateSetting parsed;
+    if (config.frameRate && ParseFrameRate(*config.frameRate, parsed)) {
+        return parsed;
+    }
+    if (config.frameInterpolationFps && *config.frameInterpolationFps > 60) {
+        return {FrameRateKind::Fixed, *config.frameInterpolationFps};
+    }
+    return {};
+}
+
+inline uint32_t FrameRateCap(uint32_t fallback = kFrameRateHardCap) {
+    return Get().frameRateCap.value_or(fallback);
+}
+
 // Whether to skip draws whose graphics pipeline has not finished compiling yet.
 inline bool SkipUnreadyPipelines(bool fallback = true) {
     return Get().skipUnreadyPipelines.value_or(fallback);
+}
+
+// "auto", "on" or "off".
+inline std::string Vrr() {
+    return Get().vrr.value_or("auto");
+}
+
+inline uint32_t VrrMarginFps(uint32_t fallback = 3) {
+    return Get().vrrMarginFps.value_or(fallback);
+}
+
+inline bool VrrLimiter(bool fallback = true) {
+    return Get().vrrLimiter.value_or(fallback);
 }
 
 inline bool Vsync(bool fallback = false) {
@@ -1059,6 +1516,21 @@ inline void LogLoadedConfig() {
             }
             if (config.frameInterpolationFps) {
                 std::cout << " frame_interpolation_fps=" << *config.frameInterpolationFps;
+            }
+            if (config.frameRate) {
+                std::cout << " frame_rate=" << *config.frameRate;
+            }
+            if (config.frameRateCap) {
+                std::cout << " frame_rate_cap=" << *config.frameRateCap;
+            }
+            if (config.vrr) {
+                std::cout << " vrr=" << *config.vrr;
+            }
+            if (config.vrrMarginFps) {
+                std::cout << " vrr_margin_fps=" << *config.vrrMarginFps;
+            }
+            if (config.vrrLimiter) {
+                std::cout << " vrr_limiter=" << (*config.vrrLimiter ? "true" : "false");
             }
             if (config.skipUnreadyPipelines) {
                 std::cout << " skip_unready_pipelines=" << (*config.skipUnreadyPipelines ? "true" : "false");

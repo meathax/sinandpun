@@ -13,6 +13,7 @@
 #include <dolphin/vi.h>
 
 #include <cstdint>
+#include <cstdio>
 
 extern "C" void PAD_HLE_SetRumbleEnabled(bool) {}
 namespace AxDspHle { void SetMixWorkerEnabled(bool) {} }
@@ -85,7 +86,36 @@ void aurora_get_present_timing(AuroraPresentTiming* t) {
     t->effectiveFramesPerSecond = 59.8;
     t->sampleCount = 10;
 }
+void aurora_set_vrr(AuroraVrrMode, uint32_t, bool) {}
+void aurora_get_vrr_status(AuroraVrrStatus* s) {
+    *s = AuroraVrrStatus{};
+    s->tearingSupported = true;
+    s->refreshHz = 144.0;
+    s->presentMode = "Fifo";
+}
 void aurora_set_frame_interpolation_fps(uint32_t) {}
+void aurora_set_frame_rate(AuroraFrameRateMode, uint32_t, uint32_t) {}
+void aurora_get_frame_rate(AuroraFrameRateMode* mode, uint32_t* fixedFps, uint32_t* capFps) {
+    if (mode) *mode = AURORA_FRAME_RATE_OFF;
+    if (fixedFps) *fixedFps = 0;
+    if (capFps) *capFps = 1000;
+}
+void aurora_set_upscaler(AuroraUpscaler, float, float) {}
+void aurora_get_upscale_info(AuroraUpscaleInfo* info) {
+    *info = AuroraUpscaleInfo{};
+    info->active = AURORA_UPSCALER_FSR1;
+    info->inputWidth = 1280;
+    info->inputHeight = 720;
+    info->outputWidth = 1920;
+    info->outputHeight = 1080;
+}
+// The UI preview pretends to be an RTX machine so the NVIDIA DLSS rows of the Upscaling section can be inspected.
+void aurora_get_dlss_status(AuroraDlssStatus* status) {
+    *status = AuroraDlssStatus{};
+    status->state = AURORA_DLSS_AVAILABLE;
+    std::snprintf(status->version, sizeof status->version, "%s", "Streamline 2.14.16 / DLSS 310.9.16");
+}
+void aurora_set_dlss_motion_vectors(bool) {}
 void aurora_set_skip_unready_pipelines(bool) {}
 uint32_t aurora_get_queued_pipeline_count() { return 0; }
 void aurora_set_disable_copy_filter(bool) {}

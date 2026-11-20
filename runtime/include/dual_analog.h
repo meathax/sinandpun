@@ -65,6 +65,9 @@ struct Config {
     float cameraMinY = 60.f, cameraMaxY = 708.f;
     // Left stick
     float leftDeadzone = 0.12f;
+    float leftSaturation = 1.0f;       // deflection that counts as full on the left stick (applied when sampling the pad)
+    bool invertMoveY = false;          // swap left stick up/down (applied when sampling the pad)
+    float triggerThreshold = 0.5f;     // analog trigger pull that counts as pressed (applied when sampling the pad)
 };
 
 inline void Sanitize(Config& c) {
@@ -72,6 +75,8 @@ inline void Sanitize(Config& c) {
     c.radialDeadzone = std::clamp(fin(c.radialDeadzone, 0.12f), 0.0f, 0.6f);
     c.outerSaturation = std::clamp(fin(c.outerSaturation, 0.95f), c.radialDeadzone + 0.05f, 1.0f);
     c.leftDeadzone = std::clamp(fin(c.leftDeadzone, 0.12f), 0.0f, 0.6f);
+    c.leftSaturation = std::clamp(fin(c.leftSaturation, 1.0f), 0.5f, 1.0f);
+    c.triggerThreshold = std::clamp(fin(c.triggerThreshold, 0.5f), 0.1f, 0.9f);
     c.curveExponent = std::clamp(fin(c.curveExponent, 1.6f), 0.3f, 4.0f);
     c.dualZoneSplit = std::clamp(fin(c.dualZoneSplit, 0.5f), 0.1f, 0.9f);
     c.dualZoneOutput = std::clamp(fin(c.dualZoneOutput, 0.25f), 0.05f, 0.9f);

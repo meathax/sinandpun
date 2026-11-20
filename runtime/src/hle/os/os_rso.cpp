@@ -17,9 +17,12 @@
 #include "guest_abi/module_codeset.h"
 #include "hle_stubs.h"
 #include "memory.h"
+#include "perf_pacing.h"
+#include "runtime_config.h"
 #include "runtime_log.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -61,7 +64,9 @@ int ModuleIndexFromName(const std::string& name) {
 std::filesystem::path FindImage(int index) {
     char file[32];
     std::snprintf(file, sizeof file, "stg%02d.bin", index);
-    std::vector<std::filesystem::path> roots = {"modules", "../modules", "../../build/modules", "build/modules"};
+    // Images generated from the user's disc at import time (disc_import.cpp) come first.
+    std::vector<std::filesystem::path> roots = {RuntimeConfigFile::ApplicationDataDirectory() / "Game" / "modules", "modules",
+                                                "../modules", "../../build/modules", "build/modules"};
     if (const char* env = std::getenv("SIN_MODULE_DIR")) {
         roots.insert(roots.begin(), env);
     }
@@ -151,21 +156,40 @@ extern "C" uint32_t RSOLinkListFixed_HLE(uint32_t rso, uint32_t bss, uint32_t le
                               << ".bin not found (set SIN_MODULE_DIR or run tools/rso_link.py)" << std::endl;
             return 0;
         }
-        std::ifstream in(path, std::ios::binary);
-        std::vector<char> image((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const auto rsoStart = std::chrono::steady_clock::now();
+        PerfPacing::PhaseScope rsoScope(PerfPacing::kPhaseRso);
+        // Images are immutable after import: read each file once (SIN_RSO_CACHE=0 re-reads on every link).
+        static std::vector<char> s_images[100];
+        static const bool s_cache = [] {
+            const char* v = std::getenv("SIN_RSO_CACHE");
+            return !(v && *v == '0');
+        }();
+        std::vector<char> scratch;
+        std::vector<char>& image = (s_cache && index >= 0 && index < 100) ? s_images[index] : scratch;
+        if (image.empty()) {
+            std::ifstream in(path, std::ios::binary);
+            image.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        }
         if (image.empty() || image.size() > set.windowSize) {
             RT_LOG(RT_TAG_OS) << "RSOLinkListFixed: bad image size " << image.size() << std::endl;
+            image.clear();
             return 0;
         }
         g_active.store(nullptr, std::memory_order_release);
         uint8_t* window = Memory::GetPointer(set.windowBase, set.windowSize);
-        std::memset(window, 0, set.windowSize);
-        std::memcpy(window, image.data(), image.size());
+        if (s_cache) {
+            std::memcpy(window, image.data(), image.size());
+            std::memset(window + image.size(), 0, set.windowSize - image.size());
+        } else {
+            std::memset(window, 0, set.windowSize);
+            std::memcpy(window, image.data(), image.size());
+        }
         Memory::Write32(rso + kHdrProlog, set.prolog);
         Memory::Write32(rso + kHdrEpilog, set.epilog);
         Memory::Write32(rso + kHdrUnresolved, set.unresolved);
         g_activeIndex.store(index, std::memory_order_relaxed);
         g_active.store(&set, std::memory_order_release);
+        PerfPacing::NoteStageLink(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - rsoStart).count());
         RT_LOG(RT_TAG_OS) << "RSOLinkListFixed: " << set.name << " (" << name << ") linked: image "
                           << image.size() << " bytes at 0x" << std::hex << set.windowBase << ", prolog 0x"
                           << set.prolog << std::dec << ", " << set.count << " functions" << std::endl;

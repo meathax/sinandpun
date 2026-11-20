@@ -27,7 +27,7 @@ using game_ui::kCommit;
 using game_ui::ListView;
 using Clock = std::chrono::steady_clock;
 
-constexpr std::array<const char*, kPageCount> kPageNames = {"Aiming", "Mapping", "Mouse & Keyboard"};
+constexpr std::array<const char*, kPageCount> kPageNames = {"Overview", "Gamepad", "Keyboard & Mouse", "Aiming"};
 
 struct Edit {
     bool dirty = false;  // push to the live settings
@@ -107,6 +107,90 @@ InputMap::AimSource UpdatePreview(const AimSettings::Settings& s) {
 void DrawAimDevice(ListView& v, InputMap::AimSource source, bool mouseEnabled) {
     const bool mouse = source == InputMap::AimSource::Mouse && mouseEnabled;
     v.Info("Active aim device", mouse ? "Mouse" : "Right stick / aim keys", mouse ? IM_COL32(150, 220, 255, 255) : game_ui::kGood);
+}
+
+const char* SchemeText(InputMap::Scheme s) {
+    return s == InputMap::Scheme::Classic ? "Classic Controller" : "Wii Remote + Nunchuk";
+}
+
+// Active device and the scheme in effect (the input service in aim_input.cpp owns the decision).
+void DrawActiveDevice(ListView& v, const AimSettings::Settings& s) {
+    const InputMap::ActiveDevice device = AimInput::LastDevice();
+    const char* name = device == InputMap::ActiveDevice::Gamepad          ? "Gamepad"
+                       : device == InputMap::ActiveDevice::KeyboardMouse ? "Mouse and keyboard"
+                                                                         : "Waiting for input";
+    v.Info("Active device", name, device == InputMap::ActiveDevice::None ? game_ui::kTextDim : game_ui::kGood);
+    const std::string scheme = std::string(SchemeText(AimInput::EffectiveScheme())) +
+                               (s.schemeMode == InputMap::SchemeMode::Auto ? "  (automatic)" : "  (fixed)");
+    v.Info("Scheme in effect", scheme, IM_COL32(150, 220, 255, 255));
+}
+
+// Live raw input: both sticks, both triggers (after the trigger threshold), mouse position and buttons.
+void DrawDeviceMonitor(ListView& v) {
+    v.Block(150.0f, [&](ImDrawList* dl, ImVec2 mn, ImVec2 mx) {
+        const float S = game_ui::Scale();
+        const float size = 116.0f * S;
+        const float gap = 22.0f * S;
+        const ImU32 bg = IM_COL32(8, 30, 62, 150);
+        const ImU32 rim = IM_COL32(255, 255, 255, 110);
+        const float top = mn.y + 2.0f * S;
+        float x = mn.x + 4.0f * S;
+        const InputMap::RawSample raw = AimInput::Sample();
+        const AimSettings::Settings s = AimSettings::Get();
+
+        auto stick = [&](const char* label, float ax, float ay, float deadzone) {
+            const ImVec2 boxMin(x, top), boxMax(x + size, top + size);
+            dl->AddRectFilled(boxMin, boxMax, bg, 14.0f * S);
+            dl->AddRect(boxMin, boxMax, rim, 14.0f * S, 0, 1.5f);
+            const ImVec2 c(x + size * 0.5f, top + size * 0.5f);
+            const float r = size * 0.5f - 8.0f * S;
+            dl->AddCircle(c, r, IM_COL32(255, 255, 255, 70), 48);
+            dl->AddCircle(c, r * deadzone, IM_COL32(255, 168, 80, 230), 32, 1.5f);
+            dl->AddCircleFilled(ImVec2(c.x + ax * r, c.y + ay * r), 5.0f * S, IM_COL32(110, 255, 120, 255));
+            game_ui::Text(dl, 20.0f, ImVec2(x + 6.0f * S, boxMax.y + 2.0f * S), game_ui::kTextDim, label, game_ui::Outline::Thin);
+            x += size + gap;
+        };
+        stick("Left stick", raw.padAxes[0], raw.padAxes[1], s.aim.leftDeadzone);
+        stick("Right stick", raw.padAxes[2], raw.padAxes[3], s.aim.radialDeadzone);
+
+        // Triggers: bars filled up to the pull, a tick at the press level (0.5 after conditioning).
+        const float barW = 26.0f * S;
+        for (int i = 0; i < 2; ++i) {
+            const ImVec2 b0(x + i * (barW + 10.0f * S), top), b1(b0.x + barW, top + size);
+            dl->AddRectFilled(b0, b1, bg, 8.0f * S);
+            const float value = raw.padAxes[4 + i];
+            dl->AddRectFilled(ImVec2(b0.x, b1.y - size * value), b1, value >= 0.5f ? IM_COL32(110, 255, 120, 255) : IM_COL32(110, 200, 255, 220), 8.0f * S);
+            dl->AddRect(b0, b1, rim, 8.0f * S, 0, 1.5f);
+            dl->AddLine(ImVec2(b0.x, b1.y - size * 0.5f), ImVec2(b1.x, b1.y - size * 0.5f), IM_COL32(255, 168, 80, 230), 1.5f);
+        }
+        game_ui::Text(dl, 20.0f, ImVec2(x, top + size + 2.0f * S), game_ui::kTextDim, "LT   RT", game_ui::Outline::Thin);
+        x += barW * 2 + 10.0f * S + gap;
+
+        // Mouse: cursor inside the window and the three main buttons.
+        const AimInput::MouseSample ms = AimInput::MouseNow();
+        const float boxW = size * 1.35f;
+        const ImVec2 pMin(x, top), pMax(x + boxW, top + size);
+        dl->AddRectFilled(pMin, pMax, IM_COL32(6, 20, 44, 190), 14.0f * S);
+        dl->AddRect(pMin, pMax, rim, 14.0f * S, 0, 1.5f);
+        if (ms.valid && ms.winW > 0.f && ms.winH > 0.f) {
+            const float u = std::clamp(ms.x / ms.winW, 0.f, 1.f), w = std::clamp(ms.y / ms.winH, 0.f, 1.f);
+            dl->AddCircleFilled(ImVec2(pMin.x + 8.0f * S + u * (boxW - 16.0f * S), pMin.y + 8.0f * S + w * (size - 16.0f * S)),
+                                5.0f * S, IM_COL32(255, 96, 96, 255));
+        }
+        for (int i = 0; i < 3; ++i) {
+            const bool down = (raw.mouseButtons & (1u << i)) != 0;
+            dl->AddCircleFilled(ImVec2(pMin.x + (boxW * 0.25f) * (i + 1), pMax.y - 12.0f * S), 6.0f * S,
+                                down ? IM_COL32(110, 255, 120, 255) : IM_COL32(255, 255, 255, 60), 12);
+        }
+        game_ui::Text(dl, 20.0f, ImVec2(pMin.x + 6.0f * S, pMax.y + 2.0f * S), game_ui::kTextDim, "Mouse", game_ui::Outline::Thin);
+        x += boxW + gap;
+
+        const size_t keys = raw.keys.count();
+        const std::string held = "Keys held: " + std::to_string(keys);
+        if (x + 150.0f * S < mx.x) {
+            game_ui::Text(dl, 20.0f, ImVec2(x, top + 8.0f * S), game_ui::kTextNormal, held.c_str(), game_ui::Outline::Thin);
+        }
+    });
 }
 
 void DrawPreview(ListView& v, const AimSettings::Settings& s) {
@@ -194,15 +278,17 @@ void DrawPreview(ListView& v, const AimSettings::Settings& s) {
 
 // ---- Pages -------------------------------------------------------------------------------------------
 
-void BuildAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
+void BuildStickShaping(ListView& v, AimSettings::Settings& s, Edit& e) {
     DualAnalog::Config& c = s.aim;
     const DualAnalog::Config d{};
-    const InputMap::AimSource source = UpdatePreview(s);
-    v.Section("Live preview");
-    DrawAimDevice(v, source, s.mouse.enabled);
-    DrawPreview(v, s);
+    v.Section("Left stick (move)");
+    e.Take(v.Slider("Inner deadzone", &c.leftDeadzone, 0.0f, 0.5f, 0.01f, "%.2f", d.leftDeadzone,
+                    "Left stick travel ignored around the centre. Raise it if the character drifts."));
+    e.Take(v.Slider("Outer saturation", &c.leftSaturation, 0.5f, 1.0f, 0.01f, "%.2f", d.leftSaturation,
+                    "Deflection that counts as full. Lower it if your stick never quite reaches the edge."));
+    e.Take(v.Toggle("Invert Y (move)", &c.invertMoveY, d.invertMoveY, "Swap up and down on the left stick."));
 
-    v.Section("Right stick");
+    v.Section("Right stick (aim)");
     int dz = static_cast<int>(c.deadzoneMode);
     if (auto r = v.Choice("Deadzone type", &dz, DualAnalog::kDeadzoneModeLabels.data(), DualAnalog::kDeadzoneModeCount,
                           static_cast<int>(d.deadzoneMode),
@@ -229,14 +315,22 @@ void BuildAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
         e.Take(v.Slider("Precision zone output", &c.dualZoneOutput, 0.05f, 0.9f, 0.01f, "%.2f", d.dualZoneOutput,
                         "Output reached at the end of the zone.", game_ui::kRowIndent));
     }
-    e.Take(v.Slider("Sensitivity X", &c.sensitivityX, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityX, "Horizontal gain."));
-    e.Take(v.Slider("Sensitivity Y", &c.sensitivityY, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityY, "Vertical gain."));
-    e.Take(v.Toggle("Invert Y", &c.invertY, d.invertY, "Push up to aim down."));
+    e.Take(v.Slider("Aim sensitivity X", &c.sensitivityX, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityX, "Horizontal gain."));
+    e.Take(v.Slider("Aim sensitivity Y", &c.sensitivityY, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityY, "Vertical gain."));
+    e.Take(v.Toggle("Invert Y (aim)", &c.invertY, d.invertY, "Push up to aim down."));
     e.Take(v.Slider("Smoothing", &c.smoothingMs, 0.0f, 150.0f, 5.0f, "%.0f ms", d.smoothingMs, "Low-pass filter on the stick. 0 = off."));
     e.Take(v.Slider("Precision scale", &c.precisionScale, 0.1f, 1.0f, 0.05f, "%.2f", d.precisionScale,
                     "Speed factor while the Precision control is held."));
 
-    v.Section("Pointer (Wii Remote scheme)");
+    v.Section("Triggers");
+    e.Take(v.Slider("Trigger threshold", &c.triggerThreshold, 0.1f, 0.9f, 0.01f, "%.2f", d.triggerThreshold,
+                    "How far an analog trigger (LT / RT) is pulled before it counts as pressed. Lower = lighter pull."));
+}
+
+void BuildPointerAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
+    DualAnalog::Config& c = s.aim;
+    const DualAnalog::Config d{};
+    v.Section("Stick pointer (Wii Remote scheme)");
     int mode = c.absoluteMode ? 1 : 0;
     static const char* const kModes[] = {"Velocity", "Absolute"};
     if (auto r = v.Choice("Stick pointer mode", &mode, kModes, 2, 0,
@@ -275,9 +369,6 @@ void BuildAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
             e.Take(r);
         }
     }
-
-    v.Section("Left stick");
-    e.Take(v.Slider("Move deadzone", &c.leftDeadzone, 0.0f, 0.5f, 0.01f, "%.2f", d.leftDeadzone, "Left stick travel ignored around the centre."));
 }
 
 // Position-based pad names: the Classic Controller's A / B sit in the east / south positions, which are the
@@ -327,12 +418,11 @@ void ApplyCapture(const InputMap::Binding& binding) {
     AimSettings::Save();
 }
 
-void BuildMapping(ListView& v, AimSettings::Settings& s, Edit& e) {
-    static const char* const kProfiles[] = {"Gamepad", "Keyboard and mouse"};
-    v.Section("Profile");
-    v.Choice("Bindings for", &g_profileIndex, kProfiles, 2, 0,
-             "Pick the device to edit. Up to three bindings per action. A or click rebinds the selected slot, X or right-click clears it.");
-    const InputMap::Profile profile = g_profileIndex == 0 ? InputMap::Profile::Gamepad : InputMap::Profile::KeyboardMouse;
+void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Profile profile) {
+    const bool pad = profile == InputMap::Profile::Gamepad;
+    v.Section(pad ? "Gamepad buttons" : "Keyboard and mouse bindings");
+    v.Note(pad ? "Up to three bindings per action. A or click rebinds the selected slot, X or right-click clears it. A binding used elsewhere is swapped."
+               : "Up to three keys / mouse buttons per action. Click or A rebinds the selected slot, X or right-click clears it. A binding used elsewhere is swapped.");
     auto& table = s.bindings.For(profile);
     if (const size_t conflicts = InputMap::CountConflicts(table)) {
         v.Info("Conflicts", std::to_string(conflicts) + " duplicate binding(s) in this profile", game_ui::kWarn);
@@ -366,8 +456,9 @@ void BuildMapping(ListView& v, AimSettings::Settings& s, Edit& e) {
         }
     }
     v.Section("Reset");
-    if (v.Action("Reset this profile to defaults", "Reset...", "Restores every binding of the selected device profile.")) {
-        game_ui::RequestConfirm("Reset bindings", "Restore the default bindings for this profile?", "Reset", [profile] {
+    if (v.Action(pad ? "Reset gamepad bindings" : "Reset keyboard and mouse bindings", "Reset...",
+                 "Restores every binding of this device to its default.")) {
+        game_ui::RequestConfirm("Reset bindings", "Restore the default bindings for this device?", "Reset", [profile] {
             AimSettings::Settings cur = AimSettings::Get();
             const AimSettings::Settings defaults = AimSettings::DefaultBindings();
             cur.bindings.For(profile) = defaults.bindings.For(profile);
@@ -378,11 +469,42 @@ void BuildMapping(ListView& v, AimSettings::Settings& s, Edit& e) {
     }
 }
 
+void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
+    v.Section("Control scheme");
+    int mode = static_cast<int>(s.schemeMode);
+    if (auto r = v.Choice("Control scheme", &mode, InputMap::kSchemeModeLabels.data(),
+                          static_cast<int>(InputMap::kSchemeModeLabels.size()), 0,
+                          "Automatic: the last device you used decides. A gamepad plays as a Wii Classic Controller (right stick aims); mouse or keyboard plays as a Wii Remote + Nunchuk (the mouse is the pointer). The other two options pin one scheme. Applies live.",
+                          0, "Automatic")) {
+        s.schemeMode = static_cast<InputMap::SchemeMode>(mode);
+        e.Take(r);
+    }
+    DrawActiveDevice(v, s);
+    e.Take(v.Toggle("Show a note when the scheme switches", &s.switchToast, true,
+                    "Brief on-screen message when Automatic changes between gamepad and mouse/keyboard."));
+    v.Note("Gamepad: left stick moves, right stick aims, LB/RB/LT/RT = L/R/ZL/ZR.\n"
+           "Mouse and keyboard: WASD moves, the mouse aims, left click = shoot (B), right click = lock-on (A), Space = jump (C), Shift = evade (Z).");
+    v.Section("Live input");
+    DrawDeviceMonitor(v);
+    v.Section("Pages");
+    v.Note("Gamepad: sticks, deadzones, triggers and button bindings.\nKeyboard & Mouse: mouse aiming and key bindings.\nAiming: how the stick moves the Wii Remote pointer.");
+}
+
+void BuildGamepad(ListView& v, AimSettings::Settings& s, Edit& e) {
+    UpdatePreview(s);
+    v.Section("Live preview");
+    DrawActiveDevice(v, s);
+    DrawPreview(v, s);
+    BuildStickShaping(v, s, e);
+    BuildBindings(v, s, e, InputMap::Profile::Gamepad);
+}
+
 void BuildMouseKeyboard(ListView& v, AimSettings::Settings& s, Edit& e) {
     AimSettings::MouseConfig& m = s.mouse;
     const AimSettings::MouseConfig d{};
     const InputMap::AimSource source = UpdatePreview(s);
     v.Section("Mouse aiming");
+    DrawActiveDevice(v, s);
     DrawAimDevice(v, source, m.enabled);
     e.Take(v.Toggle("Mouse aims", &m.enabled, d.enabled, "Let the mouse drive the reticle. The last device to move wins."));
     int mode = m.raw ? 1 : 0;
@@ -404,9 +526,9 @@ void BuildMouseKeyboard(ListView& v, AimSettings::Settings& s, Edit& e) {
                     "In the Classic Controller scheme the mouse emulates the right stick: this speed equals full deflection."));
     v.Section("Preview");
     DrawPreview(v, s);
+    BuildBindings(v, s, e, InputMap::Profile::KeyboardMouse);
     v.Section("Fixed keys");
-    v.Note("Esc: back or close the menu     Alt+Enter: fullscreen     Q / E or Tab: switch tabs\n"
-           "Rebind the game actions on the Mapping page (profile: Keyboard and mouse).");
+    v.Note("Esc: back or close the menu     Alt+Enter: fullscreen     Q / E or Tab: switch tabs     F10: open this menu");
 }
 
 } // namespace
@@ -417,32 +539,59 @@ void BuildPage(ListView& view, int page) {
     AimSettings::Settings s = AimSettings::Get();
     Edit e;
     switch (page) {
-    case 0: BuildAiming(view, s, e); break;
-    case 1: BuildMapping(view, s, e); break;
-    default: BuildMouseKeyboard(view, s, e); break;
+    case 0: BuildOverview(view, s, e); break;
+    case 1: BuildGamepad(view, s, e); break;
+    case 2: BuildMouseKeyboard(view, s, e); break;
+    default: {
+        UpdatePreview(s);
+        view.Section("Live preview");
+        DrawActiveDevice(view, s);
+        DrawPreview(view, s);
+        BuildPointerAiming(view, s, e);
+        break;
+    }
     }
     if (e.dirty) AimSettings::Set(s);
     if (e.save) AimSettings::Save();
 }
 
-AimSettings::Scheme LaunchScheme() {
-    static const AimSettings::Scheme launch = AimSettings::Get().scheme;
-    return launch;
+// Devices page: the scheme itself is chosen on the Overview page; this just reports it.
+void BuildSchemeRow(ListView& view) {
+    const AimSettings::Settings s = AimSettings::Get();
+    DrawActiveDevice(view, s);
+    view.Note("Choose Automatic or a fixed control scheme on the Overview page.");
 }
 
-void BuildSchemeRow(ListView& view) {
-    const AimSettings::Scheme launch = LaunchScheme();
-    AimSettings::Settings s = AimSettings::Get();
-    int scheme = static_cast<int>(s.scheme);
-    if (view.Choice("Controller scheme", &scheme, AimSettings::kSchemeLabels.data(),
-                             static_cast<int>(AimSettings::kSchemeLabels.size()), 0,
-                             "Classic Controller: the game reads the right stick and moves its own reticle. Wii Remote + Nunchuk: the port synthesizes the pointer (best for mouse aiming). Applies the next time the game starts.",
-                             game_ui::kRowRestart)) {
-        s.scheme = static_cast<AimSettings::Scheme>(scheme);
-        AimSettings::Set(s);
-        AimSettings::Save();
+// Brief note at the bottom centre when Automatic switches scheme. Called once per frame from the overlay.
+void DrawHud() {
+    static uint32_t seen = AimInput::LatestSwitch().serial;
+    static Clock::time_point shown{};
+    static InputMap::Scheme scheme = InputMap::Scheme::Pointer;
+    static bool active = false;
+    const AimInput::SchemeNotice n = AimInput::LatestSwitch();
+    if (n.serial != seen) {
+        seen = n.serial;
+        if (AimSettings::Get().switchToast) {
+            active = true;
+            shown = Clock::now();
+            scheme = n.scheme;
+        }
     }
-    if (s.scheme != launch) view.Note("Restart the game to switch the controller scheme.", game_ui::kWarn);
+    if (!active) return;
+    constexpr float kHold = 2.0f, kFadeIn = 0.15f, kFadeOut = 0.5f;
+    const float age = std::chrono::duration<float>(Clock::now() - shown).count();
+    if (age >= kHold + kFadeOut) {
+        active = false;
+        return;
+    }
+    const float alpha = age < kFadeIn ? age / kFadeIn : age < kHold ? 1.0f : 1.0f - (age - kHold) / kFadeOut;
+    const char* text = scheme == InputMap::Scheme::Classic ? "Gamepad detected - Classic Controller"
+                                                           : "Mouse & keyboard - Wii Remote";
+    const ImGuiIO& io = ImGui::GetIO();
+    const float S = game_ui::Scale();
+    const float w = game_ui::TextSize(22.0f, text).x + 24.0f * S;
+    const ImVec2 anchor(io.DisplaySize.x * 0.5f + w * 0.5f, io.DisplaySize.y - 90.0f * S);
+    game_ui::DrawHudBox(ImGui::GetForegroundDrawList(), anchor, {{text, game_ui::kWhite}}, alpha);
 }
 
 void DrawModals(game_ui::Frame& input) {
@@ -482,16 +631,45 @@ void DrawModals(game_ui::Frame& input) {
     if (!g_capture.open) g_capture.modal = game_ui::ModalState{};
 }
 
-bool RestartPending() { return AimSettings::Get().scheme != LaunchScheme(); }
+// The scheme now switches live, so no control option needs a restart any more.
+bool RestartPending() { return false; }
 
 bool Capturing() { return g_capture.open || AimInput::Capturing(); }
 
 void ResetPage(int page) {
     AimSettings::Settings s = AimSettings::Get();
+    const DualAnalog::Config fresh{};
+    const DualAnalog::Config current = s.aim;
+    auto pointerFields = [](DualAnalog::Config& to, const DualAnalog::Config& from) {
+        to.absoluteMode = from.absoluteMode;
+        to.maxSpeedX = from.maxSpeedX;
+        to.maxSpeedY = from.maxSpeedY;
+        to.speedCap = from.speedCap;
+        to.rampSeconds = from.rampSeconds;
+        to.edgeBoost = from.edgeBoost;
+        to.edgeAccelSeconds = from.edgeAccelSeconds;
+        to.recenterOnRelease = from.recenterOnRelease;
+        to.recenterSeconds = from.recenterSeconds;
+    };
     switch (page) {
-    case 0: s.aim = DualAnalog::Config{}; break;
-    case 1: s = AimSettings::DefaultBindings(s); g_status.clear(); break;
-    default: s.mouse = AimSettings::MouseConfig{}; break;
+    case 0:
+        s.schemeMode = InputMap::SchemeMode::Auto;
+        s.switchToast = true;
+        break;
+    case 1:
+        s.aim = fresh;
+        pointerFields(s.aim, current);  // the stick pointer belongs to the Aiming page
+        s.bindings.pad = AimSettings::DefaultBindings().bindings.pad;
+        g_status.clear();
+        break;
+    case 2:
+        s.mouse = AimSettings::MouseConfig{};
+        s.bindings.kbm = AimSettings::DefaultBindings().bindings.kbm;
+        g_status.clear();
+        break;
+    default:
+        pointerFields(s.aim, fresh);
+        break;
     }
     AimSettings::Set(s);
     AimSettings::Save();

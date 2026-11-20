@@ -7,6 +7,7 @@
 #include "input_map.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
+#include "wiimote_ext_crypto.h"
 #include "wiimote_host.h"
 
 #include <SDL3/SDL_gamepad.h>
@@ -22,7 +23,11 @@
 #include <string>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace VirtualRemote {
@@ -30,6 +35,25 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 using Report = std::vector<uint8_t>;
+
+// SetScheme(): requested extension (-1 = none requested yet; otherwise an InputMap::Scheme value).
+std::atomic<int> g_requestedScheme{-1};
+std::atomic<bool> g_scriptReloaded{false};
+
+const char* SchemeLabel(AimSettings::Scheme s) { return s == AimSettings::Scheme::Classic ? "classic" : "pointer"; }
+
+// The extension needs time between unplug and plug for the guest's WPAD to see both status reports.
+constexpr auto kUnplugHold = std::chrono::milliseconds(500);
+
+// In classic scheme the menu-type keys are also pressed on the Wii Remote core buttons (SIN_VREMOTE_CLASSIC_CORE=0
+// turns that off).
+bool ClassicCoreMirror() {
+    static const bool on = [] {
+        const char* v = std::getenv("SIN_VREMOTE_CLASSIC_CORE");
+        return !(v && *v == '0');
+    }();
+    return on;
+}
 
 // InjectCancel(): press B until this deadline (steady-clock milliseconds).
 std::atomic<long long> g_injectCancelUntilMs{0};
@@ -75,7 +99,14 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         m_settingsLoaded = false;
         RefreshSettings();
-        m_scheme = m_settings.scheme;
+        const int requested = g_requestedScheme.load(std::memory_order_relaxed);
+        m_scheme = requested >= 0 ? static_cast<AimSettings::Scheme>(requested) : m_settings.scheme;
+        m_extPresent = true;
+        m_swap = Swap::Idle;
+        m_extEncrypted = false;
+        m_extKey.fill(0);
+        m_extTables.reset();
+        m_scriptSeg = -1;
         m_arbiter = InputMap::Arbiter{};
         m_classicFilter = DualAnalog::StickFilter{};
         m_prevRecenter = false;
@@ -91,6 +122,7 @@ public:
         m_ir.fill(0);
         m_eeprom.fill(0);
         BuildEeprom();
+        BuildExtensionRegisters();
         m_pointer = DualAnalog::PointerState{};
         DualAnalog::Recenter(m_pointer, m_config);
         m_pointerStamp = Clock::now();
@@ -126,6 +158,7 @@ public:
 
     bool Pop(Report& out) {
         std::lock_guard<std::mutex> lock(m_mutex);
+        PollScheme();
         if (!m_pending.empty()) {
             out = std::move(m_pending.front());
             m_pending.pop_front();
@@ -181,10 +214,48 @@ private:
         Report r(7, 0);
         r[0] = 0x20;
         FillButtons(r, 1);
-        r[3] = static_cast<uint8_t>((m_leds << 4) | 0x02 /* extension */ | (m_speakerEnabled ? 0x04 : 0) |
+        r[3] = static_cast<uint8_t>((m_leds << 4) | (m_extPresent ? 0x02 : 0) | (m_speakerEnabled ? 0x04 : 0) |
                                     (m_irEnabled ? 0x08 : 0));
         r[6] = 0xB0; // battery
+        static int s_budget = 60;
+        if (RtLogBudget(s_budget)) {
+            RT_LOGF(RT_TAG_BT, "status 0x20 -> guest: extension=%d (%s) leds=%X\n", m_extPresent ? 1 : 0,
+                    m_extPresent ? SchemeLabel(m_scheme) : "none", m_leds);
+        }
         m_pending.push_back(std::move(r));
+    }
+
+    // ---- Extension hot-swap -----------------------------------------------------------------------
+    // Called with the mutex held from Pop(). Idle -> (request differs) unplug + status -> hold for kUnplugHold
+    // once the status report was handed to the guest -> plug the requested extension + status -> Idle.
+    void PollScheme() {
+        const int requested = g_requestedScheme.load(std::memory_order_relaxed);
+        if (m_swap == Swap::Idle) {
+            if (requested < 0 || static_cast<AimSettings::Scheme>(requested) == m_scheme) return;
+            m_swapTarget = static_cast<AimSettings::Scheme>(requested);
+            RT_LOGF(RT_TAG_BT, "scheme -> %s (unplug %s)\n", SchemeLabel(m_swapTarget), SchemeLabel(m_scheme));
+            m_extPresent = false;
+            m_extEncrypted = false;
+            m_extKey.fill(0);
+            m_extTables.reset();
+            m_ext.fill(0);
+            QueueStatus();
+            m_swap = Swap::Detached;
+            m_swapAt = Clock::now();
+            return;
+        }
+        if (m_swap == Swap::Detached) {
+            if (!m_pending.empty() || Clock::now() - m_swapAt < kUnplugHold) return;
+            // Latest request wins; the guest still sees a full unplug/plug cycle.
+            if (requested >= 0) m_swapTarget = static_cast<AimSettings::Scheme>(requested);
+            m_scheme = m_swapTarget;
+            m_classicFilter = DualAnalog::StickFilter{};
+            BuildExtensionRegisters();
+            m_extPresent = true;
+            RT_LOGF(RT_TAG_BT, "scheme -> %s (plug)\n", SchemeLabel(m_scheme));
+            QueueStatus();
+            m_swap = Swap::Idle;
+        }
     }
 
     void BuildEeprom() {
@@ -193,9 +264,14 @@ private:
         Checksum(accel, sizeof accel, 1);
         std::memcpy(&m_eeprom[0x16], accel, sizeof accel);
         std::memcpy(&m_eeprom[0x20], accel, sizeof accel);
+    }
+
+    // Identifier + calibration of the attached extension (register block 0xA40000).
+    void BuildExtensionRegisters() {
+        m_ext.fill(0);
         if (m_scheme == AimSettings::Scheme::Classic) {
-            // Classic Controller calibration (8-bit scale: 6-bit left stick << 2, 5-bit right stick << 3).
-            // UNVERIFIED against the game's WPAD/KPAD calibration handling.
+            // Classic Controller calibration, 8-bit precision for every axis (max, min, centre; wiibrew and
+            // Dolphin Classic.cpp): 6-bit left stick << 2, 5-bit right stick << 3, trigger neutrals 0.
             uint8_t classic[16] = {0xFC, 0x04, 0x80,  // left X max/min/center
                                    0xFC, 0x04, 0x80,  // left Y
                                    0xF8, 0x08, 0x80,  // right X
@@ -224,6 +300,7 @@ private:
     uint8_t* Region(uint32_t address, size_t length, uint32_t& offset) {
         const uint32_t base = address & 0xFF0000;
         if (base == kRegExtension) {
+            if (!m_extPresent) return nullptr;
             offset = address & 0xFFFF;
             return offset + length <= m_ext.size() ? m_ext.data() : nullptr;
         }
@@ -243,6 +320,7 @@ private:
             uint32_t offset = 0;
             if (uint8_t* region = Region(address, length, offset)) {
                 std::memcpy(region + offset, r + 6, length);
+                if ((address & 0xFF0000) == kRegExtension) ObserveExtensionWrite(offset, r + 6, length);
                 if ((address & 0xFF0000) == kRegIr && address == 0xB00033 && length >= 1) m_irMode = r[6];
             } else if ((address & 0xFF0000) != kRegSpeaker) {
                 error = 7;
@@ -253,6 +331,39 @@ private:
             error = 7;
         }
         Ack(0x16, error);
+    }
+
+    // Follows the guest's init conversation with the extension: 0x55 at 0xF0 (plus 0x00 at 0xFB) turns encryption
+    // off, 0xAA at 0xF0 turns it on, and the 16-byte key at 0x40..0x4F (three writes: 6+6+4) selects the tables.
+    void ObserveExtensionWrite(uint32_t offset, const uint8_t* data, size_t length) {
+        static int s_budget = 60;
+        if (RtLogBudget(s_budget)) {
+            RT_LOGF(RT_TAG_BT, "ext write reg=0x%02X len=%u first=%02X\n", static_cast<unsigned>(offset & 0xFF),
+                    static_cast<unsigned>(length), length ? data[0] : 0);
+        }
+        bool keyChanged = false;
+        for (size_t i = 0; i < length; ++i) {
+            const uint32_t reg = (offset + static_cast<uint32_t>(i)) & 0xFF;
+            const uint8_t value = data[i];
+            if (reg >= 0x40 && reg < 0x50) {
+                m_extKey[reg - 0x40] = value;
+                keyChanged = true;
+            } else if (reg == 0xF0) {
+                if (value == 0xAA) {
+                    m_extEncrypted = true;
+                } else if (value == 0x55) {
+                    m_extEncrypted = false;
+                    m_extKey.fill(0);
+                    m_extTables.reset();
+                }
+            }
+        }
+        if (keyChanged) {
+            m_extTables = Wiimote::ExtCrypto::FromKey(m_extKey);
+            if (m_extTables) {
+                RT_LOGF(RT_TAG_BT, "ext crypto: key accepted, encryption %s\n", m_extEncrypted ? "ON" : "pending");
+            }
+        }
     }
 
     void ReadMemory(const uint8_t* r) {
@@ -278,6 +389,19 @@ private:
             reply[4] = static_cast<uint8_t>((address >> 8) & 0xFF);
             reply[5] = static_cast<uint8_t>(address & 0xFF);
             if (src && !error) std::memcpy(&reply[6], src, chunk);
+            if (registers && !error && (address & 0xFF0000) == kRegExtension && m_extEncrypted && m_extTables) {
+                // The extension encrypts every register it returns once the guest enabled encryption (0xAA at
+                // 0xA400F0); the guest decrypts calibration with the same key schedule.
+                m_extTables->Encrypt(&reply[6], address & 0xFF, chunk);
+            }
+            if (registers && (address & 0xFF0000) == kRegExtension) {
+                static int s_budget = 60;
+                if (RtLogBudget(s_budget)) {
+                    RT_LOGF(RT_TAG_BT, "ext read reg=0x%02X len=%u err=%u enc=%d\n",
+                            static_cast<unsigned>(address & 0xFF), static_cast<unsigned>(chunk), error,
+                            (m_extEncrypted && m_extTables) ? 1 : 0);
+                }
+            }
             m_pending.push_back(std::move(reply));
             address += static_cast<uint32_t>(chunk);
             remaining -= chunk;
@@ -296,6 +420,8 @@ private:
         float rx = 0, ry = 0, lx = 0, ly = 0;
         bool absPtr = false;  // third field written as @u/v: pointer placed at screen fractions u,v
         float au = 0.5f, av = 0.5f;
+        int scheme = -1;       // scheme=classic|pointer: hot-swap the extension when this segment starts
+        bool noCore = false;   // core=0: in classic scheme the Wii Remote core buttons stay released
     };
 
     static std::vector<std::string> Split(const std::string& text, char sep) {
@@ -312,10 +438,14 @@ private:
 
     static const std::vector<ScriptSegment>& Script(bool& loop) {
         static bool s_loop = false;
-        static const std::vector<ScriptSegment> segments = [] {
+        // SIN_VREMOTE_SCRIPT_FILE=path: the script text is re-read whenever the file changes (QA harness drives
+        // phases: menu navigation, then combat) and the script clock restarts.
+        auto parse = [](const std::string& envText) {
             std::vector<ScriptSegment> out;
-            const char* env = std::getenv("SIN_VREMOTE_SCRIPT");
-            if (!env || !*env) return out;
+            int pendingScheme = -1;
+            s_loop = false;
+            const char* env = envText.c_str();
+            if (!*env) return out;
             // '|' is accepted for ';' and '/' for ',' so the script survives shells and env lists that split on those.
             std::string text(env);
             for (char& ch : text) {
@@ -325,8 +455,24 @@ private:
             for (const std::string& seg : Split(text, ';')) {
                 if (seg == "loop") { s_loop = true; continue; }
                 if (seg.empty()) continue;
-                const std::vector<std::string> parts = Split(seg, ':');
+                // A bare "scheme=classic" segment applies to the next timed segment.
+                if (seg.rfind("scheme=", 0) == 0) {
+                    pendingScheme = seg.compare(7, std::string::npos, "classic") == 0 ? 1 : 0;
+                    continue;
+                }
+                std::vector<std::string> parts = Split(seg, ':');
                 ScriptSegment s;
+                s.scheme = pendingScheme;
+                pendingScheme = -1;
+                for (size_t i = 1; i < parts.size(); ++i) {
+                    if (parts[i].rfind("scheme=", 0) == 0) {
+                        s.scheme = parts[i].compare(7, std::string::npos, "classic") == 0 ? 1 : 0;
+                        parts[i].clear();
+                    } else if (parts[i] == "core=0") {
+                        s.noCore = true;
+                        parts[i].clear();
+                    }
+                }
                 s.seconds = static_cast<float>(std::atof(parts[0].c_str()));
                 if (parts.size() > 1) {
                     for (const std::string& name : Split(parts[1], '+')) {
@@ -366,7 +512,30 @@ private:
                         static_cast<unsigned>(out.size()), s_loop ? 1 : 0);
             }
             return out;
-        }();
+        };
+        static std::vector<ScriptSegment> segments;
+        static bool s_inited = false;
+        static std::filesystem::file_time_type s_stamp{};
+        static auto s_lastCheck = Clock::time_point{};
+        const char* scriptFile = std::getenv("SIN_VREMOTE_SCRIPT_FILE");
+        if (!s_inited) {
+            s_inited = true;
+            const char* e = std::getenv("SIN_VREMOTE_SCRIPT");
+            segments = parse(e ? e : "");
+        }
+        if (scriptFile && *scriptFile && Clock::now() - s_lastCheck > std::chrono::milliseconds(500)) {
+            s_lastCheck = Clock::now();
+            std::error_code ec;
+            const auto stamp = std::filesystem::last_write_time(scriptFile, ec);
+            if (!ec && stamp != s_stamp) {
+                s_stamp = stamp;
+                std::ifstream in(scriptFile);
+                std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
+                segments = parse(text);
+                g_scriptReloaded.store(true, std::memory_order_relaxed);
+            }
+        }
         loop = s_loop;
         return segments;
     }
@@ -375,14 +544,29 @@ private:
     bool ScriptedInput(Input& in) {
         bool loop = false;
         const auto& segments = Script(loop);
+        if (g_scriptReloaded.exchange(false, std::memory_order_relaxed)) {
+            m_scriptStart = Clock::now();
+            m_scriptSeg = -1;
+        }
         if (segments.empty()) return false;
         float total = 0;
         for (const auto& s : segments) total += s.seconds;
         float at = std::chrono::duration<float>(Clock::now() - m_scriptStart).count();
         if (loop && total > 0) at = std::fmod(at, total);
         float acc = 0;
+        int index = 0;
         for (const auto& s : segments) {
             if (at < acc + s.seconds) {
+                if (index != m_scriptSeg) {
+                    m_scriptSeg = index;
+                    if (s.scheme >= 0) {
+                        RT_LOGF(RT_TAG_BT, "script t=%.1fs segment %d: scheme=%s\n", at, index,
+                                s.scheme == 1 ? "classic" : "pointer");
+                        g_requestedScheme.store(s.scheme == 1 ? static_cast<int>(AimSettings::Scheme::Classic)
+                                                              : static_cast<int>(AimSettings::Scheme::Pointer),
+                                                std::memory_order_relaxed);
+                    }
+                }
                 in.buttons = s.buttons;
                 in.c = s.c;
                 in.z = s.z;
@@ -411,9 +595,11 @@ private:
                 cl(kBtnHome, in.cl4, kClHome);
                 if (s.c) in.cl4 |= kClL;
                 if (s.z) in.cl5 |= kClZL;
+                if (s.noCore && m_scheme == AimSettings::Scheme::Classic) in.buttons = 0;
                 return true;
             }
             acc += s.seconds;
+            ++index;
         }
         in.scripted = true;
         return true; // script finished: everything released
@@ -504,6 +690,19 @@ private:
             set(dr, in.cl4, kClDRight);
             in.lt = val(Action::Jump);
             in.rt = val(Action::Fire);
+            if (ClassicCoreMirror()) {
+                // Menu-type keys also reach the game on the Wii Remote core buttons (same bits as the pointer scheme).
+                auto core = [&](bool on, uint16_t bit) { if (on) in.buttons |= bit; };
+                core(cancel, kBtnB);
+                core(confirm, kBtnA);
+                core(pause, kBtnPlus);
+                core(minus, kBtnMinus);
+                core(home, kBtnHome);
+                core(du, kBtnUp);
+                core(dd, kBtnDown);
+                core(dl, kBtnLeft);
+                core(dr, kBtnRight);
+            }
         }
         return in;
     }
@@ -643,7 +842,21 @@ private:
         out[2] = static_cast<uint8_t>(in.buttons & 0xFF);
         auto accel = [&](size_t at) { out[at] = 0x80; out[at + 1] = 0x80; out[at + 2] = 0x9A; };
         uint8_t ext[21] = {};
-        BuildExtension(ext, in, classicX, classicY);
+        if (m_extPresent) {
+            BuildExtension(ext, in, classicX, classicY);
+            if (m_extEncrypted) {
+                // Data reports are encrypted with the table offset restarting at 0 (Dolphin / real extension).
+                if (m_extTables) {
+                    m_extTables->Encrypt(ext, 0, 6);
+                } else {
+                    static int s_warn = 3;
+                    if (RtLogBudget(s_warn)) {
+                        RT_LOGF(RT_TAG_BT, "ext crypto: encryption enabled but the guest key was not accepted; "
+                                           "sending plain data\n");
+                    }
+                }
+            }
+        }
         switch (m_mode) {
         case 0x31: accel(3); break;
         case 0x32: std::memcpy(&out[3], ext, 8); break;
@@ -677,7 +890,16 @@ private:
     AimSettings::Settings m_settings;
     uint32_t m_settingsGeneration = 0;
     bool m_settingsLoaded = false;
-    AimSettings::Scheme m_scheme = AimSettings::Scheme::Pointer;
+    AimSettings::Scheme m_scheme = AimSettings::Scheme::Pointer;  // the extension currently attached
+    enum class Swap : uint8_t { Idle, Detached };
+    Swap m_swap = Swap::Idle;
+    AimSettings::Scheme m_swapTarget = AimSettings::Scheme::Pointer;
+    Clock::time_point m_swapAt;
+    bool m_extPresent = true;
+    bool m_extEncrypted = false;
+    std::array<uint8_t, 16> m_extKey{};
+    std::optional<Wiimote::ExtCrypto::Tables> m_extTables;
+    int m_scriptSeg = -1;
     InputMap::Arbiter m_arbiter;
     DualAnalog::StickFilter m_classicFilter;
     bool m_prevRecenter = false;
@@ -783,6 +1005,20 @@ private:
 Bluetooth::RemoteHost& Host() {
     static CompositeHost* host = new CompositeHost();
     return *host;
+}
+
+void SetScheme(InputMap::Scheme scheme) {
+    static const bool scriptOwns = [] {
+        const char* env = std::getenv("SIN_VREMOTE_SCRIPT");
+        return env && std::strstr(env, "scheme=") != nullptr;
+    }();
+    if (scriptOwns) return;
+    g_requestedScheme.store(static_cast<int>(scheme), std::memory_order_relaxed);
+}
+
+InputMap::Scheme GetScheme() {
+    const int requested = g_requestedScheme.load(std::memory_order_relaxed);
+    return requested >= 0 ? static_cast<InputMap::Scheme>(requested) : AimSettings::Get().scheme;
 }
 
 void InjectCancel(int millis) {

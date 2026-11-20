@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 
 #include <tracy/Tracy.hpp>
 
@@ -32,6 +35,50 @@ void complete_sync(const std::shared_ptr<SyncState>& sync) {
   sync->cv.notify_all();
 }
 
+// SIN_RENDER_PROF=1: once per second log the render worker's per-item wall times (begin/pass/end/other).
+const bool g_profile = [] {
+  const char* v = std::getenv("SIN_RENDER_PROF");
+  return v != nullptr && *v != '\0' && *v != '0';
+}();
+
+void profile_item(ItemType type, double ms) {
+  struct Agg {
+    double sum = 0;
+    double max = 0;
+    uint32_t count = 0;
+  };
+  static Agg aggs[5];
+  static auto lastLog = std::chrono::steady_clock::now();
+  static uint32_t overBudget = 0;
+  auto& agg = aggs[std::min<size_t>(static_cast<size_t>(type), 4)];
+  agg.sum += ms;
+  agg.max = std::max(agg.max, ms);
+  ++agg.count;
+  if (ms > 8.0) {
+    ++overBudget;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (now - lastLog < std::chrono::seconds(1)) {
+    return;
+  }
+  lastLog = now;
+  static const char* names[] = {"begin", "pass", "end", "sync", "shutdown"};
+  std::string line = "[render-prof]";
+  double total = 0;
+  for (size_t i = 0; i < 5; ++i) {
+    if (aggs[i].count == 0) {
+      continue;
+    }
+    line += " " + std::string(names[i]) + "=" + std::to_string(aggs[i].sum / 1000.0 * 1000.0).substr(0, 7) + "ms/" +
+            std::to_string(aggs[i].count) + "(max " + std::to_string(aggs[i].max).substr(0, 5) + ")";
+    total += aggs[i].sum;
+    aggs[i] = {};
+  }
+  line += " busy=" + std::to_string(total / 10.0).substr(0, 5) + "% items>8ms=" + std::to_string(overBudget) + "\n";
+  overBudget = 0;
+  std::fputs(line.c_str(), stderr);
+}
+
 void worker_main(std::stop_token token) {
   g_workerThreadId = std::this_thread::get_id();
 
@@ -47,7 +94,13 @@ void worker_main(std::stop_token token) {
 
     if (item->work) {
       ZoneScopedN("QueueItem work");
-      item->work();
+      if (g_profile) {
+        const auto t0 = std::chrono::steady_clock::now();
+        item->work();
+        profile_item(item->type, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+      } else {
+        item->work();
+      }
     }
     complete_sync(item->sync);
     g_pendingItems.fetch_sub(1, std::memory_order_acq_rel);

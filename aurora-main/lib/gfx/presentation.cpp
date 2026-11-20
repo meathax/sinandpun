@@ -4,6 +4,7 @@
 #include "resources.hpp"
 #include "../gx/frame_interpolation.hpp"
 #include "../internal.hpp"
+#include "../webgpu/gpu.hpp"
 #include "../window.hpp"
 
 #include <aurora/aurora.h>
@@ -16,12 +17,14 @@
 #include <cmath>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <dxgi1_5.h>
 #endif
 
 namespace aurora::gfx::presentation {
@@ -118,6 +121,9 @@ AuroraPresentTiming snapshot_timing() noexcept {
   result.jitterMs = std::sqrt(result.jitterMs / count);
   std::sort(milliseconds.begin(), milliseconds.end());
   result.p95FrameTimeMs = milliseconds[static_cast<size_t>(std::floor((count - 1.0) * 0.95))];
+  result.p50FrameTimeMs = milliseconds[static_cast<size_t>(std::floor((count - 1.0) * 0.50))];
+  result.p99FrameTimeMs = milliseconds[static_cast<size_t>(std::floor((count - 1.0) * 0.99))];
+  result.maxFrameTimeMs = milliseconds.back();
   return result;
 }
 
@@ -214,6 +220,124 @@ void wait_until(uint64_t deadlineNanos) noexcept {
   }
 }
 
+namespace {
+std::atomic_uint32_t g_vrrMode = AURORA_VRR_AUTO;
+std::atomic_uint32_t g_vrrMargin = 3;
+std::atomic_bool g_vrrLimiter = true;
+std::atomic_bool g_vrrSurfaceImmediate = false;
+std::atomic_bool g_vrrD3D12 = false;
+std::atomic_bool g_vrrCapsKnown = false;
+std::atomic_bool g_vrrApplied = false;
+std::atomic_bool g_vrrRequested = false;
+std::atomic_uint64_t g_vrrMinIntervalNanos = 0;
+uint64_t g_paceLastNanos = 0; // render worker only
+
+// A display that cannot show frames between two native frames gets native pacing (same threshold as
+// display_shows_interpolation / the frame-rate planner).
+constexpr double VrrMinRefreshHz = 63.2;
+// The limiter never goes down to the guest rate: a floor at or below 60 Hz would throttle the game.
+constexpr double VrrMinLimitHz = 60.5;
+
+// IDXGIFactory5::CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING), loaded dynamically.
+bool dxgi_tearing_supported() noexcept {
+#if defined(_WIN32)
+  static const bool supported = [] {
+    HMODULE dxgi = ::LoadLibraryW(L"dxgi.dll");
+    if (dxgi == nullptr) {
+      return false;
+    }
+    using CreateFactory1 = HRESULT(WINAPI*)(REFIID, void**);
+    const auto create = reinterpret_cast<CreateFactory1>(::GetProcAddress(dxgi, "CreateDXGIFactory1"));
+    bool result = false;
+    IDXGIFactory5* factory = nullptr;
+    if (create != nullptr && SUCCEEDED(create(__uuidof(IDXGIFactory5), reinterpret_cast<void**>(&factory))) &&
+        factory != nullptr) {
+      BOOL allow = FALSE;
+      result = SUCCEEDED(factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow, sizeof(allow))) &&
+               allow != FALSE;
+      factory->Release();
+    }
+    ::FreeLibrary(dxgi);
+    return result;
+  }();
+  return supported;
+#else
+  return true;
+#endif
+}
+} // namespace
+
+VrrState resolve_vrr() noexcept {
+  VrrState state;
+  const uint64_t period = window::refresh_period_nanos();
+  state.refreshHz = period != 0 ? 1.0e9 / static_cast<double>(period) : 0.0;
+  state.tearingSupported =
+      g_vrrCapsKnown.load(std::memory_order_acquire) && g_vrrSurfaceImmediate.load(std::memory_order_acquire) &&
+      (!g_vrrD3D12.load(std::memory_order_acquire) || dxgi_tearing_supported());
+
+  AuroraFrameRateMode rateMode = AURORA_FRAME_RATE_OFF;
+  uint32_t fixedFps = 0;
+  uint32_t capFps = 0;
+  gx::get_frame_rate(rateMode, fixedFps, capFps);
+  const auto mode = static_cast<AuroraVrrMode>(g_vrrMode.load(std::memory_order_acquire));
+  const bool wanted = mode == AURORA_VRR_ON || (mode == AURORA_VRR_AUTO && state.refreshHz > VrrMinRefreshHz &&
+                                                 rateMode != AURORA_FRAME_RATE_OFF);
+  state.active = state.tearingSupported && wanted;
+  if (state.active && g_vrrLimiter.load(std::memory_order_acquire) && state.refreshHz > 0.0) {
+    const double limit = state.refreshHz - static_cast<double>(g_vrrMargin.load(std::memory_order_acquire));
+    if (limit > VrrMinLimitHz) {
+      state.limiterActive = true;
+      state.limitFps = limit;
+      state.floorFps = state.refreshHz - 0.5 * static_cast<double>(g_vrrMargin.load(std::memory_order_acquire));
+    }
+  }
+  return state;
+}
+
+bool vrr_wanted() noexcept { return resolve_vrr().active; }
+
+double vrr_limit_fps() noexcept { return resolve_vrr().limitFps; }
+
+void vrr_set_surface_caps(bool immediateSupported, bool d3d12Backend) noexcept {
+  g_vrrSurfaceImmediate.store(immediateSupported, std::memory_order_release);
+  g_vrrD3D12.store(d3d12Backend, std::memory_order_release);
+  g_vrrCapsKnown.store(true, std::memory_order_release);
+}
+
+void vrr_note_applied(bool vrrPresentMode) noexcept {
+  g_vrrApplied.store(vrrPresentMode, std::memory_order_release);
+  g_vrrRequested.store(vrrPresentMode, std::memory_order_release);
+}
+
+void vrr_update() noexcept {
+  if (!g_vrrCapsKnown.load(std::memory_order_acquire)) {
+    return;
+  }
+  const VrrState state = resolve_vrr();
+  g_vrrMinIntervalNanos.store(state.limiterActive ? static_cast<uint64_t>(1.0e9 / state.floorFps) : 0,
+                              std::memory_order_release);
+  if (state.active != g_vrrApplied.load(std::memory_order_acquire) &&
+      g_vrrRequested.exchange(state.active, std::memory_order_acq_rel) != state.active) {
+    // The swapchain's present mode (and ALLOW_TEARING flag) depends on it; rebuild at the next frame boundary.
+    window::push_custom_event(window::CustomEvent::RefreshSurface);
+  }
+}
+
+void pace_present(uint64_t dueNanos) noexcept {
+  const uint64_t minInterval = g_vrrMinIntervalNanos.load(std::memory_order_acquire);
+  uint64_t target = dueNanos;
+  if (minInterval != 0 && g_paceLastNanos != 0) {
+    target = std::max(target, g_paceLastNanos + minInterval);
+  }
+  wait_until(target);
+  if (minInterval == 0) {
+    g_paceLastNanos = 0;
+    return;
+  }
+  // Stamp the actual wake time so the minimum spacing holds between the presents the display sees.
+  g_paceLastNanos = now_nanos();
+}
+
 uint64_t guest_write_generation(const void* hostPtr, size_t size) noexcept {
   const auto callback = g_guestWriteGeneration.load(std::memory_order_acquire);
   return callback != nullptr ? callback(hostPtr, size) : AURORA_GUEST_WRITE_UNTRACKED;
@@ -282,6 +406,58 @@ void aurora_set_guest_write_hooks(AuroraGuestWriteGenerationCallback generation,
                                   AuroraGuestWriteNotifyCallback notify) {
   aurora::gfx::presentation::g_guestWriteGeneration.store(generation, std::memory_order_release);
   aurora::gfx::presentation::g_guestWriteNotify.store(notify, std::memory_order_release);
+}
+
+void aurora_set_frame_rate(AuroraFrameRateMode mode, uint32_t fixedFps, uint32_t capFps) {
+  aurora::gx::set_frame_rate(mode, fixedFps, capFps);
+}
+
+void aurora_get_frame_rate(AuroraFrameRateMode* mode, uint32_t* fixedFps, uint32_t* capFps) {
+  AuroraFrameRateMode m = AURORA_FRAME_RATE_OFF;
+  uint32_t fixed = 0;
+  uint32_t cap = 0;
+  aurora::gx::get_frame_rate(m, fixed, cap);
+  if (mode != nullptr) {
+    *mode = m;
+  }
+  if (fixedFps != nullptr) {
+    *fixedFps = fixed;
+  }
+  if (capFps != nullptr) {
+    *capFps = cap;
+  }
+}
+
+void aurora_set_vrr(AuroraVrrMode mode, uint32_t marginFps, bool limiter) {
+  using namespace aurora::gfx::presentation;
+  g_vrrMode.store(mode == AURORA_VRR_ON || mode == AURORA_VRR_OFF ? mode : AURORA_VRR_AUTO, std::memory_order_release);
+  g_vrrMargin.store(std::min<uint32_t>(marginFps, 30), std::memory_order_release);
+  g_vrrLimiter.store(limiter, std::memory_order_release);
+  vrr_update();
+}
+
+void aurora_get_vrr_status(AuroraVrrStatus* status) {
+  using namespace aurora::gfx::presentation;
+  if (status == nullptr) {
+    return;
+  }
+  const VrrState state = resolve_vrr();
+  AuroraFrameInterpolationDiagnostics diagnostics{};
+  aurora_get_frame_interpolation_diagnostics(&diagnostics);
+  const char* mode = aurora::webgpu::present_mode_name();
+  *status = AuroraVrrStatus{
+      .mode = g_vrrMode.load(std::memory_order_acquire),
+      .marginFps = g_vrrMargin.load(std::memory_order_acquire),
+      .limiterEnabled = g_vrrLimiter.load(std::memory_order_acquire),
+      .tearingSupported = state.tearingSupported,
+      .active = state.active,
+      .swapchainTearing = std::string_view(mode) == "Immediate",
+      .limiterActive = state.limiterActive,
+      .refreshHz = state.refreshHz,
+      .limitFps = state.limitFps,
+      .plannedFps = static_cast<double>(diagnostics.plannedFps),
+      .presentMode = mode,
+  };
 }
 
 void aurora_set_frame_interpolation_fps(uint32_t targetFps) { aurora::gx::set_frame_interpolation_fps(targetFps); }

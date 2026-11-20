@@ -66,6 +66,10 @@ extern bool g_dualSourceBlendingSupported;
 bool initialize(AuroraBackend backend, bool allowCpu);
 void shutdown();
 void release_surface() noexcept;
+bool vsync_enabled() noexcept;
+void set_present_uncapped(bool uncapped) noexcept;
+// Present mode of the live swapchain configuration ("Fifo", "Mailbox", "Immediate", ...).
+const char* present_mode_name() noexcept;
 bool refresh_surface(bool recreate = true);
 void resize_swapchain(uint32_t width, uint32_t height, uint32_t nativeWidth, uint32_t nativeHeight, bool force = false);
 TextureWithSampler create_render_texture(uint32_t width, uint32_t height, bool multisampled);

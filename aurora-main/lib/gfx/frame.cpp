@@ -17,6 +17,7 @@
 #ifdef AURORA_ENABLE_RMLUI
 #include "../rmlui/pipeline.hpp"
 #endif
+#include "../webgpu/dlss.hpp"
 #include "../webgpu/gpu.hpp"
 #include "../webgpu/gpu_prof.hpp"
 
@@ -757,6 +758,7 @@ bool begin_frame() {
   gx::begin_frame_interpolation();
   render_worker::enqueue_begin_frame(frame.frameId, [frameSlot] {
     constexpr wgpu::CommandEncoderDescriptor EncoderDescriptor{.label = "Redraw encoder"};
+    webgpu::dlss::advance_jitter(false); // sub-pixel jitter of this frame's draws (zero unless DLSS is active)
     g_framePackets[frameSlot].encoder = g_device.CreateCommandEncoder(&EncoderDescriptor);
     webgpu::gpu_prof::frame_begin(g_framePackets[frameSlot].encoder);
   });
@@ -786,7 +788,13 @@ void end_frame(EndFrameCallback callback) {
       gx::has_interpolated_frame() && gx::frame_interpolation_replay_safe() ? gx::interpolated_frame_count() : 0;
 
   const size_t stagingSlot = frame.stagingBuffer;
-  render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, interpolationSlots,
+  auto interpolationPlan = gx::current_interpolation_plan();
+  interpolationPlan.slots = interpolationSlots;
+  if (interpolationSlots == 0) {
+    // Replay is unavailable for this frame: show the native frame alone.
+    interpolationPlan.nativeShown = true;
+  }
+  render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, interpolationSlots, interpolationPlan,
                                              callback = std::move(callback)]() mutable {
     auto& packet = g_framePackets[frameSlot];
     g_stagingBuffers[stagingSlot].Unmap();
@@ -798,12 +806,14 @@ void end_frame(EndFrameCallback callback) {
     bool stagingCopied = false;
     const InterpolationReplay replay{
         .slots = interpolationSlots,
+        .plan = interpolationPlan,
         .encode =
             [&packet, &stagingCopied](wgpu::CommandEncoder& cmd, uint32_t slot) {
               if (!stagingCopied) {
                 detail::encode_full_staging_copy(cmd, packet);
                 stagingCopied = true;
               }
+              webgpu::dlss::advance_jitter(true);
               gx::g_interpolationEncodeSlot = static_cast<int>(slot);
               for (const auto& op : packet.ops) {
                 detail::encode_replay_op(cmd, packet, op);

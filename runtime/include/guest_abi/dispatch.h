@@ -46,8 +46,12 @@ namespace PeriodicAlarmService {
 void MaybeServiceAlarms(CpuContext* ctx);
 // One relaxed atomic per bridged call; a real clock read only every 1024th.
 inline void MaybeServicePeriodicAlarms(CpuContext* ctx) {
-    static std::atomic<uint64_t> s_gate{0};
-    if (__builtin_expect((s_gate.fetch_add(1, std::memory_order_relaxed) & 0x3FFu) == 0, 0)) {
+    // Relaxed load+store instead of fetch_add: no `lock xadd` per call. A lost update from a second thread only
+    // shifts when the next (idempotent, deadline-gated) service check happens.
+    static std::atomic<uint32_t> s_gate{0};
+    const uint32_t gate = s_gate.load(std::memory_order_relaxed) + 1u;
+    s_gate.store(gate, std::memory_order_relaxed);
+    if (__builtin_expect((gate & 0x3FFu) == 0, 0)) {
         MaybeServiceAlarms(ctx);
     }
 }

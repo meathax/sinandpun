@@ -4,6 +4,7 @@
 #ifdef AURORA_ENABLE_GX
 #include "imgui.hpp"
 #include "webgpu/gpu.hpp"
+#include "gfx/presentation.hpp"
 #endif
 #include "gamepad.hpp"
 #include "input/router.hpp"
@@ -61,6 +62,8 @@ SDL_Renderer* g_renderer;
 float g_frameBufferScale = 0.f;
 std::atomic_bool g_frameBufferAspectFit = true;
 std::atomic_bool g_forceAspect169{false};
+std::atomic<float> g_upscaleDivisor{1.f};
+std::atomic<bool> g_upscaleLockNative{false}; // DLAA: window-fitted internal size, no resolution multiplier
 std::atomic_bool g_presentSurfaceFill = false;
 int g_presentAspectWidth = 0;
 int g_presentAspectHeight = 0;
@@ -262,7 +265,12 @@ void update_refresh_period() noexcept {
   } else if (mode != nullptr && mode->refresh_rate > 0.f) {
     period = static_cast<uint64_t>(1e9 / mode->refresh_rate);
   }
-  g_refreshPeriodNanos.store(period, std::memory_order_relaxed);
+  if (g_refreshPeriodNanos.exchange(period, std::memory_order_relaxed) != period) {
+#ifdef AURORA_ENABLE_GX
+    // VRR's Auto rule and limiter target follow the display refresh.
+    gfx::presentation::vrr_update();
+#endif
+  }
 }
 
 void resize_swapchain() noexcept {
@@ -718,11 +726,16 @@ AuroraWindowSize get_window_size() {
   int fb_w = native_fb_w;
   int fb_h = native_fb_h;
   const auto [baseW, baseH] = vi::configured_fb_size();
+  // An upscaler renders at the automatic (window-fitted) size divided by its scale factor and ignores the
+  // resolution multiplier; the divided size is applied after the size has been chosen below.
+  const float upscaleDivisor = g_upscaleDivisor.load(std::memory_order_acquire);
+  const bool upscaling = upscaleDivisor > 1.001f || g_upscaleLockNative.load(std::memory_order_acquire);
+  const float frameBufferScale = upscaling ? 0.f : g_frameBufferScale;
   if (g_forceAspect169.load(std::memory_order_acquire) && native_fb_w > 0 && native_fb_h > 0) {
-    if (g_frameBufferScale > 0.f && baseW > 0 && baseH > 0) {
+    if (frameBufferScale > 0.f && baseW > 0 && baseH > 0) {
       const auto [scaledW, scaledH] =
           scale_frame_buffer_to_aspect(static_cast<int>(baseW), static_cast<int>(baseH),
-                                       g_frameBufferScale, 16.f / 9.f);
+                                       frameBufferScale, 16.f / 9.f);
       fb_w = scaledW;
       fb_h = scaledH;
     } else {
@@ -732,8 +745,8 @@ AuroraWindowSize get_window_size() {
                       std::max(1, static_cast<int>(std::lround(native_fb_w * (9.f / 16.f)))));
     }
   } else if (g_frameBufferAspectFit.load(std::memory_order_acquire) && baseW > 0 && baseH > 0) {
-    float renderScale = g_frameBufferScale > 0.f ? g_frameBufferScale : 1.f;
-    if (g_frameBufferScale <= 0.f) {
+    float renderScale = frameBufferScale > 0.f ? frameBufferScale : 1.f;
+    if (frameBufferScale <= 0.f) {
       renderScale = std::min(static_cast<float>(native_fb_w) / static_cast<float>(baseW),
                              static_cast<float>(native_fb_h) / static_cast<float>(baseH));
       if (renderScale < 1.f) {
@@ -742,12 +755,16 @@ AuroraWindowSize get_window_size() {
     }
     fb_w = std::max(1, static_cast<int>(std::lround(static_cast<float>(baseW) * renderScale)));
     fb_h = std::max(1, static_cast<int>(std::lround(static_cast<float>(baseH) * renderScale)));
-  } else if (g_frameBufferScale > 0.f && baseW > 0 && baseH > 0) {
+  } else if (frameBufferScale > 0.f && baseW > 0 && baseH > 0) {
     const auto [scaledW, scaledH] =
-        scale_frame_buffer_to_aspect(static_cast<int>(baseW), static_cast<int>(baseH), g_frameBufferScale,
+        scale_frame_buffer_to_aspect(static_cast<int>(baseW), static_cast<int>(baseH), frameBufferScale,
                                      static_cast<float>(fb_w) / static_cast<float>(fb_h));
     fb_w = scaledW;
     fb_h = scaledH;
+  }
+  if (upscaling) {
+    fb_w = std::max(1, static_cast<int>(std::lround(static_cast<float>(fb_w) / upscaleDivisor)));
+    fb_h = std::max(1, static_cast<int>(std::lround(static_cast<float>(fb_h) / upscaleDivisor)));
   }
 
   const float scale = SDL_GetWindowDisplayScale(g_window);
@@ -853,8 +870,18 @@ void set_display_mode(AuroraDisplayMode mode) {
   } else {
     const SDL_DisplayID display = SDL_GetDisplayForWindow(g_window);
     const SDL_DisplayMode* desktop = display != 0 ? SDL_GetDesktopDisplayMode(display) : nullptr;
-    const uint32_t interpolationFps = aurora_get_frame_interpolation_fps();
-    const float targetHz = interpolationFps > 60 ? static_cast<float>(interpolationFps) : 60.0f;
+    AuroraFrameRateMode rateMode = AURORA_FRAME_RATE_OFF;
+    uint32_t fixedFps = 0;
+    uint32_t capFps = 0;
+    aurora_get_frame_rate(&rateMode, &fixedFps, &capFps);
+    // Fixed targets ask for the closest mode; display/uncapped want the fastest the desktop offers.
+    float targetHz = 60.0f;
+    if (rateMode == AURORA_FRAME_RATE_FIXED && fixedFps > 60) {
+      targetHz = static_cast<float>(fixedFps);
+    } else if ((rateMode == AURORA_FRAME_RATE_DISPLAY || rateMode == AURORA_FRAME_RATE_UNCAPPED) &&
+               desktop != nullptr) {
+      targetHz = desktop->refresh_rate > 60.0f ? desktop->refresh_rate : 60.0f;
+    }
     SDL_DisplayMode closest{};
     if (desktop == nullptr ||
         !SDL_GetClosestFullscreenDisplayMode(display, desktop->w, desktop->h, targetHz, true, &closest)) {
@@ -936,6 +963,17 @@ void set_frame_buffer_scale(float scale) {
     return;
   }
   g_frameBufferScale = scale;
+  request_frame_buffer_resize();
+}
+
+void set_upscale_divisor(float divisor, bool lockNative) {
+  if (!(divisor > 1.f)) {
+    divisor = 1.f;
+  }
+  const bool lockChanged = g_upscaleLockNative.exchange(lockNative, std::memory_order_acq_rel) != lockNative;
+  if (g_upscaleDivisor.exchange(divisor, std::memory_order_acq_rel) == divisor && !lockChanged) {
+    return;
+  }
   request_frame_buffer_resize();
 }
 

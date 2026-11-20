@@ -351,7 +351,215 @@ static void TestArbitration() {
     CHECK(c.active == AimSource::Stick);
 }
 
+// ---- scheme selection ------------------------------------------------------------------------------
+
+static InputMap::DeviceSense Pad(bool input, bool held) {
+    InputMap::DeviceSense s;
+    s.padInput = input;
+    s.padHeld = held;
+    return s;
+}
+static InputMap::DeviceSense Kbm(bool input, bool held) {
+    InputMap::DeviceSense s;
+    s.kbmInput = input;
+    s.kbmHeld = held;
+    return s;
+}
+
+static void TestSchemeModeParsing() {
+    using namespace InputMap;
+    CHECK(ParseSchemeMode("auto", 2, SchemeMode::Pointer) == SchemeMode::Auto);
+    CHECK(ParseSchemeMode(" Classic ", 2, SchemeMode::Auto) == SchemeMode::Classic);
+    CHECK(ParseSchemeMode("pointer", 2, SchemeMode::Auto) == SchemeMode::Pointer);
+    CHECK(ParseSchemeMode("pointer", 1, SchemeMode::Classic) == SchemeMode::Auto);  // old default migrates
+    CHECK(ParseSchemeMode("classic", 1, SchemeMode::Auto) == SchemeMode::Classic);  // deliberate opt-in kept
+    CHECK(ParseSchemeMode("bogus", 2, SchemeMode::Classic) == SchemeMode::Classic);
+    for (size_t i = 0; i < kSchemeModeKeys.size(); ++i) {  // round trip
+        const SchemeMode m = static_cast<SchemeMode>(i);
+        CHECK(ParseSchemeMode(SchemeModeKey(m), kSchemeSchemaVersion, SchemeMode::Auto) == m);
+    }
+    CHECK(kSchemeModeLabels.size() == kSchemeModeKeys.size());
+    CHECK(EffectiveScheme(SchemeMode::Classic, SchemeArbiter{}) == Scheme::Classic);
+    SchemeArbiter a;
+    a.device = ActiveDevice::Gamepad;
+    CHECK(EffectiveScheme(SchemeMode::Auto, a) == Scheme::Classic);
+    CHECK(EffectiveScheme(SchemeMode::Pointer, a) == Scheme::Pointer);
+}
+
+static void TestSense() {
+    using namespace InputMap;
+    const SenseConfig cfg;
+    std::bitset<512> bound;
+    bound[26] = true;  // W
+    RawSample prev, cur;
+    // Stick noise below the threshold is ignored; a deliberate push counts and is "held".
+    cur.padAxes[2] = 0.2f;
+    CHECK(!Sense(prev, cur, 0.f, bound, cfg).padInput);
+    cur.padAxes[2] = 0.7f;
+    DeviceSense s = Sense(prev, cur, 0.f, bound, cfg);
+    CHECK(s.padInput && s.padHeld && !s.kbmInput);
+    // Trigger.
+    cur = RawSample{};
+    cur.padAxes[5] = 0.9f;
+    CHECK(Sense(prev, cur, 0.f, bound, cfg).padInput);
+    // Button edge versus steady hold.
+    cur = RawSample{};
+    cur.padButtons[0] = true;
+    CHECK(Sense(prev, cur, 0.f, bound, cfg).padInput);
+    prev = cur;
+    s = Sense(prev, cur, 0.f, bound, cfg);
+    CHECK(!s.padInput && s.padHeld);
+    // Keys: only bound keys count.
+    prev = cur = RawSample{};
+    cur.keys[27] = true;  // X, unbound
+    CHECK(!Sense(prev, cur, 0.f, bound, cfg).kbmInput);
+    cur.keys[26] = true;
+    s = Sense(prev, cur, 0.f, bound, cfg);
+    CHECK(s.kbmInput && s.kbmHeld);
+    // Mouse: tiny jitter ignored, real motion, buttons and wheel count.
+    prev = cur = RawSample{};
+    CHECK(!Sense(prev, cur, 1.f, bound, cfg).kbmInput);
+    CHECK(Sense(prev, cur, 12.f, bound, cfg).kbmInput);
+    cur.mouseButtons = 1;
+    s = Sense(prev, cur, 0.f, bound, cfg);
+    CHECK(s.kbmInput && s.kbmHeld);
+    cur = RawSample{};
+    cur.wheelDown = true;
+    CHECK(Sense(prev, cur, 0.f, bound, cfg).kbmInput);
+}
+
+static void TestSchemeArbitration() {
+    using namespace InputMap;
+    const SchemeMode kAuto = SchemeMode::Auto;
+    SchemeArbiter a;
+    int64_t t = 10000;
+    // First ever input is accepted immediately.
+    SchemeUpdate u = UpdateScheme(a, kAuto, Pad(true, true), t);
+    CHECK(u.deviceChanged && u.schemeChanged && a.scheme == Scheme::Classic && a.device == ActiveDevice::Gamepad);
+    // Pad idle, dwell passed, mouse moves: switch.
+    t += 600;
+    u = UpdateScheme(a, kAuto, Kbm(true, false), t);
+    CHECK(u.deviceChanged && a.scheme == Scheme::Pointer);
+    // Immediately back with the pad: dwell blocks it.
+    t += 100;
+    u = UpdateScheme(a, kAuto, Pad(true, true), t);
+    CHECK(!u.deviceChanged && a.scheme == Scheme::Pointer);
+    // After the dwell it switches.
+    t += 400;
+    u = UpdateScheme(a, kAuto, Pad(true, true), t);
+    CHECK(u.deviceChanged && a.scheme == Scheme::Classic);
+    // Never switch while the current device still holds something.
+    t += 1000;
+    DeviceSense mix = Kbm(true, false);
+    mix.padHeld = true;
+    u = UpdateScheme(a, kAuto, mix, t);
+    CHECK(!u.deviceChanged && a.scheme == Scheme::Classic);
+    // Both devices active in one poll: nothing changes.
+    DeviceSense both = Pad(true, false);
+    both.kbmInput = true;
+    u = UpdateScheme(a, kAuto, both, t + 1000);
+    CHECK(!u.deviceChanged);
+    // Held pointer-side key blocks a pad takeover.
+    SchemeArbiter b;
+    UpdateScheme(b, kAuto, Kbm(true, true), 0);
+    DeviceSense padWhileKey = Pad(true, true);
+    padWhileKey.kbmHeld = true;
+    CHECK(!UpdateScheme(b, kAuto, padWhileKey, 5000).deviceChanged && b.scheme == Scheme::Pointer);
+    CHECK(UpdateScheme(b, kAuto, Pad(true, true), 5100).deviceChanged && b.scheme == Scheme::Classic);
+    // Idle polls never change anything.
+    SchemeArbiter c;
+    SeedScheme(c, kAuto, ActiveDevice::Gamepad);
+    CHECK(c.scheme == Scheme::Classic);
+    for (int i = 0; i < 100; ++i) CHECK(!UpdateScheme(c, kAuto, DeviceSense{}, 20000 + i * 16).deviceChanged);
+    // Pinned modes keep the scheme but track the device.
+    SchemeArbiter d;
+    SeedScheme(d, SchemeMode::Pointer, ActiveDevice::None);
+    u = UpdateScheme(d, SchemeMode::Pointer, Pad(true, true), 0);
+    CHECK(u.deviceChanged && !u.schemeChanged && d.scheme == Scheme::Pointer && d.device == ActiveDevice::Gamepad);
+    u = UpdateScheme(d, SchemeMode::Classic, DeviceSense{}, 10);
+    CHECK(u.schemeChanged && d.scheme == Scheme::Classic);  // changing the setting applies live
+    u = UpdateScheme(d, kAuto, DeviceSense{}, 20);
+    CHECK(!u.schemeChanged && d.scheme == Scheme::Classic);  // back to auto: device (pad) says classic
+    // Change of the setting from pinned classic to pinned pointer with the pad as last device.
+    u = UpdateScheme(d, SchemeMode::Pointer, DeviceSense{}, 30);
+    CHECK(u.schemeChanged && d.scheme == Scheme::Pointer);
+}
+
+static void TestPadConditioning() {
+    using namespace InputMap;
+    CHECK(Near(ConditionTrigger(0.f, 0.5f), 0.f));
+    CHECK(Near(ConditionTrigger(0.49f, 0.5f), 0.f));
+    CHECK(Near(ConditionTrigger(0.5f, 0.5f), 0.5f));
+    CHECK(Near(ConditionTrigger(1.f, 0.5f), 1.f));
+    CHECK(Near(ConditionTrigger(0.2f, 0.2f), 0.5f));  // lighter threshold still presses at 0.5
+    float previous = 0.f;
+    for (int i = 0; i <= 100; ++i) {
+        const float v = ConditionTrigger(i / 100.f, 0.3f);
+        CHECK(v + 1e-6f >= previous);
+        previous = v;
+    }
+    RawSample raw;
+    raw.padAxes[0] = 0.45f;
+    raw.padAxes[1] = -0.45f;
+    PadConditioning c;
+    c.leftSaturation = 0.9f;
+    c.invertMoveY = true;
+    ConditionPad(raw, c);
+    CHECK(Near(raw.padAxes[0], 0.5f));
+    CHECK(Near(raw.padAxes[1], 0.5f));  // -0.45/0.9 inverted
+    raw.padAxes[0] = 1.f;
+    raw.padAxes[1] = 1.f;
+    c = PadConditioning{};
+    c.leftSaturation = 0.5f;
+    ConditionPad(raw, c);
+    CHECK(std::sqrt(raw.padAxes[0] * raw.padAxes[0] + raw.padAxes[1] * raw.padAxes[1]) <= 1.0001f);
+}
+
+static void TestRanges() {
+    Config c;
+    c.leftSaturation = 9.f;
+    c.triggerThreshold = -3.f;
+    c.leftDeadzone = std::nanf("");
+    Sanitize(c);
+    CHECK(c.leftSaturation == 1.f && c.triggerThreshold == 0.1f && std::isfinite(c.leftDeadzone));
+    c.leftSaturation = 0.f;
+    c.triggerThreshold = 5.f;
+    Sanitize(c);
+    CHECK(c.leftSaturation == 0.5f && c.triggerThreshold == 0.9f);
+}
+
+static void TestDefaultBindings() {
+    using namespace InputMap;
+    // Every default binding string of the real table must parse; mirrored here to stay free of aim_settings.h.
+    struct D { const char* pad; const char* kbm; };
+    static const D defaults[] = {
+        {"pad:right_shoulder", "key:J | mouse:left"}, {"pad:right_trigger", "key:K | mouse:right"},
+        {"pad:left_shoulder", "key:Space | mouse:x1 | mouse:wheel_up"},
+        {"pad:left_trigger", "key:Left Shift | mouse:x2 | mouse:wheel_down"},
+        {"pad:east", "key:Return"}, {"pad:south", "key:Backspace"}, {"pad:start", "key:P"}, {"pad:back", "key:Tab"},
+        {"pad:guide", "key:Home"}, {"pad:north", "key:Q"}, {"pad:west", "key:E"},
+        {"pad:left_stick_left", "key:A"}, {"pad:left_stick_right", "key:D"}, {"pad:left_stick_up", "key:W"},
+        {"pad:left_stick_down", "key:S"}, {"pad:right_stick_left", "key:Left"}, {"pad:right_stick_right", "key:Right"},
+    };
+    std::array<Slots, std::size(defaults)> pad{}, kbm{};
+    for (size_t i = 0; i < std::size(defaults); ++i) {
+        pad[i] = ParseList(defaults[i].pad, Profile::Gamepad);
+        kbm[i] = ParseList(defaults[i].kbm, Profile::KeyboardMouse);
+        CHECK(pad[i][0].Valid());
+        CHECK(kbm[i][0].Valid());
+        CHECK(FormatList(pad[i]) == defaults[i].pad);
+    }
+    CHECK(CountConflicts(pad) == 0);
+    CHECK(CountConflicts(kbm) == 0);
+}
+
 int main() {
+    TestSchemeModeParsing();
+    TestSense();
+    TestSchemeArbitration();
+    TestPadConditioning();
+    TestRanges();
+    TestDefaultBindings();
     TestCurves();
     TestDeadzoneEdges();
     TestContinuity();

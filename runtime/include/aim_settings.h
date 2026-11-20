@@ -2,7 +2,9 @@
 
 // Controls state shared between the F10 settings menu and the virtual Wii Remote: aiming tunables, the
 // controller scheme, mouse options and the per-profile action bindings. Persisted to Config.toml:
-//   [input]                version = 1, scheme = "classic" | "pointer"
+//   [input]                version = 2, scheme = "auto" | "classic" | "pointer", switch_toast = true
+//                          (auto: the device used last picks the scheme live; files written before version 2
+//                          with scheme = "pointer" - the old default - are read as "auto")
 //   [input.gamepad]        <action> = "pad:south | pad:right_trigger"        (up to 3 bindings)
 //   [input.keyboard_mouse] <action> = "key:Space | mouse:x1 | mouse:wheel_up"
 //   [aim]                  right-stick / pointer tunables (see Save())
@@ -26,7 +28,7 @@
 
 namespace AimSettings {
 
-inline constexpr int kSchemaVersion = 1;
+inline constexpr int kSchemaVersion = InputMap::kSchemeSchemaVersion;
 
 // Action names follow Sin & Punishment: Star Successor (manual + StrategyWiki control tables). The Classic
 // Controller / Wii Remote+Nunchuk wire mapping is in virtual_remote.cpp.
@@ -105,7 +107,8 @@ inline constexpr std::array<ActionInfo, kActionCount> kActions = {{
      "key:R | mouse:middle"},
 }};
 
-enum class Scheme : uint8_t { Classic, Pointer };
+using Scheme = InputMap::Scheme;
+using SchemeMode = InputMap::SchemeMode;
 inline constexpr std::array<const char*, 2> kSchemeKeys = {"classic", "pointer"};
 inline constexpr std::array<const char*, 2> kSchemeLabels = {"Classic Controller (right stick aims)",
                                                               "Wii Remote + Nunchuk (pointer)"};
@@ -121,7 +124,12 @@ struct MouseConfig {
 };
 
 struct Settings {
-    Scheme scheme = Scheme::Pointer;  // Pointer is the verified path; Classic is opt-in (see docs/STATUS.md)
+    SchemeMode schemeMode = SchemeMode::Auto;
+    // Scheme the virtual remote starts with: the pinned scheme, or Pointer (the verified path) in Auto until the
+    // first input decides. The input service keeps it equal to the scheme in effect so a remote created late
+    // starts right; live changes go through VirtualRemote::SetScheme.
+    Scheme scheme = Scheme::Pointer;
+    bool switchToast = true;          // brief on-screen note when the scheme switches automatically
     DualAnalog::Config aim;
     MouseConfig mouse;
     InputMap::Table<kActionCount> bindings;
@@ -136,6 +144,8 @@ inline Settings DefaultBindings(Settings s = {}) {
 }
 
 inline void Sanitize(Settings& s) {
+    if (s.schemeMode == SchemeMode::Classic) s.scheme = Scheme::Classic;
+    else if (s.schemeMode == SchemeMode::Pointer) s.scheme = Scheme::Pointer;
     DualAnalog::Sanitize(s.aim);
     MouseConfig& m = s.mouse;
     auto fin = [](float v, float d) { return std::isfinite(v) ? v : d; };
@@ -199,9 +209,12 @@ inline void LoadFromConfig(Settings& s) {
     auto flag = [&](const char* section, const char* key, bool& out) {
         if (const auto v = FindValue<bool>(d, section, key)) out = *v;
     };
+    int schemaVersion = 1;
+    if (const auto v = FindValue<int64_t>(d, "input", "version")) schemaVersion = static_cast<int>(*v);
     if (const auto v = FindValue<std::string>(d, "input", "scheme")) {
-        s.scheme = static_cast<Scheme>(KeyIndex(kSchemeKeys, *v, static_cast<size_t>(s.scheme)));
+        s.schemeMode = InputMap::ParseSchemeMode(*v, schemaVersion, s.schemeMode);
     }
+    flag("input", "switch_toast", s.switchToast);
     if (const auto v = FindValue<std::string>(d, "aim", "deadzone_mode")) {
         c.deadzoneMode = static_cast<DualAnalog::DeadzoneMode>(
             KeyIndex(DualAnalog::kDeadzoneModeKeys, *v, static_cast<size_t>(c.deadzoneMode)));
@@ -229,6 +242,9 @@ inline void LoadFromConfig(Settings& s) {
     flag("aim", "recenter_on_release", c.recenterOnRelease);
     if (const auto v = FindNumber(d, "aim", "recenter_ms")) c.recenterSeconds = *v * 0.001f;
     num("left_deadzone", c.leftDeadzone);
+    num("left_saturation", c.leftSaturation);
+    num("trigger_threshold", c.triggerThreshold);
+    flag("aim", "invert_move_y", c.invertMoveY);
 
     MouseConfig& m = s.mouse;
     flag("mouse", "enabled", m.enabled);
@@ -283,6 +299,15 @@ inline void Set(Settings settings) {
     state.generation.fetch_add(1, std::memory_order_release);
 }
 
+// Called by the input service when the scheme in effect changes; no generation bump (nothing to re-read) and
+// never persisted. Only meaningful in Auto: pinned modes are re-synced by Sanitize.
+inline void SetEffectiveScheme(Scheme scheme) {
+    Get();
+    detail::State& state = detail::Shared();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.settings.scheme = scheme;
+}
+
 inline void ResetAimToDefaults() {
     Settings s = Get();
     s.aim = DualAnalog::Config{};
@@ -317,7 +342,8 @@ inline bool Save() {
     auto str = [](const char* v) { return RuntimeConfigFile::FormatString(v); };
     auto boolean = [](bool v) { return std::string(v ? "true" : "false"); };
     put("input", "version", std::to_string(kSchemaVersion));
-    put("input", "scheme", str(kSchemeKeys[static_cast<size_t>(s.scheme)]));
+    put("input", "scheme", str(InputMap::kSchemeModeKeys[static_cast<size_t>(s.schemeMode)]));
+    put("input", "switch_toast", boolean(s.switchToast));
     put("aim", "deadzone_mode", str(DualAnalog::kDeadzoneModeKeys[static_cast<size_t>(c.deadzoneMode)]));
     put("aim", "right_deadzone", Float(c.radialDeadzone));
     put("aim", "right_saturation", Float(c.outerSaturation));
@@ -339,6 +365,9 @@ inline bool Save() {
     put("aim", "recenter_on_release", boolean(c.recenterOnRelease));
     put("aim", "recenter_ms", Float(c.recenterSeconds * 1000.0f));
     put("aim", "left_deadzone", Float(c.leftDeadzone));
+    put("aim", "left_saturation", Float(c.leftSaturation));
+    put("aim", "invert_move_y", boolean(c.invertMoveY));
+    put("aim", "trigger_threshold", Float(c.triggerThreshold));
     put("mouse", "enabled", boolean(m.enabled));
     put("mouse", "raw", boolean(m.raw));
     put("mouse", "sensitivity", Float(m.sensitivity));

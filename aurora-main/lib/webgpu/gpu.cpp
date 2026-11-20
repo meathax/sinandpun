@@ -20,10 +20,12 @@
 
 #include "../gx/gx.hpp"
 #include "../gfx/frame.hpp"
+#include "../gfx/presentation.hpp"
 #include "../gfx/recording.hpp"
 #include "../gfx/render_worker.hpp"
 #include "../internal.hpp"
 #include "../window.hpp"
+#include "dlss.hpp"
 #include "gpu_prof.hpp"
 
 #ifdef WEBGPU_DAWN
@@ -69,6 +71,8 @@ bool g_astcTexturesSupported = false;
 bool g_textureComponentSwizzleSupported = false;
 static std::atomic_bool g_initialized = false;
 static std::atomic_bool g_vsyncEnabled = true;
+// "Uncapped" frame rate: present through a non-blocking mode even when VSync is configured.
+static std::atomic_bool g_presentUncapped = false;
 
 namespace {
 
@@ -230,7 +234,35 @@ uint32_t viewport_extent(float value) noexcept {
 
 } // namespace
 
-bool vsync_enabled() noexcept { return g_vsyncEnabled.load(std::memory_order_acquire); }
+bool vsync_enabled() noexcept {
+  // VRR presents through the tearing-allowed mode and bypasses VSync entirely.
+  return g_vsyncEnabled.load(std::memory_order_acquire) && !g_presentUncapped.load(std::memory_order_acquire) &&
+         !gfx::presentation::vrr_wanted();
+}
+
+void set_present_uncapped(bool uncapped) noexcept {
+  if (g_presentUncapped.exchange(uncapped, std::memory_order_acq_rel) != uncapped) {
+    // The present mode depends on it; rebuild the swapchain at the next frame boundary.
+    window::push_custom_event(window::CustomEvent::RefreshSurface);
+  }
+  // The frame-rate mode also feeds VRR's Auto rule and the limiter target.
+  gfx::presentation::vrr_update();
+}
+
+const char* present_mode_name() noexcept {
+  switch (g_graphicsConfig.surfaceConfiguration.presentMode) {
+  case wgpu::PresentMode::Fifo:
+    return "Fifo";
+  case wgpu::PresentMode::FifoRelaxed:
+    return "FifoRelaxed";
+  case wgpu::PresentMode::Immediate:
+    return "Immediate";
+  case wgpu::PresentMode::Mailbox:
+    return "Mailbox";
+  default:
+    return "Unknown";
+  }
+}
 
 wgpu::PresentMode select_present_mode(const wgpu::SurfaceCapabilities& capabilities) noexcept {
   const auto supports = [&capabilities](const wgpu::PresentMode candidate) {
@@ -241,6 +273,16 @@ wgpu::PresentMode select_present_mode(const wgpu::SurfaceCapabilities& capabilit
     }
     return false;
   };
+  // VRR (G-SYNC / FreeSync) needs presents that are not tied to a vblank. On D3D12 Immediate is the
+  // only mode that creates the swapchain with ALLOW_TEARING and presents with DXGI_PRESENT_ALLOW_TEARING
+  // (Mailbox is Present(0, 0) on a 3-buffer flip swapchain: no tearing, so the display stays fixed rate).
+  const bool immediateSupported = supports(wgpu::PresentMode::Immediate);
+  gfx::presentation::vrr_set_surface_caps(immediateSupported, g_backendType == wgpu::BackendType::D3D12);
+  if (immediateSupported && gfx::presentation::vrr_wanted()) {
+    gfx::presentation::vrr_note_applied(true);
+    return wgpu::PresentMode::Immediate;
+  }
+  gfx::presentation::vrr_note_applied(false);
   if (vsync_enabled()) {
     return wgpu::PresentMode::Fifo;
   }
@@ -986,6 +1028,14 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
       requiredFeatures.push_back(wgpu::FeatureName::SharedFenceMTLSharedEvent);
     }
 
+    // Optional D3D12 resource sharing for NVIDIA DLSS (docs/DLSS-NOTES.md): DLSS runs on a second D3D12 device and its
+    // textures/fences are shared with Dawn. Devices without the pair keep the normal renderer.
+    if (backend == wgpu::BackendType::D3D12 && g_adapter.HasFeature(wgpu::FeatureName::SharedTextureMemoryDXGISharedHandle) &&
+        g_adapter.HasFeature(wgpu::FeatureName::SharedFenceDXGISharedHandle)) {
+      requiredFeatures.push_back(wgpu::FeatureName::SharedTextureMemoryDXGISharedHandle);
+      requiredFeatures.push_back(wgpu::FeatureName::SharedFenceDXGISharedHandle);
+    }
+
     g_hasCoreFeatures = false;
     g_bcTexturesSupported = false;
     g_astcTexturesSupported = false;
@@ -1011,11 +1061,15 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
         }
         requiredFeatures.push_back(feature);
       }
-#ifdef TRACY_ENABLE
       if (feature == wgpu::FeatureName::TimestampQuery) {
-        requiredFeatures.push_back(feature);
-      }
+#ifndef TRACY_ENABLE
+        // SIN_GPU_PROF=1 logs per-pass GPU times (gpu_prof.cpp) without Tracy.
+        if (const char* prof = std::getenv("SIN_GPU_PROF"); prof != nullptr && *prof != '\0' && *prof != '0')
 #endif
+        {
+          requiredFeatures.push_back(feature);
+        }
+      }
     }
     std::string featureList;
     for (auto featureName : requiredFeatures) {
@@ -1111,6 +1165,10 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     g_device.SetLoggingCallback(wgpu_log);
   }
   g_queue = g_device.GetQueue();
+  dlss::start(g_device, g_adapterInfo, g_backendType,
+              g_device.HasFeature(wgpu::FeatureName::SharedTextureMemoryDXGISharedHandle) &&
+                  g_device.HasFeature(wgpu::FeatureName::SharedFenceDXGISharedHandle),
+              {});
 
   const wgpu::Status status = g_surface.GetCapabilities(g_adapter, &g_surfaceCapabilities);
   if (status != wgpu::Status::Success) {
@@ -1155,6 +1213,7 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
 void shutdown() {
   g_initialized = false;
   gfx::gpu_synchronize();
+  dlss::shutdown();
   gpu_prof::shutdown();
   g_CopyBindGroupLayout = {};
   g_CopyPipeline = {};

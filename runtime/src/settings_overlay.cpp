@@ -96,16 +96,49 @@ int g_audioVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::Audio
 bool g_audioMuted = RuntimeConfigFile::AudioMuted(false);
 int32_t g_muteHotkey = RuntimeConfigFile::MuteHotkey(SDL_SCANCODE_BACKSLASH);
 bool g_audioMixWorker = RuntimeConfigFile::AudioMixWorkerEnabled(true);
-int g_frameInterpolationMode = [] {
-    switch (RuntimeConfigFile::FrameInterpolationFps(0)) {
-    case 120:
-        return 1;
-    case 180:
-        return 2;
-    default:
-        return 0;
+// Presentation rate choices. The game itself always runs at 60 Hz; these only change how many frames
+// are shown per game frame (see aurora_set_frame_rate).
+struct FrameRateItem {
+    const char* label;
+    RuntimeConfigFile::FrameRateKind kind;
+    uint32_t fps;
+};
+constexpr std::array<FrameRateItem, 9> kFrameRates = {{
+    {"Original (60)", RuntimeConfigFile::FrameRateKind::Original, 0},
+    {"Match display", RuntimeConfigFile::FrameRateKind::Display, 0},
+    {"90 FPS", RuntimeConfigFile::FrameRateKind::Fixed, 90},
+    {"120 FPS", RuntimeConfigFile::FrameRateKind::Fixed, 120},
+    {"144 FPS", RuntimeConfigFile::FrameRateKind::Fixed, 144},
+    {"165 FPS", RuntimeConfigFile::FrameRateKind::Fixed, 165},
+    {"180 FPS", RuntimeConfigFile::FrameRateKind::Fixed, 180},
+    {"240 FPS", RuntimeConfigFile::FrameRateKind::Fixed, 240},
+    {"Uncapped", RuntimeConfigFile::FrameRateKind::Uncapped, 0},
+}};
+constexpr std::array<uint32_t, 4> kFrameRateCaps{240, 360, 500, 1000};
+
+// A saved value with no row of its own (a hand-edited 200, say) lands on the nearest fixed row.
+int FrameRateIndex(const RuntimeConfigFile::FrameRateSetting& setting) {
+    int best = 0;
+    uint32_t bestDistance = UINT32_MAX;
+    for (size_t i = 0; i < kFrameRates.size(); ++i) {
+        const FrameRateItem& item = kFrameRates[i];
+        if (item.kind != setting.kind) {
+            continue;
+        }
+        if (item.kind != RuntimeConfigFile::FrameRateKind::Fixed) {
+            return static_cast<int>(i);
+        }
+        const uint32_t distance = item.fps > setting.fps ? item.fps - setting.fps : setting.fps - item.fps;
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = static_cast<int>(i);
+        }
     }
-}();
+    return best;
+}
+
+int g_frameInterpolationMode = FrameRateIndex(RuntimeConfigFile::FrameRate());
+uint32_t g_frameRateCap = RuntimeConfigFile::FrameRateCap(RuntimeConfigFile::kFrameRateHardCap);
 int g_displayMode = [] {
     const std::string mode = RuntimeConfigFile::DisplayMode("windowed");
     if (mode == "borderless") {
@@ -118,6 +151,21 @@ int g_displayMode = [] {
 }();
 bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
 bool g_vsync = RuntimeConfigFile::Vsync();
+// Variable refresh rate (G-SYNC / FreeSync). Live settings; none of them can lose the picture, so they
+// bypass the keep/revert countdown. Mode index order matches AuroraVrrMode (auto, on, off).
+int g_vrrMode = [] {
+    const std::string mode = RuntimeConfigFile::Vrr();
+    return mode == "on" ? static_cast<int>(AURORA_VRR_ON)
+                        : (mode == "off" ? static_cast<int>(AURORA_VRR_OFF) : static_cast<int>(AURORA_VRR_AUTO));
+}();
+float g_vrrMargin = static_cast<float>(RuntimeConfigFile::VrrMarginFps(3));
+bool g_vrrLimiter = RuntimeConfigFile::VrrLimiter(true);
+constexpr std::array<const char*, 3> kVrrConfigNames = {"auto", "on", "off"};
+
+void ApplyVrr() {
+    aurora_set_vrr(static_cast<AuroraVrrMode>(g_vrrMode), static_cast<uint32_t>(std::lround(g_vrrMargin)),
+                   g_vrrLimiter);
+}
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(true);
 bool g_forceAspect = RuntimeConfigFile::ForceAspectEnabled();
@@ -164,14 +212,34 @@ constexpr std::array<ResolutionItem, 8> kResolutions = {{
     {"3x", 3.0f}, {"4x", 4.0f}, {"6x", 6.0f}, {"8x", 8.0f},
 }};
 
-constexpr std::array<uint32_t, 3> kFrameInterpolationTargetFps{0, 120, 180};
-
 bool IsHighResolutionScale(float scale) {
     return std::fabs(scale - 6.0f) < 0.001f || std::fabs(scale - 8.0f) < 0.001f;
 }
 
+bool IsHighFrameRateIndex(int index) {
+    return kFrameRates[static_cast<size_t>(index)].kind != RuntimeConfigFile::FrameRateKind::Original;
+}
+
 bool IsHighFrameRateMode() {
-    return kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)] > 60;
+    return IsHighFrameRateIndex(g_frameInterpolationMode);
+}
+
+AuroraFrameRateMode AuroraModeFor(RuntimeConfigFile::FrameRateKind kind) {
+    switch (kind) {
+    case RuntimeConfigFile::FrameRateKind::Display:
+        return AURORA_FRAME_RATE_DISPLAY;
+    case RuntimeConfigFile::FrameRateKind::Fixed:
+        return AURORA_FRAME_RATE_FIXED;
+    case RuntimeConfigFile::FrameRateKind::Uncapped:
+        return AURORA_FRAME_RATE_UNCAPPED;
+    default:
+        return AURORA_FRAME_RATE_OFF;
+    }
+}
+
+void ApplyFrameRate(int index) {
+    const FrameRateItem& item = kFrameRates[static_cast<size_t>(index)];
+    aurora_set_frame_rate(AuroraModeFor(item.kind), item.fps, g_frameRateCap);
 }
 
 void SetResolutionScale(float scale) {
@@ -185,6 +253,90 @@ void LimitResolutionForFrameRate() {
     if (IsHighFrameRateMode() && IsHighResolutionScale(g_resolutionScale)) {
         SetResolutionScale(4.0f);
     }
+}
+
+// ---- upscaler (video.upscaler / fsr_quality / fsr_sharpness; docs/FSR-NOTES.md) -------------------------
+// One selector for every upscaler. Index 0 = off, 1 = FSR 1 (spatial); further upscalers (DLSS, FSR 3) append
+// a label and a config name here and a branch in ApplyUpscaler().
+constexpr std::array<const char*, 3> kUpscalerLabels = {"Off", "FSR 1 (spatial)", "NVIDIA DLSS"};
+constexpr std::array<const char*, 3> kUpscalerConfigNames = {"off", "fsr1", "dlss"};
+constexpr int kUpscalerFsr1 = 1;
+constexpr int kUpscalerDlss = 2;
+// Same order as RuntimeConfigFile::kDlssModes (docs/DLSS-NOTES.md).
+constexpr std::array<const char*, RuntimeConfigFile::kDlssModes.size()> kDlssModeLabels = {
+    "Ultra Performance (33%)", "Performance (50%)", "Balanced (58%)", "Quality (67%)", "DLAA (100%, anti-aliasing)"};
+constexpr std::array<const char*, RuntimeConfigFile::kFsrQualities.size()> kFsrQualityLabels = {
+    "Native (1.0x, off)", "Ultra Quality (1.3x)", "Quality (1.5x)", "Balanced (1.7x)", "Performance (2.0x)",
+    "Ultra Performance (3.0x)"};
+constexpr int kDefaultFsrQualityIndex = 2;
+
+int UpscalerIndexFromConfig() {
+    const std::string name = RuntimeConfigFile::Upscaler("off");
+    for (size_t i = 0; i < kUpscalerConfigNames.size(); ++i) {
+        if (name == kUpscalerConfigNames[i]) return static_cast<int>(i);
+    }
+    // fsr3 has no temporal backend yet: it runs the spatial path at the same scale (docs/FSR-NOTES.md).
+    return name == "fsr3" ? kUpscalerFsr1 : 0;
+}
+
+int FsrQualityIndexFromConfig() {
+    const std::string name = RuntimeConfigFile::FsrQuality("quality");
+    for (size_t i = 0; i < RuntimeConfigFile::kFsrQualities.size(); ++i) {
+        if (name == RuntimeConfigFile::kFsrQualities[i].name) return static_cast<int>(i);
+    }
+    return kDefaultFsrQualityIndex;
+}
+
+int g_upscaler = UpscalerIndexFromConfig();
+int g_fsrQuality = FsrQualityIndexFromConfig();
+float g_fsrSharpness = static_cast<float>(RuntimeConfigFile::FsrSharpness());
+int g_dlssMode = static_cast<int>(RuntimeConfigFile::DlssModeIndex(RuntimeConfigFile::DlssMode()));
+float g_dlssSharpness = static_cast<float>(RuntimeConfigFile::DlssSharpness());
+bool g_dlssMotion = RuntimeConfigFile::DlssMotionVectors(false);
+
+bool UpscalerActive() {
+    return (g_upscaler == kUpscalerFsr1 && g_fsrQuality > 0) || g_upscaler == kUpscalerDlss;
+}
+
+// Live apply: the scale factor changes the internal render size, which aurora re-evaluates at the next frame.
+void ApplyUpscaler() {
+    GX_SYNC_INLINE();
+    const bool fsr = g_upscaler == kUpscalerFsr1;
+    const bool dlss = g_upscaler == kUpscalerDlss;
+    float factor = fsr ? RuntimeConfigFile::kFsrQualities[static_cast<size_t>(g_fsrQuality)].factor : 1.0f;
+    float sharpness = g_fsrSharpness;
+    if (dlss) {
+        // DLSS replaces the FSR 1 path once it is available; until then (or when it is not) aurora runs FSR 1 at the same scale.
+        factor = RuntimeConfigFile::kDlssModes[static_cast<size_t>(g_dlssMode)].factor;
+        sharpness = g_dlssSharpness;
+    }
+    aurora_set_dlss_motion_vectors(g_dlssMotion);
+    aurora_set_upscaler(dlss ? AURORA_UPSCALER_DLSS : (fsr ? AURORA_UPSCALER_FSR1 : AURORA_UPSCALER_OFF), factor,
+                        sharpness / 100.0f);
+}
+
+void PersistUpscaler() {
+    RuntimeConfigFile::SetUpscaler(kUpscalerConfigNames[static_cast<size_t>(g_upscaler)]);
+    RuntimeConfigFile::SetFsrQuality(RuntimeConfigFile::kFsrQualities[static_cast<size_t>(g_fsrQuality)].name);
+    RuntimeConfigFile::SetFsrSharpness(static_cast<uint32_t>(std::lround(g_fsrSharpness)));
+    RuntimeConfigFile::SetDlssMode(RuntimeConfigFile::kDlssModes[static_cast<size_t>(g_dlssMode)].name);
+    RuntimeConfigFile::SetDlssSharpness(static_cast<uint32_t>(std::lround(g_dlssSharpness)));
+    RuntimeConfigFile::SetDlssMotionVectors(g_dlssMotion);
+}
+
+void ResetUpscaler() {
+    g_upscaler = 0;
+    g_fsrQuality = kDefaultFsrQualityIndex;
+    g_fsrSharpness = static_cast<float>(RuntimeConfigFile::kDefaultFsrSharpness);
+    g_dlssMode = static_cast<int>(RuntimeConfigFile::kDefaultDlssModeIndex);
+    g_dlssSharpness = static_cast<float>(RuntimeConfigFile::kDefaultDlssSharpness);
+    g_dlssMotion = false;
+    ApplyUpscaler();
+    PersistUpscaler();
+}
+
+std::string ResolutionText(uint32_t width, uint32_t height) {
+    return std::to_string(width) + "x" + std::to_string(height);
 }
 
 // Options launched from the menu that need a fresh process, captured when the menu first looks at them.
@@ -235,7 +387,7 @@ Clock::time_point g_revertDeadline{};
 constexpr auto kRevertTime = std::chrono::seconds(10);
 
 DisplayState NormalizeDisplay(DisplayState s) {
-    if (kFrameInterpolationTargetFps[static_cast<size_t>(s.interpolation)] > 60 && IsHighResolutionScale(s.resolution)) {
+    if (IsHighFrameRateIndex(s.interpolation) && IsHighResolutionScale(s.resolution)) {
         s.resolution = 4.0f;
     }
     return s;
@@ -247,7 +399,7 @@ void ApplyDisplay(const DisplayState& next) {
     }
     if (next.interpolation != g_applied.interpolation) {
         GX_SYNC_INLINE();
-        aurora_set_frame_interpolation_fps(kFrameInterpolationTargetFps[static_cast<size_t>(next.interpolation)]);
+        ApplyFrameRate(next.interpolation);
         if (aurora_get_display_mode() == AURORA_DISPLAY_MODE_EXCLUSIVE) {
             // Re-apply exclusive mode so the display refresh tracks the new target.
             aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
@@ -275,7 +427,8 @@ void ApplyDisplay(const DisplayState& next) {
 void PersistDisplay(const DisplayState& s) {
     RuntimeConfigFile::SetDisplayMode(std::string(kDisplayModeConfigNames[static_cast<size_t>(s.mode)]));
     RuntimeConfigFile::SetResolutionMultiplier(s.resolution);
-    RuntimeConfigFile::SetFrameInterpolationFps(kFrameInterpolationTargetFps[static_cast<size_t>(s.interpolation)]);
+    const FrameRateItem& rate = kFrameRates[static_cast<size_t>(s.interpolation)];
+    RuntimeConfigFile::SetFrameRate({rate.kind, rate.fps});
     RuntimeConfigFile::SetVsync(s.vsync);
     RuntimeConfigFile::SetForceAspect(s.forceAspect);
     RuntimeConfigFile::SetWidescreen(s.widescreen);
@@ -413,7 +566,7 @@ const char* KeyBindingName(int scancode) {
 enum Tab { kTabDisplay, kTabGraphics, kTabAudio, kTabControls, kTabSystem, kTabAbout, kTabCount };
 constexpr std::array<const char*, kTabCount> kTabNames = {"Display", "Graphics", "Audio", "Controls", "System", "About"};
 constexpr int kControlsPageCount = controls_menu::kPageCount + 1;  // + Devices
-constexpr std::array<const char*, kControlsPageCount> kControlsPageNames = {"Aiming", "Mapping", "Mouse & Keyboard",
+constexpr std::array<const char*, kControlsPageCount> kControlsPageNames = {"Overview", "Gamepad", "Keyboard & Mouse", "Aiming",
                                                                             "Devices"};
 
 bool g_menuVisible = false;      // drawn (includes the fade in / out)
@@ -519,6 +672,13 @@ void ResetDisplayPage() {
     next.forceAspect = false;
     next.widescreen = true;
     ApplyAndPersistDisplay(next);
+    g_vrrMode = static_cast<int>(AURORA_VRR_AUTO);
+    g_vrrMargin = 3.0f;
+    g_vrrLimiter = true;
+    RuntimeConfigFile::SetVrr(kVrrConfigNames[static_cast<size_t>(g_vrrMode)]);
+    RuntimeConfigFile::SetVrrMarginFps(3);
+    RuntimeConfigFile::SetVrrLimiter(true);
+    ApplyVrr();
     SystemSettings::Values sys = SystemSettings::Get();
     sys.scalingFilter = 0;
     sys.showFrameTime = false;
@@ -534,6 +694,7 @@ void ResetGraphicsPage() {
     next.resolution = 1.0f;
     next.interpolation = 0;
     ApplyAndPersistDisplay(next);
+    ResetUpscaler();
     g_disableCopyFilter = true;
     GX_SYNC_INLINE();
     aurora_set_disable_copy_filter(true);
@@ -675,7 +836,73 @@ void BuildDisplayPage(ListView& v) {
         SDL_SetWindowSize(aurora_get_window(), size.width, size.height);
         RuntimeConfigFile::SetWindowSize(static_cast<uint32_t>(size.width), static_cast<uint32_t>(size.height));
     }
-    changed |= (v.Toggle("VSync", &next.vsync, false, "Needed for smooth motion with frame interpolation.", game_ui::kRowConfirm) & kChanged) != 0;
+    changed |= (v.Toggle("VSync", &next.vsync, false, "Syncs presentation to the display for tear-free motion and caps the frame rate at the refresh rate. Ignored by the Uncapped frame rate and while VRR is active.", game_ui::kRowConfirm) & kChanged) != 0;
+
+    v.Section("Variable refresh rate");
+    static constexpr const char* kVrrLabels[] = {"Auto", "On", "Off"};
+    if (v.Choice("VRR (G-SYNC / FreeSync)", &g_vrrMode, kVrrLabels, 3, static_cast<int>(AURORA_VRR_AUTO),
+                 "Lets a G-SYNC / FreeSync / Windows VRR display follow the game's frame rate instead of a fixed refresh. The game then presents without VSync (tearing allowed, so the display can engage variable refresh) and limits itself a few FPS below the refresh rate to stay inside the VRR range with low latency. Auto turns on for a display faster than 60 Hz when the frame rate is above Original. Setup: enable G-SYNC in the NVIDIA Control Panel (\"for windowed and full screen mode\" if you play windowed), or FreeSync in the monitor menu and driver; use Borderless fullscreen; keep the in-game VSync off. Whether the display really goes variable is decided by the driver and cannot be detected here; the monitor's own refresh readout shows it.",
+                 0u, "Auto") & kChanged) {
+        RuntimeConfigFile::SetVrr(kVrrConfigNames[static_cast<size_t>(g_vrrMode)]);
+        ApplyVrr();
+    }
+    const uint32_t vrrRowFlags = g_vrrMode == static_cast<int>(AURORA_VRR_OFF) ? game_ui::kRowDisabled : 0u;
+    if (v.Toggle("Latency limiter", &g_vrrLimiter, true,
+                 "While VRR is active, caps presents at the refresh rate minus the margin (141 FPS on a 144 Hz display). Keeps frames inside the VRR window and avoids the extra queued frame a full-speed GPU adds. Match display and Uncapped follow this cap. Turn it off to run the chosen frame rate unlimited (frames above the refresh rate will tear).",
+                 vrrRowFlags, "On") & kChanged) {
+        RuntimeConfigFile::SetVrrLimiter(g_vrrLimiter);
+        ApplyVrr();
+    }
+    if (auto r = v.Slider("Latency limiter margin", &g_vrrMargin, 0.0f, 10.0f, 1.0f, "%.0f FPS", 3.0f,
+                          "How far below the refresh rate the limiter holds the frame rate. 3 FPS suits G-SYNC and FreeSync; raise it if the frame-time graph shows spikes at the cap, lower it for slightly higher FPS. Handles rates like 143.98 Hz and 119.88 Hz.",
+                          vrrRowFlags | (g_vrrLimiter ? 0u : game_ui::kRowDisabled), "3 FPS")) {
+        g_vrrMargin = std::round(g_vrrMargin);
+        ApplyVrr();
+        if (r & kCommit) RuntimeConfigFile::SetVrrMarginFps(static_cast<uint32_t>(std::lround(g_vrrMargin)));
+    }
+    {
+        AuroraVrrStatus vrr{};
+        aurora_get_vrr_status(&vrr);
+        char text[160];
+        std::string line;
+        if (vrr.swapchainTearing) {
+            std::snprintf(text, sizeof text, "%s (tearing allowed)", vrr.presentMode);
+        } else if (std::string_view(vrr.presentMode) == "Fifo") {
+            std::snprintf(text, sizeof text, "Fifo (VSync)");
+        } else {
+            std::snprintf(text, sizeof text, "%s", vrr.presentMode);
+        }
+        line = text;
+        if (vrr.active && vrr.limiterActive) {
+            std::snprintf(text, sizeof text, ", limit %.0f FPS", vrr.limitFps);
+            line += text;
+        } else if (vrr.active) {
+            line += ", no limit";
+        }
+        if (vrr.plannedFps > 0.0) {
+            std::snprintf(text, sizeof text, ", target %.0f FPS", vrr.plannedFps);
+            line += text;
+        }
+        v.Info("Present mode", line);
+        if (vrr.refreshHz > 0.0) {
+            std::snprintf(text, sizeof text, "%.2f Hz", vrr.refreshHz);
+            v.Info("Display refresh", text);
+        }
+        if (!vrr.tearingSupported) {
+            v.Note("This system or graphics API does not allow tearing presents, so VRR is unavailable.", game_ui::kWarn);
+        } else if (vrr.active) {
+            v.Info("VRR", "Active (driver decides whether the display goes variable)", game_ui::kGood);
+            if (static_cast<AuroraDisplayMode>(next.mode) == AURORA_DISPLAY_MODE_WINDOWED) {
+                v.Note("Windowed: G-SYNC needs \"Enable for windowed and full screen mode\" in the NVIDIA Control Panel. Borderless fullscreen is the most reliable.");
+            }
+        } else if (g_vrrMode == static_cast<int>(AURORA_VRR_OFF)) {
+            v.Info("VRR", "Off");
+        } else {
+            v.Info("VRR", vrr.refreshHz > 0.0 && vrr.refreshHz <= 63.2
+                              ? "Idle (display is 60 Hz)"
+                              : "Idle (set a Frame rate above Original in Graphics, or choose On)");
+        }
+    }
 
     v.Section("Picture");
     static constexpr const char* kAspects[] = {"4:3 (black bars)", "16:9 (black bars)", "Fill window"};
@@ -737,6 +964,102 @@ int DetectPreset(float resolution, int msaa, int anisotropy) {
     return 4;
 }
 
+void BuildUpscalingSection(ListView& v) {
+    v.Section("Upscaling");
+    AuroraDlssStatus dlssStatus{};
+    aurora_get_dlss_status(&dlssStatus);
+    const bool dlssAvailable = dlssStatus.state == AURORA_DLSS_AVAILABLE;
+    const int upscalerCount = (dlssAvailable || g_upscaler == kUpscalerDlss) ? static_cast<int>(kUpscalerLabels.size())
+                                                                            : kUpscalerDlss;
+    int upscaler = g_upscaler;
+    if (v.Choice("Upscaler", &upscaler, kUpscalerLabels.data(), upscalerCount, 0,
+                 "Renders the game at a lower internal resolution and upscales it to the window; the menu and on-screen text stay at full resolution. FSR 1 is AMD's spatial upscaler (edge-adaptive upscale plus sharpening): it works on any GPU and needs no motion data, but cannot add detail the way a temporal upscaler can.") & kChanged) {
+        g_upscaler = upscaler;
+        ApplyUpscaler();
+        PersistUpscaler();
+    }
+    if (!dlssAvailable && g_upscaler != kUpscalerDlss) {
+        v.Info("NVIDIA DLSS", dlssStatus.state == AURORA_DLSS_CHECKING || dlssStatus.state == AURORA_DLSS_NOT_STARTED
+                                  ? std::string("checking...")
+                                  : (dlssStatus.reason[0] != '\0' ? std::string(dlssStatus.reason)
+                                                                  : std::string("NVIDIA RTX GPU and nvngx_dlss.dll required")));
+    }
+    if (g_upscaler == kUpscalerFsr1) {
+        int quality = g_fsrQuality;
+        if (v.Choice("FSR quality", &quality, kFsrQualityLabels.data(), static_cast<int>(kFsrQualityLabels.size()),
+                     kDefaultFsrQualityIndex,
+                     "Ratio between output and internal resolution (per axis). Ultra Quality renders 77% of the window size, Quality 67%, Balanced 59%, Performance 50%, Ultra Performance 33%. Native turns upscaling off.") & kChanged) {
+            g_fsrQuality = quality;
+            ApplyUpscaler();
+            PersistUpscaler();
+        }
+        const float before = g_fsrSharpness;
+        if (v.Slider("FSR sharpness", &g_fsrSharpness, 0.0f, 100.0f, 5.0f, "%.0f%%",
+                     static_cast<float>(RuntimeConfigFile::kDefaultFsrSharpness),
+                     "Strength of the RCAS sharpening pass after upscaling. 0% turns the pass off.") & kChanged) {
+            ApplyUpscaler();
+        }
+        if (before != g_fsrSharpness) {
+            PersistUpscaler();
+        }
+        AuroraWindowSize window = aurora_get_window_size();
+        AuroraUpscaleInfo info{};
+        aurora_get_upscale_info(&info);
+        const bool live = info.active != AURORA_UPSCALER_OFF && info.inputWidth != 0;
+        const std::string internal = live ? ResolutionText(info.inputWidth, info.inputHeight)
+                                          : ResolutionText(window.fb_width, window.fb_height);
+        const std::string output = live ? ResolutionText(info.outputWidth, info.outputHeight)
+                                        : ResolutionText(window.native_fb_width, window.native_fb_height);
+        v.Info("Internal resolution", internal);
+        v.Info("Output resolution", output);
+        v.Note(live ? "FSR 1 is running." : "FSR 1 is selected but not running (Native quality, or the window is not larger than the internal size).");
+    }
+    if (g_upscaler == kUpscalerDlss) {
+        int mode = g_dlssMode;
+        if (v.Choice("DLSS mode", &mode, kDlssModeLabels.data(), static_cast<int>(kDlssModeLabels.size()),
+                     static_cast<int>(RuntimeConfigFile::kDefaultDlssModeIndex),
+                     "NVIDIA DLSS Super Resolution. The percentage is the internal resolution relative to the window (per axis): Ultra Performance 33%, Performance 50%, Balanced 58%, Quality 67%. DLAA renders at the full window size and only improves anti-aliasing. The game has no motion-vector buffer, so DLSS works from the image itself and is less sharp in motion than in a native DLSS game.") & kChanged) {
+            g_dlssMode = mode;
+            ApplyUpscaler();
+            PersistUpscaler();
+        }
+        const float before = g_dlssSharpness;
+        if (v.Slider("DLSS sharpness", &g_dlssSharpness, 0.0f, 100.0f, 5.0f, "%.0f%%",
+                     static_cast<float>(RuntimeConfigFile::kDefaultDlssSharpness),
+                     "Contrast-adaptive sharpening after DLSS. 0% turns it off.") & kChanged) {
+            ApplyUpscaler();
+        }
+        if (before != g_dlssSharpness) {
+            PersistUpscaler();
+        }
+        if (v.Toggle("Estimated motion vectors", &g_dlssMotion, false,
+                     "Estimates per-pixel motion from consecutive frames and gives it to DLSS. Off sends zero motion, so DLSS rejects history on its own (softer in motion, no wrong-vector smearing). Experimental: the estimate is noisy.",
+                     game_ui::kRowExperimental, "Off") & kChanged) {
+            ApplyUpscaler();
+            PersistUpscaler();
+        }
+        AuroraWindowSize window = aurora_get_window_size();
+        AuroraUpscaleInfo info{};
+        aurora_get_upscale_info(&info);
+        const bool live = info.active == AURORA_UPSCALER_DLSS && info.inputWidth != 0;
+        v.Info("Internal resolution", live ? ResolutionText(info.inputWidth, info.inputHeight)
+                                           : ResolutionText(window.fb_width, window.fb_height));
+        v.Info("Output resolution", live ? ResolutionText(info.outputWidth, info.outputHeight)
+                                         : ResolutionText(window.native_fb_width, window.native_fb_height));
+        if (live) {
+            v.Note(std::string("DLSS is running (") + dlssStatus.version + ").");
+        } else if (dlssAvailable) {
+            v.Note("DLSS is selected but not running on this frame (window smaller than the internal size, or DLSS rejected the size). FSR 1 is used instead.");
+        } else {
+            v.Note(std::string("DLSS is not available: ") +
+                   (dlssStatus.state == AURORA_DLSS_CHECKING || dlssStatus.state == AURORA_DLSS_NOT_STARTED
+                        ? "still checking this GPU. FSR 1 is used meanwhile."
+                        : (dlssStatus.reason[0] != '\0' ? std::string(dlssStatus.reason) : std::string("NVIDIA RTX GPU and nvngx_dlss.dll required")) +
+                              ". FSR 1 is used instead."));
+        }
+    }
+}
+
 void BuildGraphicsPage(ListView& v) {
     DisplayState next = CurrentDisplay();
     bool changed = false;
@@ -766,8 +1089,10 @@ void BuildGraphicsPage(ListView& v) {
         if (std::fabs(kResolutions[i].scale - next.resolution) < 0.001f) resolutionIndex = static_cast<int>(i);
     }
     if (v.Choice("Resolution scale", &resolutionIndex, resolutionLabels.data(), static_cast<int>(resolutionLabels.size()), 1,
-                 "Rendering scale relative to the original 640x480 picture. Native (1x) is the original look. 6x and 8x are capped to 4x while frame interpolation is on.",
-                 game_ui::kRowConfirm) & kChanged) {
+                 UpscalerActive()
+                     ? "Not used while an upscaler is on: the Upscaling section below sets the internal resolution from the window size."
+                     : "Rendering scale relative to the original 640x480 picture. Native (1x) is the original look. 6x and 8x are capped to 4x while frame interpolation is on.",
+                 game_ui::kRowConfirm | (UpscalerActive() ? game_ui::kRowDisabled : 0u)) & kChanged) {
         next.resolution = kResolutions[static_cast<size_t>(resolutionIndex)].scale;
         changed = true;
     }
@@ -794,13 +1119,37 @@ void BuildGraphicsPage(ListView& v) {
         sysChanged = true;
     }
 
-    v.Section("Smoothness");
-    static constexpr const char* kInterpolation[] = {"Off", "120 FPS", "180 FPS"};
-    if (v.Choice("Frame interpolation", &next.interpolation, kInterpolation, 3, 0,
-                 "Generates extra frames on high-refresh displays. Game logic stays at its original rate. May show artifacts; turn VSync on for smooth motion.",
+    BuildUpscalingSection(v);
+
+    // The built-in transform-based interpolation; it is not AMD's optical-flow FSR 3 Frame Generation (docs/FSR-NOTES.md).
+    v.Section("Frame generation");
+    static std::array<const char*, kFrameRates.size()> frameRateLabels{};
+    for (size_t i = 0; i < kFrameRates.size(); ++i) {
+        frameRateLabels[i] = kFrameRates[i].label;
+    }
+    if (v.Choice("Frame rate", &next.interpolation, frameRateLabels.data(), static_cast<int>(frameRateLabels.size()), 0,
+                 "How many frames are shown per game frame. The game itself (logic, physics, audio, timing) always runs at its original 60 Hz. Extra frames are interpolated from object and camera motion, so they may show artifacts and cost GPU and CPU time. Match display follows your monitor; Uncapped presents as fast as the GPU allows (VSync is ignored).",
                  game_ui::kRowConfirm | game_ui::kRowExperimental) & kChanged) {
         changed = true;
     }
+    int capIndex = static_cast<int>(kFrameRateCaps.size()) - 1;
+    for (size_t i = 0; i < kFrameRateCaps.size(); ++i) {
+        if (g_frameRateCap <= kFrameRateCaps[i]) {
+            capIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    static constexpr const char* kCapLabels[] = {"240 FPS", "360 FPS", "500 FPS", "1000 FPS"};
+    if (v.Choice("Frame rate limit", &capIndex, kCapLabels, static_cast<int>(kFrameRateCaps.size()), 3,
+                 "Hard upper limit for every mode above Original, so Match display and Uncapped cannot run away on a fast GPU. Fixed rates above the limit are lowered to it.",
+                 IsHighFrameRateIndex(next.interpolation) ? 0u : game_ui::kRowDisabled) & kChanged) {
+        g_frameRateCap = kFrameRateCaps[static_cast<size_t>(capIndex)];
+        RuntimeConfigFile::SetFrameRateCap(g_frameRateCap);
+        ApplyFrameRate(g_frameInterpolationMode);
+    }
+    v.Note("Turn VSync on (Display tab) for tear-free motion at a fixed rate or Match display; with VSync the rate cannot exceed the display refresh.");
+
+    v.Note("NVIDIA DLSS Frame Generation is not offered: it needs control of the swap chain (owned by the renderer) and true motion vectors, which this port does not have. The interpolation above is the frame generation available.");
 
     v.Section("Advanced");
     if (v.Toggle("Disable copy filter", &g_disableCopyFilter, true, "Skips the console's blur on framebuffer copies for a sharper picture.", 0, "On") & kChanged) {
@@ -1339,11 +1688,14 @@ void DrawModals(game_ui::Frame& in) {
 void DrawFpsOverlay() {
     AuroraPresentTiming presentTiming{};
     aurora_get_present_timing(&presentTiming);
-    const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
+    const FrameRateItem& frameRate = kFrameRates[static_cast<size_t>(g_frameInterpolationMode)];
+    const uint32_t targetFps = frameRate.kind == RuntimeConfigFile::FrameRateKind::Fixed ? frameRate.fps : 0u;
     const double refreshRate = aurora_get_display_refresh_rate();
-    const bool interpolationInactive = targetFps > 60 && !aurora_display_shows_interpolation();
+    const bool interpolationInactive = IsHighFrameRateMode() && !aurora_display_shows_interpolation();
+    AuroraVrrStatus vrrStatus{};
+    aurora_get_vrr_status(&vrrStatus);
     const bool unevenPacing =
-        !g_vsync && !interpolationInactive && refreshRate > 0.0 && targetFps > refreshRate + 1.0;
+        !g_vsync && !vrrStatus.limiterActive && !interpolationInactive && refreshRate > 0.0 && targetFps > refreshRate + 1.0;
     const bool showFrameTime = SystemSettings::Get().showFrameTime;
     static std::array<float, 120> s_frameTimes{};
     static size_t s_frameTimeIndex = 0;
@@ -1377,13 +1729,13 @@ void DrawFpsOverlay() {
         lines.push_back({text, game_ui::kWhite});
     }
     if (interpolationInactive) {
-        std::snprintf(text, sizeof text, "%u FPS interpolation has no effect on a %.0f Hz display.", targetFps, refreshRate);
+        std::snprintf(text, sizeof text, "%s has no effect on a %.0f Hz display.", frameRate.label, refreshRate);
         lines.push_back({text, game_ui::kWarn});
     }
     if (unevenPacing) {
-        std::snprintf(text, sizeof text, "%u FPS interpolation on a %.0f Hz display without VSync is not smooth.", targetFps, refreshRate);
+        std::snprintf(text, sizeof text, "%u FPS on a %.0f Hz display without VSync is not smooth.", targetFps, refreshRate);
         lines.push_back({text, game_ui::kWarn});
-        lines.push_back({"Enable VSync for smooth motion.", game_ui::kWarn});
+        lines.push_back({"Use Match display or enable VSync.", game_ui::kWarn});
     }
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImGuiIO& io = ImGui::GetIO();
@@ -1554,9 +1906,10 @@ void InitializeRuntimeSettings() noexcept {
     ApplyConfiguredMappings();
     AudioBackend::Instance().SetMasterVolume(static_cast<float>(g_audioVolumePercent) / 100.0f);
     AudioBackend::Instance().SetMuted(g_audioMuted);
-    const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
     LimitResolutionForFrameRate();
-    aurora_set_frame_interpolation_fps(targetFps);
+    ApplyUpscaler();
+    ApplyFrameRate(g_frameInterpolationMode);
+    ApplyVrr();
     aurora_set_display_mode(static_cast<AuroraDisplayMode>(g_displayMode));
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);
@@ -1659,6 +2012,69 @@ void ReleaseControllers() noexcept {
     if (queued) SDL_Delay(120);
 }
 
+// QA hook: SIN_UI_FUZZ=<seed>,<interval_ms>,<key list e.g. DOWN+UP+LEFT+RIGHT+ENTER+TAB+DEL+F10> pushes random key presses
+// into the SDL queue once SIN_UI_FUZZ_START seconds have passed (logs each key to the console for replay).
+void InjectFuzzKeys() {
+    struct Fuzz {
+        bool enabled = false;
+        uint32_t rng = 1;
+        int intervalMs = 150;
+        std::vector<SDL_Scancode> keys;
+        std::vector<std::string> names;
+        Clock::time_point next{};
+        Clock::time_point start{};
+        int count = 0;
+    };
+    static Fuzz fuzz = [] {
+        Fuzz f;
+        const char* env = std::getenv("SIN_UI_FUZZ");
+        if (!env || !*env) return f;
+        const std::string spec = env;
+        const size_t a = spec.find(','), b = spec.find(',', a == std::string::npos ? 0 : a + 1);
+        f.rng = static_cast<uint32_t>(std::atoi(spec.c_str())) * 2654435761u + 12345u;
+        if (a != std::string::npos) f.intervalMs = std::max(20, std::atoi(spec.c_str() + a + 1));
+        const std::string list = b == std::string::npos ? "DOWN+UP+LEFT+RIGHT+ENTER+TAB+DOWN+RIGHT" : spec.substr(b + 1);
+        static const std::pair<const char*, SDL_Scancode> table[] = {
+            {"DOWN", SDL_SCANCODE_DOWN}, {"UP", SDL_SCANCODE_UP}, {"LEFT", SDL_SCANCODE_LEFT}, {"RIGHT", SDL_SCANCODE_RIGHT},
+            {"ENTER", SDL_SCANCODE_RETURN}, {"TAB", SDL_SCANCODE_TAB}, {"ESC", SDL_SCANCODE_ESCAPE}, {"DEL", SDL_SCANCODE_DELETE},
+            {"Q", SDL_SCANCODE_Q}, {"E", SDL_SCANCODE_E}, {"PGDN", SDL_SCANCODE_PAGEDOWN}, {"PGUP", SDL_SCANCODE_PAGEUP},
+            {"F10", SDL_SCANCODE_F10}, {"SPACE", SDL_SCANCODE_SPACE}, {"BACKSPACE", SDL_SCANCODE_BACKSPACE}};
+        for (size_t at = 0; at <= list.size();) {
+            const size_t plus = list.find('+', at);
+            const std::string name = list.substr(at, plus == std::string::npos ? std::string::npos : plus - at);
+            for (const auto& entry : table) {
+                if (name == entry.first) {
+                    f.keys.push_back(entry.second);
+                    f.names.push_back(name);
+                }
+            }
+            if (plus == std::string::npos) break;
+            at = plus + 1;
+        }
+        const char* startEnv = std::getenv("SIN_UI_FUZZ_START");
+        f.start = Clock::now() + std::chrono::milliseconds(static_cast<int>((startEnv ? std::atof(startEnv) : 0.0) * 1000.0));
+        f.next = f.start;
+        f.enabled = !f.keys.empty();
+        return f;
+    }();
+    if (!fuzz.enabled || Clock::now() < fuzz.next) return;
+    fuzz.next = Clock::now() + std::chrono::milliseconds(fuzz.intervalMs);
+    fuzz.rng = fuzz.rng * 1664525u + 1013904223u;
+    const size_t pick = (fuzz.rng >> 8) % fuzz.keys.size();
+    const SDL_Scancode code = fuzz.keys[pick];
+    SDL_Event ev{};
+    ev.type = SDL_EVENT_KEY_DOWN;
+    ev.key.scancode = code;
+    ev.key.key = SDL_GetKeyFromScancode(code, SDL_KMOD_NONE, false);
+    ev.key.down = true;
+    ev.key.windowID = SDL_GetWindowID(aurora_get_window());
+    SDL_PushEvent(&ev);
+    ev.type = SDL_EVENT_KEY_UP;
+    ev.key.down = false;
+    SDL_PushEvent(&ev);
+    std::fprintf(stderr, "[ui-fuzz] #%d %s\n", ++fuzz.count, fuzz.names[pick].c_str());
+}
+
 void Draw() noexcept {
     // ImGui is only touched on this thread; the render worker replays a frozen copy.
     static int s_lastFrame = -1;
@@ -1667,6 +2083,7 @@ void Draw() noexcept {
         return;
     }
     s_lastFrame = frame;
+    InjectFuzzKeys();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
     PollGamepadMenuChord();
@@ -1680,6 +2097,7 @@ void Draw() noexcept {
         DrawShaderCompilationStatus();
     }
     DrawFpsOverlay();
+    controls_menu::DrawHud();
     const bool modal = AnyModalActive();
     DrawMenu(in, !modal);
     DrawModals(in);

@@ -165,6 +165,8 @@ PPC_NATIVE_OVERRIDE_VOID(801D8050, GX__SetDispCopyGamma_8016fc24, (uint32_t g), 
 // Copy Execution
 // ============================================================================
 
+void PerfLog_GuestFrameCopy();    // hle/perf_log.cpp (SIN_PERF_LOG per-frame timing)
+void PerfLog_GuestFrameResume();
 extern std::atomic<uint64_t> g_gxBeginDebugCount;
 extern std::atomic<uint64_t> g_gxBeginDebugVerts;
 
@@ -211,7 +213,9 @@ extern "C" void GX__CopyDisp_8016fc38(uint32_t da, uint32_t c) {
     settings_overlay::Draw();
     // Seal, pace to the VI retrace boundary (Aurora renders the sealed frame
     // during the wait), and pre-warm the next frame.
+    PerfLog_GuestFrameCopy();
     VI_HLE_PresentFrame(/*presentedXfb=*/true, /*paceToRetrace=*/true);
+    PerfLog_GuestFrameResume();
 }
 
 PPC_NATIVE_OVERRIDE_VOID(801D8070, GX__CopyDisp_8016fc38, (uint32_t da, uint32_t c), (da, c));

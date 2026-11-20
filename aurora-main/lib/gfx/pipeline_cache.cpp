@@ -15,7 +15,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -443,11 +445,27 @@ static std::optional<PendingPipeline> take_pending_pipeline(PipelineRef hash) {
   return std::nullopt;
 }
 
+// SIN_PIPE_LOG=1: log pipeline queue drain times and render-thread waits for pipelines.
+static const bool g_pipeLog = [] {
+  const char* v = std::getenv("SIN_PIPE_LOG");
+  return v != nullptr && *v != '\0' && *v != '0';
+}();
+static const auto g_pipeLogStart = std::chrono::steady_clock::now();
+static double pipe_log_seconds() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - g_pipeLogStart).count();
+}
+
 static void notify_pipeline_ready(bool queued, uint32_t pipelineCount) {
   createdPipelines += pipelineCount;
-  if (queued && --queuedPipelines == 0 && g_gpuCachePrunePending.exchange(false, std::memory_order_acq_rel)) {
-    // Prune GPU cache entries after fully loading the pipeline cache.
-    webgpu::cache_prune();
+  if (queued && --queuedPipelines == 0) {
+    if (g_pipeLog) {
+      Log.info("[pipe-log] queue drained at t={:.2f}s, created={}", pipe_log_seconds(),
+               detail::resources().stats.createdPipelines);
+    }
+    if (g_gpuCachePrunePending.exchange(false, std::memory_order_acq_rel)) {
+      // Prune GPU cache entries after fully loading the pipeline cache.
+      webgpu::cache_prune();
+    }
   }
   g_pipelineReadyCv.notify_all();
 }
@@ -1191,7 +1209,12 @@ void initialize_pipeline_cache() {
     g_hasPipelineThread = false;
   } else {
     g_hasPipelineThread = true;
-    const auto workerCount = std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u);
+    // 8 workers drain the 1500-pipeline startup queue ~25% faster than 4 (driver-bound beyond that).
+    unsigned int maxWorkers = 8;
+    if (const char* v = std::getenv("SIN_PIPE_THREADS"); v != nullptr && *v != '\0') {
+      maxWorkers = std::clamp(static_cast<unsigned int>(std::atoi(v)), 1u, 32u);
+    }
+    const auto workerCount = std::clamp(std::thread::hardware_concurrency() / 2, 1u, maxWorkers);
 
     for (unsigned int i = 0; i < workerCount; ++i) {
       g_pipelineThreads.emplace_back(pipeline_worker);
@@ -1282,19 +1305,39 @@ static void move_pending_pipeline_to_front(PipelineRef hash) {
 
 bool get_pipeline(PipelineRef ref, CompiledPipeline& pipeline) {
   std::unique_lock guard{g_pipelineMutex};
+  const auto waitStart = g_pipeLog ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+  bool waited = false;
   if (g_requiredPipelines.contains(ref)) {
+    waited = !g_pipelines.contains(ref);
     g_pipelineReadyCv.wait(guard, [=] { return g_pipelines.contains(ref) || g_pipelineThreadEnd; });
   } else if (t_requireReadyPipelines && g_hasPipelineThread && !g_pipelines.contains(ref) &&
              g_pendingPipelines.contains(ref)) {
+    waited = true;
     move_pending_pipeline_to_front(ref);
     g_pipelineQueueCv.notify_one();
     g_pipelineReadyCv.wait(guard, [=] {
       return g_pipelines.contains(ref) || !g_pendingPipelines.contains(ref) || g_pipelineThreadEnd;
     });
   }
+  if (g_pipeLog && waited) {
+    Log.info("[pipe-log] t={:.2f}s render thread waited {:.1f} ms for a pipeline (queue={}, bg={})", pipe_log_seconds(),
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count(),
+             g_pipelineQueue.size(), g_backgroundPipelineQueue.size());
+  }
 
   const auto it = g_pipelines.find(ref);
   if (it == g_pipelines.end() || !it->second.main) {
+    if (g_pipeLog) {
+      static uint32_t skipped = 0;
+      static double lastLog = 0.0;
+      ++skipped;
+      if (const double now = pipe_log_seconds(); now - lastLog >= 1.0) {
+        Log.info("[pipe-log] t={:.2f}s {} draws skipped (pipeline not ready) in last interval, queue={}, bg={}", now,
+                 skipped, g_pipelineQueue.size(), g_backgroundPipelineQueue.size());
+        skipped = 0;
+        lastLog = now;
+      }
+    }
     return false;
   }
   pipeline = it->second;

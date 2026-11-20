@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <bitset>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -307,6 +308,154 @@ inline AimSource Arbitrate(Arbiter& s, bool stickMoving, bool mouseMoving) {
     s.prevStick = stickMoving;
     s.prevMouse = mouseMoving;
     return s.active;
+}
+
+// ---- Control scheme selection ------------------------------------------------------------------
+// The scheme is the guest-visible controller: Classic Controller emulation (gamepad) or Wii Remote + Nunchuk
+// (mouse pointer + keyboard). SchemeMode is the user's setting; Auto follows the device used last.
+
+enum class Scheme : uint8_t { Classic, Pointer };
+enum class SchemeMode : uint8_t { Auto, Classic, Pointer };
+enum class ActiveDevice : uint8_t { None, Gamepad, KeyboardMouse };
+
+inline constexpr int kSchemeSchemaVersion = 2;
+inline constexpr std::array<const char*, 3> kSchemeModeKeys = {"auto", "classic", "pointer"};
+inline constexpr std::array<const char*, 3> kSchemeModeLabels = {"Automatic (recommended)",
+                                                                  "Always Classic Controller (gamepad)",
+                                                                  "Always Wii Remote (mouse + keyboard)"};
+
+inline std::string SchemeModeKey(SchemeMode m) { return kSchemeModeKeys[static_cast<size_t>(m)]; }
+
+// Tolerant parse (case/space insensitive). Unknown text keeps `fallback`. Schema < 2 wrote the old default
+// "pointer" on every save, so it is not a deliberate choice and migrates to Auto; "classic" was an explicit
+// opt-in and is kept.
+inline SchemeMode ParseSchemeMode(std::string_view text, int schemaVersion, SchemeMode fallback) {
+    std::string t = Trim(text);
+    for (char& c : t) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    if (t == "auto") return SchemeMode::Auto;
+    if (t == "classic") return SchemeMode::Classic;
+    if (t == "pointer") return schemaVersion < kSchemeSchemaVersion ? SchemeMode::Auto : SchemeMode::Pointer;
+    return fallback;
+}
+
+inline Scheme SchemeForDevice(ActiveDevice d, Scheme current) {
+    return d == ActiveDevice::Gamepad ? Scheme::Classic : d == ActiveDevice::KeyboardMouse ? Scheme::Pointer : current;
+}
+
+// Pad axis layout of RawSample: 0 LX, 1 LY, 2 RX, 3 RY, 4 LT, 5 RT.
+struct PadConditioning {
+    float leftSaturation = 1.0f;     // left stick deflection that counts as full (0.5..1)
+    bool invertMoveY = false;        // swap left stick up/down
+    float triggerThreshold = 0.5f;   // trigger pull that counts as pressed (0.1..0.9)
+};
+
+// Input conditioning applied to the pad part of a sample before bindings resolve. Triggers are remapped so
+// the threshold lands on 0.5 (the digital press level) and full pull stays 1; below it they read 0.
+inline float ConditionTrigger(float v, float threshold) {
+    threshold = std::clamp(threshold, 0.05f, 0.95f);
+    if (v < threshold) return 0.f;
+    return std::clamp(0.5f + 0.5f * (v - threshold) / (1.f - threshold), 0.f, 1.f);
+}
+
+inline void ConditionPad(RawSample& raw, const PadConditioning& c) {
+    const float sat = std::clamp(c.leftSaturation, 0.3f, 1.f);
+    float x = raw.padAxes[0] / sat, y = raw.padAxes[1] / sat;
+    const float m = std::sqrt(x * x + y * y);
+    if (m > 1.f) {
+        x /= m;
+        y /= m;
+    }
+    raw.padAxes[0] = x;
+    raw.padAxes[1] = c.invertMoveY ? -y : y;
+    raw.padAxes[4] = ConditionTrigger(raw.padAxes[4], c.triggerThreshold);
+    raw.padAxes[5] = ConditionTrigger(raw.padAxes[5], c.triggerThreshold);
+}
+
+// What the devices did during one poll. "Input" = deliberate activity this poll (a fresh press, a stick or
+// trigger held past the threshold, mouse motion above the noise floor, a wheel tick). "Held" = a button/key
+// is down or a stick/trigger is deflected right now.
+struct DeviceSense {
+    bool padInput = false, kbmInput = false;
+    bool padHeld = false, kbmHeld = false;
+};
+
+struct SenseConfig {
+    float stick = 0.5f;      // radial stick deflection that counts as deliberate (above any drift/deadzone)
+    float trigger = 0.5f;
+    float mousePx = 4.0f;    // pointer travel per poll that counts as a deliberate move (above sensor noise)
+};
+
+// `prev` is the previous poll WITHOUT event pulses, `cur` the current poll merged with pulses (quick taps
+// between polls). `boundKeys` limits keyboard activity to keys that do something in the game.
+inline DeviceSense Sense(const RawSample& prev, const RawSample& cur, float mouseMotionPx,
+                         const std::bitset<512>& boundKeys, const SenseConfig& cfg) {
+    DeviceSense s;
+    const std::bitset<32> padEdge = cur.padButtons & ~prev.padButtons;
+    s.padHeld = cur.padButtons.any();
+    s.padInput = padEdge.any();
+    auto radial = [&](int a, int b) { return std::sqrt(cur.padAxes[a] * cur.padAxes[a] + cur.padAxes[b] * cur.padAxes[b]); };
+    const bool stick = radial(0, 1) >= cfg.stick || radial(2, 3) >= cfg.stick;
+    const bool trig = cur.padAxes[4] >= cfg.trigger || cur.padAxes[5] >= cfg.trigger;
+    if (stick || trig) s.padHeld = s.padInput = true;
+
+    const std::bitset<512> keysDown = cur.keys & boundKeys;
+    const std::bitset<512> keyEdge = keysDown & ~(prev.keys & boundKeys);
+    const uint8_t buttonEdge = static_cast<uint8_t>(cur.mouseButtons & ~prev.mouseButtons);
+    s.kbmHeld = keysDown.any() || cur.mouseButtons != 0;
+    s.kbmInput = keyEdge.any() || buttonEdge != 0 || cur.wheelUp || cur.wheelDown || mouseMotionPx >= cfg.mousePx;
+    return s;
+}
+
+struct SchemeArbiter {
+    ActiveDevice device = ActiveDevice::None;
+    Scheme scheme = Scheme::Pointer;
+    int64_t lastSwitchMs = -1000000;
+};
+
+struct SchemeUpdate {
+    bool deviceChanged = false;
+    bool schemeChanged = false;
+};
+
+inline constexpr int64_t kSchemeDwellMs = 400;
+
+inline Scheme EffectiveScheme(SchemeMode mode, const SchemeArbiter& a) {
+    return mode == SchemeMode::Classic ? Scheme::Classic : mode == SchemeMode::Pointer ? Scheme::Pointer
+                                                                                       : SchemeForDevice(a.device, a.scheme);
+}
+
+// Seeds the device without a switch (startup, mode change): no dwell consumed, no event.
+inline void SeedScheme(SchemeArbiter& a, SchemeMode mode, ActiveDevice device) {
+    a.device = device;
+    a.scheme = EffectiveScheme(mode, a);
+}
+
+// The last deliberate device wins, with hysteresis:
+//  * both devices active in the same poll: nothing changes;
+//  * a device that is still holding a button/key/stick keeps control;
+//  * after a switch the other device must wait kSchemeDwellMs before it can take over again;
+//  * the very first input ever (device None) is accepted at once.
+// A mode other than Auto pins the scheme but the active device is still tracked for the UI.
+inline SchemeUpdate UpdateScheme(SchemeArbiter& a, SchemeMode mode, const DeviceSense& s, int64_t nowMs,
+                                 int64_t dwellMs = kSchemeDwellMs) {
+    SchemeUpdate out;
+    ActiveDevice candidate = ActiveDevice::None;
+    if (s.padInput && !s.kbmInput) candidate = ActiveDevice::Gamepad;
+    else if (s.kbmInput && !s.padInput) candidate = ActiveDevice::KeyboardMouse;
+    if (candidate != ActiveDevice::None && candidate != a.device) {
+        const bool currentHeld = a.device == ActiveDevice::Gamepad ? s.padHeld
+                               : a.device == ActiveDevice::KeyboardMouse ? s.kbmHeld : false;
+        const bool first = a.device == ActiveDevice::None;
+        if (first || (!currentHeld && nowMs - a.lastSwitchMs >= dwellMs)) {
+            a.device = candidate;
+            a.lastSwitchMs = nowMs;
+            out.deviceChanged = true;
+        }
+    }
+    const Scheme next = EffectiveScheme(mode, a);
+    out.schemeChanged = next != a.scheme;
+    a.scheme = next;
+    return out;
 }
 
 } // namespace InputMap

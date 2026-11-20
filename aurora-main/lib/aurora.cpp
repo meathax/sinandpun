@@ -20,7 +20,9 @@
 #include "imgui.hpp"
 #include "webgpu/gpu.hpp"
 #include "webgpu/gpu_prof.hpp"
+#include "webgpu/dlss.hpp"
 #include "webgpu/metalfx.hpp"
+#include "webgpu/upscale.hpp"
 #include <webgpu/webgpu_cpp.h>
 #endif
 
@@ -36,6 +38,8 @@
 
 #include <SDL3/SDL_filesystem.h>
 #include <magic_enum.hpp>
+
+#include <cstdio>
 
 #include "system_info.hpp"
 #include "tracy/Tracy.hpp"
@@ -74,6 +78,80 @@ void metalfx_failed(const std::string& reason) {
   g_metalfxStatus.store(AURORA_METALFX_ERROR);
   g_metalfxPendingOutput = nullptr;
   g_metalfxSlots = {};
+}
+
+// ---- NVIDIA DLSS (docs/DLSS-NOTES.md) ---------------------------------------------------------------------------
+// Runs between the scene submit and the present blit, like MetalFX; any failure falls back to the FSR1 / plain path.
+const bool g_dlssLogSink = [] {
+  webgpu::dlss::set_log([](int level, const char* message) {
+    if (level >= 2) {
+      Log.error("{}", message);
+    } else if (level == 1) {
+      Log.warn("{}", message);
+    } else {
+      Log.info("{}", message);
+    }
+  });
+  return true;
+}();
+
+struct DlssPresentState {
+  webgpu::dlss::Output output;
+  webgpu::TextureWithSampler image;
+  wgpu::BindGroup bindGroup;
+  wgpu::TextureView boundView;
+  bool wasActive = false;
+};
+DlssPresentState g_dlss;
+
+// Window-size side of the upscaler selection: internal resolution divisor, and DLAA's native-resolution lock. Also
+// called when DLSS becomes ready, which happens asynchronously after start-up.
+void sync_upscale_window() {
+  const bool jitter = webgpu::upscale::settings().mode == AURORA_UPSCALER_DLSS && webgpu::dlss::ready();
+  if (!jitter) {
+    webgpu::dlss::set_jitter_enabled(false, 0, 0);
+  }
+  window::set_upscale_divisor(webgpu::upscale::resolution_divisor(), webgpu::upscale::locks_native_resolution());
+}
+
+webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgpu::TextureWithSampler& source,
+                                      const webgpu::Viewport& viewport) {
+  const auto settings = webgpu::upscale::settings();
+  if (settings.mode != AURORA_UPSCALER_DLSS || !webgpu::dlss::ready() || !source.view) {
+    g_dlss.wasActive = false;
+    webgpu::dlss::set_jitter_enabled(false, 0, 0);
+    return {};
+  }
+  const uint32_t outW = std::max(1u, static_cast<uint32_t>(std::lround(std::max(viewport.width, 1.f))));
+  const uint32_t outH = std::max(1u, static_cast<uint32_t>(std::lround(std::max(viewport.height, 1.f))));
+  webgpu::dlss::DispatchParams params;
+  params.color = source.view;
+  params.renderWidth = source.size.width;
+  params.renderHeight = source.size.height;
+  params.outputWidth = outW;
+  params.outputHeight = outH;
+  params.mode = webgpu::dlss::mode_for_scale_factor(settings.scaleFactor);
+  params.sharpness = settings.sharpness;
+  params.reset = !g_dlss.wasActive;
+  webgpu::dlss::set_jitter_enabled(true, params.renderWidth, outW);
+  if (!webgpu::dlss::dispatch(encoder, params, g_dlss.output)) {
+    g_dlss.wasActive = false;
+    webgpu::dlss::set_jitter_enabled(false, 0, 0);
+    return {};
+  }
+  g_dlss.wasActive = true;
+  if (!g_dlss.bindGroup || g_dlss.boundView.Get() != g_dlss.output.view.Get()) {
+    g_dlss.image = webgpu::TextureWithSampler{.texture = g_dlss.output.texture,
+                                              .view = g_dlss.output.view,
+                                              .size = g_dlss.output.size,
+                                              .format = g_dlss.output.format,
+                                              .sampler = g_dlss.output.sampler};
+    g_dlss.bindGroup = webgpu::create_copy_bind_group(g_dlss.image);
+    g_dlss.boundView = g_dlss.output.view;
+  }
+  webgpu::upscale::note_present(params.renderWidth, params.renderHeight, outW, outH, AURORA_UPSCALER_DLSS,
+                                settings.sharpness > 0.01f);
+  return {g_dlss.bindGroup, &g_dlss.image};
 }
 
 wgpu::BindGroup upscale_presentation(wgpu::CommandEncoder& encoder,
@@ -422,8 +500,10 @@ void shutdown() noexcept {
   g_metalfxRequested.store(false);
   g_metalfxSupported.store(false);
   g_metalfxStatus.store(AURORA_METALFX_DISABLED);
+  g_dlss = {};
   imgui::shutdown();
   gfx::shutdown();
+  webgpu::upscale::shutdown();
   webgpu::shutdown();
 #endif
   gamepad::shutdown();
@@ -439,6 +519,16 @@ const AuroraEvent* update() noexcept {
   }
   const auto* events = window::poll_events();
   gamepad::update();
+#ifdef AURORA_ENABLE_GX
+  {
+    // DLSS becomes ready (or fails) a couple of seconds after start-up; re-evaluate the internal resolution then.
+    static bool dlssReadyLast = false;
+    if (const bool ready = webgpu::dlss::ready(); ready != dlssReadyLast) {
+      dlssReadyLast = ready;
+      sync_upscale_window();
+    }
+  }
+#endif
   return events;
 }
 
@@ -576,10 +666,26 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
         if (rmlBindGroup && !rmlOverlay) {
           presentBindGroup = rmlBindGroup;
         } else {
-          presentBindGroup = upscale_presentation(encoder, presentSource, viewport, metalfxEnabled);
+          // FSR1 (EASU + RCAS) first; MetalFX only when no FSR upscaler is selected; otherwise a plain resample.
+          const webgpu::TextureWithSampler* gameImage = nullptr;
+          // NVIDIA DLSS first (temporal, needs the jittered frames); FSR1 when DLSS is off, unavailable or failed.
+          auto fsr = dlss_dispatch(encoder, presentSource, viewport);
+          if (!fsr.bindGroup) {
+            fsr = webgpu::upscale::fsr1_dispatch(encoder, presentSource, viewport);
+          }
+          if (fsr.bindGroup) {
+            presentBindGroup = std::move(fsr.bindGroup);
+            gameImage = fsr.image;
+          } else {
+            presentBindGroup = upscale_presentation(encoder, presentSource, viewport, metalfxEnabled);
+          }
           if (!presentBindGroup) {
             const auto& resampledSource = webgpu::resample_present_source(encoder, viewport, presentSource);
             presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
+            gameImage = &resampledSource;
+          }
+          if (gameImage != nullptr) {
+            webgpu::upscale::capture_encode(encoder, *gameImage);
           }
         }
 
@@ -661,11 +767,13 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
         ZoneScopedN("Queue Submit");
         g_queue.Submit(1, &buffer);
       }
+      webgpu::upscale::capture_after_submit();
 
       if (g_metalfxPendingOutput) {
         if (!g_metalfxPendingOutput->end_output()) metalfx_failed(g_metalfxPendingOutput->error());
         g_metalfxPendingOutput = nullptr;
       }
+      webgpu::dlss::after_submit();
       if (finalPresent) {
         webgpu::gpu_prof::after_submit();
       }
@@ -722,37 +830,56 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
       }
     };
 
-    // Interpolated slots replay the frame with blended transforms and present between frames:
-    // slot k of N+1 goes out at base + k * interval / (N + 1), the native frame last.
+    // Interpolated slots replay the frame with blended transforms and present between frames. The
+    // present points lie on a grid of period `step` guest frames (60 / target Hz); the plan gives each
+    // slot's blend weight and slot k goes out at anchor + interval * (weight - step). The native frame
+    // (weight 1) goes last when it falls on the grid, otherwise it is submitted without presenting.
     // A display no faster than the native frame rate cannot show them, so present native frames right away.
+    const auto& plan = replay.plan;
     const uint32_t slots =
-        gfx::presentation::display_shows_interpolation(schedule.intervalNanos) ? replay.slots : 0;
-    const uint32_t groupSize = slots + 1;
-    const auto deadline = [&](uint32_t slot) -> uint64_t {
-      return slots != 0 && schedule.baseNanos != 0 && schedule.intervalNanos != 0
-                 ? schedule.baseNanos + schedule.intervalNanos * slot / groupSize
-                 : 0;
+        gfx::presentation::display_shows_interpolation(schedule.intervalNanos) ? std::min(replay.slots, plan.slots) : 0;
+    const bool nativeShown = plan.nativeShown || slots == 0;
+    const auto deadline = [&](float weight) -> uint64_t {
+      if (slots == 0 || schedule.baseNanos == 0 || schedule.intervalNanos == 0) {
+        return 0;
+      }
+      const double offset = (static_cast<double>(weight) - static_cast<double>(plan.step)) *
+                            static_cast<double>(schedule.intervalNanos);
+      return static_cast<uint64_t>(static_cast<int64_t>(schedule.baseNanos) + static_cast<int64_t>(offset));
     };
+    const uint64_t stepNanos = static_cast<uint64_t>(static_cast<double>(plan.step) * static_cast<double>(schedule.intervalNanos));
     const auto admit = [&](uint64_t presentAt) {
       return !blockingPresent ||
              gfx::presentation::admit_display_present(std::max(presentAt, gfx::presentation::now_nanos()));
     };
     for (uint32_t slot = 0; slot < slots; ++slot) {
-      // A slot that would only show after the next one is due adds latency without motion.
-      if (const uint64_t next = deadline(slot + 1); next != 0 && gfx::presentation::now_nanos() >= next) {
+      const uint64_t due = deadline(plan.weight[slot]);
+      // A slot that would only show after the next grid point is due adds latency without motion.
+      if (due != 0 && stepNanos != 0 && gfx::presentation::now_nanos() >= due + stepNanos) {
         continue;
       }
-      if (!admit(deadline(slot))) {
+      if (!admit(due)) {
         continue;
       }
+      const uint64_t encodeStart = gfx::presentation::now_nanos();
       const wgpu::CommandEncoderDescriptor slotDescriptor{.label = "Interpolated frame encoder"};
       auto slotEncoder = g_device.CreateCommandEncoder(&slotDescriptor);
       replay.encode(slotEncoder, slot);
-      gfx::presentation::wait_until(deadline(slot));
+      const uint64_t encodeNanos = gfx::presentation::now_nanos() - encodeStart;
+      gfx::presentation::pace_present(due);
+      const uint64_t presentStart = gfx::presentation::now_nanos();
       present(slotEncoder, false, true);
+      gx::report_present_cost(encodeNanos + (gfx::presentation::now_nanos() - presentStart));
     }
-    gfx::presentation::wait_until(deadline(slots));
-    present(encoder, true, admit(deadline(slots)));
+    // The native frame was encoded with its own jitter before the slots changed the current one.
+    webgpu::dlss::restore_native_jitter();
+    if (nativeShown) {
+      const uint64_t due = deadline(1.f);
+      gfx::presentation::pace_present(due);
+      present(encoder, true, admit(due));
+    } else {
+      present(encoder, true, false);
+    }
 
     for (auto& callback : afterSubmitCallbacks) {
       if (callback) {
@@ -880,6 +1007,70 @@ AuroraMetalFXStatus aurora_get_metalfx_status() {
   return aurora::g_metalfxStatus.load();
 #else
   return AURORA_METALFX_UNSUPPORTED;
+#endif
+}
+
+void aurora_set_upscaler(AuroraUpscaler mode, float scaleFactor, float sharpness) {
+#ifdef AURORA_ENABLE_GX
+  aurora::webgpu::upscale::Settings settings;
+  settings.mode = mode;
+  settings.scaleFactor = scaleFactor;
+  settings.sharpness = sharpness;
+  aurora::webgpu::upscale::set_settings(settings);
+  aurora::sync_upscale_window();
+#else
+  (void)mode;
+  (void)scaleFactor;
+  (void)sharpness;
+#endif
+}
+
+void aurora_get_upscale_info(AuroraUpscaleInfo* info) {
+  if (info == nullptr) {
+    return;
+  }
+#ifdef AURORA_ENABLE_GX
+  *info = aurora::webgpu::upscale::info();
+#else
+  *info = {};
+#endif
+}
+
+void aurora_get_dlss_status(AuroraDlssStatus* status) {
+  if (status == nullptr) {
+    return;
+  }
+  *status = {};
+#ifdef AURORA_ENABLE_GX
+  const auto s = aurora::webgpu::dlss::status();
+  switch (s.state) {
+  case aurora::webgpu::dlss::State::Probing: status->state = AURORA_DLSS_CHECKING; break;
+  case aurora::webgpu::dlss::State::Ready: status->state = AURORA_DLSS_AVAILABLE; break;
+  case aurora::webgpu::dlss::State::Unavailable: status->state = AURORA_DLSS_UNAVAILABLE; break;
+  case aurora::webgpu::dlss::State::Failed: status->state = AURORA_DLSS_FAILED; break;
+  default: status->state = AURORA_DLSS_NOT_STARTED; break;
+  }
+  std::snprintf(status->reason, sizeof status->reason, "%s", s.reason.c_str());
+  std::snprintf(status->version, sizeof status->version, "%s", s.version.c_str());
+#else
+  status->state = AURORA_DLSS_UNAVAILABLE;
+  std::snprintf(status->reason, sizeof status->reason, "%s", "graphics are disabled in this build");
+#endif
+}
+
+void aurora_set_dlss_motion_vectors(bool enabled) {
+#ifdef AURORA_ENABLE_GX
+  aurora::webgpu::dlss::set_motion_vectors_enabled(enabled);
+#else
+  (void)enabled;
+#endif
+}
+
+void aurora_capture_present_image(const char* pngPath) {
+#ifdef AURORA_ENABLE_GX
+  aurora::webgpu::upscale::request_capture(pngPath != nullptr ? pngPath : "");
+#else
+  (void)pngPath;
 #endif
 }
 

@@ -21,6 +21,9 @@
 //   SIN_AUTOSTAGE_FORCE=0    never redirect a stage that is already loading/loaded (default 1)
 //   SIN_AUTOSTAGE_SEED=0     do not pre-seed the GameData stage bytes (default 1)
 //   SIN_AUTOSTAGE_TRACE=1    log scene / game-over jingle slot / sound-manager entry changes (see TraceSoundSlot)
+//   SIN_QA_DEATH_EVERY=sec  QA: while the stage runs (flow state 4) set the game-data "player dead" bit (GM+100 |= 4,
+//                           what Player::_dead_chk reads) every <sec> seconds, i.e. a death that bypasses the jingle load
+//                           in fn_800F6830 (docs/QA-LOG.md, game-over crash repro)
 //   SIN_AUTOSTAGE_PROBE=1    only log flow-task/GameData changes (use during a normal menu run)
 //   SIN_AUTOSTAGE_FIXED_ADDR=0xADDR  skip the heap scan, use this address for F
 
@@ -198,7 +201,9 @@ void Watcher() {
     uint32_t lastLoaded = 0xFFFFFFFFu;
     double nextScan = 0.0, nextStatus = 5.0, nextTrace = 0.0;
     const bool trace = EnvInt("SIN_AUTOSTAGE_TRACE", 0) != 0;
-    bool patched = false, forced = false, announcedFlow = false;
+    const double deathEvery = std::getenv("SIN_QA_DEATH_EVERY") ? std::atof(std::getenv("SIN_QA_DEATH_EVERY")) : 0.0;
+    double nextDeath = deathEvery;
+    bool patched = false, forced = false, announcedFlow = false, done = false;
 
     while (!g_stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -230,6 +235,19 @@ void Watcher() {
         if (trace && now >= nextTrace) {
             nextTrace = now + 0.05;
             TraceSoundSlot(gm, now);
+        }
+
+        if (deathEvery > 0 && now >= nextDeath && loaded <= 7) {
+            uint32_t fl = 0;
+            uint8_t fst = 0;
+            if (f && IsFlow(f) && Rd8(f + kFlowState, fst) && fst == 4 && Rd32(gm + kGameData, fl) && !(fl & 4u)) {
+                try {
+                    Memory::Write32(gm + kGameData, fl | 4u);
+                    RT_LOGF("autostage", "t=%.2f QA death: GM flags %08X -> %08X\n", now, fl, fl | 4u);
+                } catch (...) {
+                }
+                nextDeath = now + deathEvery;
+            }
         }
 
         if (now < delaySec || now < nextSwapAt) {
@@ -271,7 +289,7 @@ void Watcher() {
             lastState = st;
             lastLoaded = loaded;
         }
-        if (probe) {
+        if (probe || done) {
             continue;
         }
 
@@ -319,8 +337,10 @@ void Watcher() {
         if ((patched || forced || !seq.empty()) && st >= 4 && static_cast<int>(s0) == stage) {
             RT_LOGF("autostage", "t=%.2f stage %d load reached (F state %u, loadedId=%u)\n", now, stage, st, loaded);
             if (seqIndex + 1 >= seq.size()) {
-                RT_LOGF("autostage", "watcher done\n");
-                return;
+                RT_LOGF("autostage", "watcher done%s\n", trace ? " (tracing continues)" : "");
+                if (!trace) return;
+                done = true;
+                continue;
             }
             ++seqIndex;
             stage = seq[seqIndex];

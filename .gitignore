@@ -26,3 +26,9 @@ __pycache__/
 *.pyc
 
 ready/
+
+# NVIDIA Streamline / DLSS SDK staged locally (docs/DLSS-NOTES.md)
+third_party/nvidia/
+
+# AMD FidelityFX FSR sources staged locally (docs/FSR-NOTES.md)
+third_party/amd/

@@ -3,13 +3,14 @@
 #include "gx.hpp"
 
 #include "aurora/gfx.h"
+#include "../gfx/types.hpp"
 
 #include <atomic>
 
 // Frame interpolation: generates intermediate presentation frames between two consecutive 60 Hz
 // guest frames by re-staging each perspective draw's uniform block with interpolated transforms.
 namespace aurora::gx {
-constexpr uint32_t MaxInterpolatedFrames = 3;
+constexpr uint32_t MaxInterpolatedFrames = gfx::MaxInterpolationSlots;
 
 // Identifies a draw across frames. `combined` includes the geometry signature and is exact, while
 // `pipeline`/`texture` is the material-only fallback for meshes whose vertex data changes.
@@ -41,13 +42,21 @@ namespace detail {
 extern std::atomic_uint32_t g_frameInterpolationFps;
 } // namespace detail
 
-// 0 when interpolation is disabled; otherwise the configured target (120/180/240).
+// 0 when interpolation is disabled; otherwise non-zero (the fixed target, or the cap for the
+// display/uncapped modes). The per-frame plan decides what is actually presented.
 inline uint32_t frame_interpolation_fps() noexcept {
   return detail::g_frameInterpolationFps.load(std::memory_order_acquire);
 }
 inline bool frame_interpolation_active() noexcept { return frame_interpolation_fps() != 0; }
 
 void set_frame_interpolation_fps(uint32_t targetFps) noexcept;
+void set_frame_rate(AuroraFrameRateMode mode, uint32_t fixedFps, uint32_t capFps) noexcept;
+void get_frame_rate(AuroraFrameRateMode& mode, uint32_t& fixedFps, uint32_t& capFps) noexcept;
+// Present plan of the guest frame most recently begun (producer thread; copy it at end of frame).
+gfx::InterpolationPlan current_interpolation_plan() noexcept;
+// Render worker: time one slot/native present took (acquire + encode + submit + present, excluding
+// the pacing wait). Drives the uncapped mode's rate estimate.
+void report_present_cost(uint64_t nanos) noexcept;
 
 // Interpolated slot being encoded on this thread, or -1 for the native frame.
 extern thread_local int g_interpolationEncodeSlot;

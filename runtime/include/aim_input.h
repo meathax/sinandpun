@@ -35,7 +35,21 @@ MouseSample MouseNow();
 void ConsumeMouseDelta(float& dx, float& dy);
 
 // Main thread, once per frame: relative mouse mode follows the settings while the game is unblocked and focused.
+// Also runs the control-scheme service: watches gamepad / mouse / keyboard activity, decides the scheme in effect
+// (Automatic = the device used last, see InputMap::UpdateScheme) and pushes changes to the virtual remote.
 void UpdateWindowState(bool inputBlocked);
+
+// Scheme in effect and the device used last (updated by UpdateWindowState; readable from any thread).
+InputMap::Scheme EffectiveScheme();
+InputMap::ActiveDevice LastDevice();
+
+// Latest automatic switch, for the on-screen note. `serial` grows by one per switch (0 = none yet).
+struct SchemeNotice {
+    uint32_t serial = 0;
+    InputMap::Scheme scheme = InputMap::Scheme::Pointer;
+    uint64_t atMs = 0;  // SDL_GetTicks() at the switch
+};
+SchemeNotice LatestSwitch();
 
 enum class CaptureState { Idle, Pending, Done, Cancelled, Cleared };
 struct CaptureResult {

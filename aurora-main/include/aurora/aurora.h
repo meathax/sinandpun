@@ -204,6 +204,63 @@ void aurora_set_metalfx_spatial(bool enabled);
 bool aurora_get_metalfx_spatial();
 bool aurora_is_metalfx_spatial_supported();
 AuroraMetalFXStatus aurora_get_metalfx_status();
+
+// Single upscaler selector shared by FSR and DLSS. Only OFF and FSR1 are implemented in aurora itself;
+// FSR3 and DLSS are reserved so config/UI code has one enum (requesting an unimplemented one behaves like
+// FSR1 at the same scale, see aurora_get_upscale_info().active).
+typedef enum {
+  AURORA_UPSCALER_OFF = 0,
+  AURORA_UPSCALER_FSR1 = 1,
+  AURORA_UPSCALER_FSR3 = 2,
+  AURORA_UPSCALER_DLSS = 3,
+} AuroraUpscaler;
+
+typedef struct {
+  AuroraUpscaler requested;
+  AuroraUpscaler active; // what the last presented frame really used (OFF when it fell back to plain resampling)
+  float scaleFactor;
+  float sharpness;       // 0..1
+  uint32_t inputWidth;   // size of the image handed to the upscaler (the game's internal resolution)
+  uint32_t inputHeight;
+  uint32_t outputWidth;  // size of the upscaled image on the swapchain
+  uint32_t outputHeight;
+  bool sharpened;        // RCAS ran on the last frame
+} AuroraUpscaleInfo;
+
+// scaleFactor is the per-axis output/internal ratio (1.0 native, 1.3, 1.5, 1.7, 2.0, 3.0). With an upscaler on
+// and scaleFactor > 1 the game renders at (aspect-fitted window size / scaleFactor) and this overrides the
+// resolution multiplier. sharpness 0 disables RCAS. Safe to call from the producer thread at a frame boundary.
+void aurora_set_upscaler(AuroraUpscaler mode, float scaleFactor, float sharpness);
+void aurora_get_upscale_info(AuroraUpscaleInfo* info);
+
+// NVIDIA DLSS (AURORA_UPSCALER_DLSS). DLSS needs Windows, the Direct3D 12 backend, an NVIDIA RTX GPU and the DLLs
+// next to the executable (sl.interposer.dll, sl.common.dll, sl.dlss.dll, nvngx_dlss.dll). Detection runs on a
+// background thread shortly after start-up: poll until the state leaves CHECKING. `reason` says what is missing
+// when the state is UNAVAILABLE or FAILED. With AURORA_UPSCALER_DLSS requested, scaleFactor picks the mode (3.0
+// Ultra Performance, 2.0 Performance, 1.72 Balanced, 1.5 Quality, 1.0 DLAA) and DLSS replaces the FSR1 path as soon
+// as it is available (until then, or when it is not, the FSR1 path runs at the same scale). sharpness 0..1 drives a
+// small contrast-adaptive sharpening pass after DLSS (0 = none).
+typedef enum {
+  AURORA_DLSS_NOT_STARTED = 0,
+  AURORA_DLSS_CHECKING,
+  AURORA_DLSS_AVAILABLE,
+  AURORA_DLSS_UNAVAILABLE,
+  AURORA_DLSS_FAILED,
+} AuroraDlssState;
+
+typedef struct {
+  AuroraDlssState state;
+  char reason[192];
+  char version[96]; // "Streamline 2.14.16 / DLSS 310.9.16" once available
+} AuroraDlssStatus;
+
+void aurora_get_dlss_status(AuroraDlssStatus* status);
+// The game has no velocity buffer: true uses motion vectors estimated from the images (optical flow), false sends zero
+// vectors (DLSS then rejects history by itself). Takes effect on the next frame.
+void aurora_set_dlss_motion_vectors(bool enabled);
+// Saves the final game image (upscaled, before the overlay is drawn) of the next presented frame as a PNG.
+void aurora_capture_present_image(const char* pngPath);
+
 void aurora_set_resampler(AuroraSampler sampler);
 /** Sets the clock timescale. Default 1.0f. 0.0f is paused. Range 0.0f-16.0f. */
 void aurora_set_timescale(float scale);

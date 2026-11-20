@@ -3,6 +3,7 @@
 #include "hle/dvd_contract.h"
 #include "hle/runtime_parse_helpers.h"
 #include "memory.h"
+#include "perf_pacing.h"
 
 // Defined in hle/gx/gx_objects.cpp. DVD reads are DMA-class writes to guest
 // RAM: the game brackets them with DCInvalidateRange (not a flush), so the GX
@@ -27,6 +28,10 @@ extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 #include <mutex>
 #include <sstream>
 #include <utility>
+#include <chrono>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -119,6 +124,113 @@ static void CopyToGuestAsDma(uint32_t dest, const uint8_t* data, size_t size) {
         done += chunk;
     }
     GxNotifyGuestRamDmaWrite(dest, static_cast<uint32_t>(size));
+}
+
+// ============================================================================
+// Host file reads (guest-thread latency)
+// ============================================================================
+// DvdReadContract::ReadExact opens, sizes, seeks and closes the host file on every call, and BRSTM
+// streaming issues 16 KB reads continuously. This keeps the handles open (positional ReadFile, no seek)
+// and reuses the staging buffer. SIN_DVD_FAST=0 restores the old path for A/B measurements.
+#if defined(_WIN32)
+namespace {
+
+struct CachedHostFile {
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    uint64_t size = 0;
+};
+
+std::mutex g_hostFileMutex;
+std::map<std::wstring, CachedHostFile> g_hostFiles;
+
+bool DvdFastReadEnabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("SIN_DVD_FAST");
+        return !(v && *v == '0');
+    }();
+    return enabled;
+}
+
+bool FastReadExact(const fs::path& hostPath, uint64_t offset, uint32_t length, std::vector<uint8_t>& destination,
+                   DvdReadContract::HostReadFailure& failure) {
+    failure = DvdReadContract::HostReadFailure::None;
+    CachedHostFile file;
+    {
+        std::lock_guard<std::mutex> lock(g_hostFileMutex);
+        const std::wstring key = hostPath.wstring();
+        auto it = g_hostFiles.find(key);
+        if (it == g_hostFiles.end()) {
+            HANDLE h = CreateFileW(key.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            LARGE_INTEGER size{};
+            if (h == INVALID_HANDLE_VALUE || !GetFileSizeEx(h, &size)) {
+                if (h != INVALID_HANDLE_VALUE) {
+                    CloseHandle(h);
+                }
+                failure = DvdReadContract::HostReadFailure::MissingFile;
+                return false;
+            }
+            if (g_hostFiles.size() >= 64) {
+                for (auto& [path, cached] : g_hostFiles) {
+                    CloseHandle(cached.handle);
+                }
+                g_hostFiles.clear();
+            }
+            it = g_hostFiles.emplace(key, CachedHostFile{h, static_cast<uint64_t>(size.QuadPart)}).first;
+        }
+        file = it->second;
+    }
+    if (offset >= file.size) {
+        failure = DvdReadContract::HostReadFailure::BadOffset;
+        return false;
+    }
+    if (static_cast<uint64_t>(length) > file.size - offset) {
+        failure = DvdReadContract::HostReadFailure::ShortRead;
+        return false;
+    }
+    destination.resize(length);
+    uint32_t done = 0;
+    while (done < length) {
+        OVERLAPPED ov{};
+        const uint64_t at = offset + done;
+        ov.Offset = static_cast<DWORD>(at);
+        ov.OffsetHigh = static_cast<DWORD>(at >> 32);
+        DWORD got = 0;
+        if (!ReadFile(file.handle, destination.data() + done, length - done, &got, &ov) || got == 0) {
+            failure = DvdReadContract::HostReadFailure::ShortRead;
+            return false;
+        }
+        done += got;
+    }
+    return true;
+}
+
+} // namespace
+#endif
+
+static bool DvdHostRead(const fs::path& hostPath, uint64_t offset, uint32_t length, std::vector<uint8_t>& destination,
+                        DvdReadContract::HostReadFailure& failure) {
+    const auto start = std::chrono::steady_clock::now();
+#if defined(_WIN32)
+    const bool ok = DvdFastReadEnabled() ? FastReadExact(hostPath, offset, length, destination, failure)
+                                         : DvdReadContract::ReadExact(hostPath, offset, length, destination, failure);
+#else
+    const bool ok = DvdReadContract::ReadExact(hostPath, offset, length, destination, failure);
+#endif
+    PerfPacing::NoteDvdRead(std::chrono::steady_clock::now() - start, length);
+    return ok;
+}
+
+// Staging buffer reused between reads on one thread; a rare huge read does not pin its memory.
+static std::vector<uint8_t>& DvdScratch() {
+    static thread_local std::vector<uint8_t> buffer;
+    return buffer;
+}
+
+static void DvdScratchTrim(std::vector<uint8_t>& buffer) {
+    if (buffer.capacity() > (8u << 20)) {
+        std::vector<uint8_t>().swap(buffer);
+    }
 }
 
 // Host path strings only ever leave this module as UTF-8 display text.
@@ -802,14 +914,15 @@ extern "C" int32_t DVDReadPrio_8015E834(uint32_t fileInfoPtr, uint32_t bufferPtr
                             "DVD read destination is outside guest memory");
     }
 
-    std::vector<uint8_t> tempBuf;
+    std::vector<uint8_t>& tempBuf = DvdScratch();
     DvdReadContract::HostReadFailure failure;
-    if (!DvdReadContract::ReadExact(entry.hostPath, uOffset, uLength, tempBuf, failure)) {
+    if (!DvdHostRead(entry.hostPath, uOffset, uLength, tempBuf, failure)) {
         return DvdReadFatal(fileInfoPtr, HostPathText(entry.hostPath), offset, uLength,
                             DvdReadContract::Describe(failure));
     }
 
     CopyToGuestAsDma(bufferPtr, tempBuf.data(), uLength);
+    DvdScratchTrim(tempBuf);
 
     Memory::Write32(fileInfoPtr + DVD_CB_OFFSET_TRANSFERRED, uLength);
     Memory::Write32(fileInfoPtr + DVD_CB_OFFSET_STATE, DVD_STATE_END);
@@ -869,9 +982,9 @@ extern "C" int32_t DVD__ReadAbsAsyncPrio_HLE_801628cc(uint32_t cmdBlockPtr,
                                      readInfo.fileOffset, requestedLength,
                                      "DVD read destination is outside guest memory");
         } else {
-            std::vector<uint8_t> tempBuf;
+            std::vector<uint8_t>& tempBuf = DvdScratch();
             DvdReadContract::HostReadFailure failure;
-            if (!DvdReadContract::ReadExact(readInfo.entry->hostPath,
+            if (!DvdHostRead(readInfo.entry->hostPath,
                                             readInfo.fileOffset,
                                             readInfo.readLength,
                                             tempBuf,
@@ -882,6 +995,7 @@ extern "C" int32_t DVD__ReadAbsAsyncPrio_HLE_801628cc(uint32_t cmdBlockPtr,
             } else {
                 CopyToGuestAsDma(bufferPtr, tempBuf.data(), tempBuf.size());
                 bytesRead = static_cast<int32_t>(tempBuf.size());
+                DvdScratchTrim(tempBuf);
             }
         }
 
@@ -1000,9 +1114,9 @@ extern "C" int32_t DVDLowRead_80166330(uint32_t buffer, uint32_t length, uint32_
         return finish(false);
     }
 
-    std::vector<uint8_t> tempBuf;
+    std::vector<uint8_t>& tempBuf = DvdScratch();
     DvdReadContract::HostReadFailure failure;
-    if (!DvdReadContract::ReadExact(readInfo.entry->hostPath,
+    if (!DvdHostRead(readInfo.entry->hostPath,
                                     readInfo.fileOffset,
                                     readInfo.readLength,
                                     tempBuf,
@@ -1013,6 +1127,7 @@ extern "C" int32_t DVDLowRead_80166330(uint32_t buffer, uint32_t length, uint32_
     }
 
     CopyToGuestAsDma(buffer, tempBuf.data(), tempBuf.size());
+    DvdScratchTrim(tempBuf);
     return finish(true);
 }
 PPC_NATIVE_OVERRIDE(80194E60, DVDLowRead_80166330, int32_t, (uint32_t b, uint32_t l, uint32_t o, uint32_t c), (b, l, o, c));

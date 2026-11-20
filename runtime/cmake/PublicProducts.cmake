@@ -38,6 +38,15 @@ endif()
 function(mkw_apply_translated_compile_options target)
     target_compile_options(${target} PRIVATE
         -O2 ${MKW_TRANSLATED_PPC_FP_OPTIONS} -fno-slp-vectorize -mllvm -hot-cold-split=true -w -pipe)
+    # Optional PGO of the translated guest code only (docs/PERF-CPU-NOTES.md):
+    #   -DMKW_PGO_GEN=ON                       instrumented build (writes default.profraw / LLVM_PROFILE_FILE)
+    #   -DMKW_PGO_USE=<merged .profdata path>  optimized build
+    if(MKW_PGO_GEN)
+        target_compile_options(${target} PRIVATE -fprofile-instr-generate)
+    elseif(MKW_PGO_USE AND EXISTS "${MKW_PGO_USE}")
+        target_compile_options(${target} PRIVATE
+            "-fprofile-instr-use=${MKW_PGO_USE}" -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
+    endif()
 endfunction()
 
 # Translated shard TUs are the memory-hungry compiles; everything else in the build is
@@ -168,6 +177,9 @@ function(mkw_configure_product target)
         SDL_MAIN_HANDLED _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION TARGET_PC)
     target_compile_features(${target} PRIVATE cxx_std_20)
     mkw_apply_common_compile_options(${target})
+    if(MKW_PGO_GEN)
+        target_link_options(${target} PRIVATE -fprofile-instr-generate)
+    endif()
     target_link_libraries(${target} PRIVATE
         mkw_platform mkw_base_shared mkw::toml11)
 

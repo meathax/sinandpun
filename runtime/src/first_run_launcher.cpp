@@ -1,0 +1,425 @@
+// First-run launcher UI. See first_run_launcher.h.
+
+#include "first_run_launcher.h"
+
+#include "aurora_events.h"
+#include "disc_import.h"
+#include "game_ui.h"
+#include "runtime_config.h"
+
+#include <SDL3/SDL_video.h>
+#include <aurora/aurora.h>
+#include <aurora/event.h>
+#include <imgui.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <objbase.h>
+#include <shobjidl.h>
+#endif
+
+namespace fs = std::filesystem;
+
+namespace first_run_launcher {
+
+fs::path ManagedGameDirectory() { return RuntimeConfigFile::ApplicationDataDirectory() / "Game"; }
+
+namespace {
+
+bool LooksLikeGameRoot(const fs::path& root) {
+    std::error_code ec;
+    return !root.empty() && fs::is_directory(root / "files", ec) && fs::is_regular_file(root / "sys" / "fst.bin", ec) &&
+           fs::is_regular_file(root / "sys" / "main.dol", ec);
+}
+
+void PointConfigAtManagedGame() {
+    RuntimeConfigFile::Mutable().dvdRoot = "Game";
+    RuntimeConfigFile::WriteSetting("paths", "dvd_root", RuntimeConfigFile::FormatString("Game"));
+}
+
+}  // namespace
+
+bool GameDataAvailable() {
+    if (LooksLikeGameRoot(RuntimeConfigFile::ResolvedDvdRoot())) return true;
+    // Imported earlier but the config lost its path: adopt the managed copy instead of asking again.
+    if (RuntimeConfigFile::DvdRoot().empty() && LooksLikeGameRoot(ManagedGameDirectory())) {
+        PointConfigAtManagedGame();
+        return true;
+    }
+    return false;
+}
+
+#ifndef _WIN32
+bool Run() { return false; }
+#else
+
+namespace {
+
+using game_ui::Px;
+
+enum class Phase { Idle, Importing, Done, Failed };
+
+struct Launcher {
+    Phase phase = Phase::Idle;
+    int focus = 0;
+
+    // file dialog thread
+    std::thread dialogThread;
+    std::atomic<int> dialogState{0};  // 0 idle, 1 open, 2 finished
+    std::mutex lock;
+    fs::path picked;
+
+    // import thread
+    std::thread importThread;
+    DiscImport::Progress progress;
+    DiscImport::Summary summary;
+    std::atomic<int> importState{0};  // 0 running, 1 ok, 2 failed, 3 cancelled
+    std::string error;
+    std::chrono::steady_clock::time_point importStart;
+    std::string imageName;
+
+    bool dropHover = false;
+    fs::path dropped;
+};
+
+HWND WindowHandle() {
+    SDL_Window* window = aurora_get_window();
+    if (!window) return nullptr;
+    return static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+}
+
+fs::path PickDiscImage(HWND owner) {
+    fs::path result;
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    IFileOpenDialog* dialog = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_IFileOpenDialog,
+                                   reinterpret_cast<void**>(&dialog))) && dialog) {
+        static const COMDLG_FILTERSPEC filters[] = {
+            {L"Wii disc images (*.iso, *.wbfs, *.cue, *.bin)", L"*.iso;*.wbfs;*.cue;*.bin"},
+            {L"All files", L"*.*"},
+        };
+        dialog->SetFileTypes(2, filters);
+        dialog->SetTitle(L"Select your Sin & Punishment: Star Successor disc image");
+        DWORD options = 0;
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
+        if (SUCCEEDED(dialog->Show(owner))) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(dialog->GetResult(&item)) && item) {
+                PWSTR text = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &text)) && text) {
+                    result = fs::path(text);
+                    CoTaskMemFree(text);
+                }
+                item->Release();
+            }
+        }
+        dialog->Release();
+    }
+    if (SUCCEEDED(init)) CoUninitialize();
+    return result;
+}
+
+void JoinFinished(std::thread& t) {
+    if (t.joinable()) t.join();
+}
+
+void StartImport(Launcher& l, const fs::path& image) {
+    JoinFinished(l.importThread);
+    l.progress.cancel = false;
+    l.progress.done = 0;
+    l.progress.total = 1;
+    l.summary = {};
+    l.error.clear();
+    l.imageName = image.filename().string();
+    l.importState = 0;
+    l.importStart = std::chrono::steady_clock::now();
+    l.phase = Phase::Importing;
+    l.focus = 0;
+    game_ui::Suppress(0.5f);
+    l.importThread = std::thread([&l, image] {
+        std::string error;
+        const auto result = DiscImport::ImportDisc(image, ManagedGameDirectory(), l.progress, l.summary, error);
+        {
+            std::lock_guard<std::mutex> guard(l.lock);
+            l.error = error;
+        }
+        l.importState = result == DiscImport::Result::Ok ? 1 : result == DiscImport::Result::Cancelled ? 3 : 2;
+    });
+}
+
+std::string Megabytes(uint64_t bytes) {
+    char text[48];
+    std::snprintf(text, sizeof text, "%.0f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    return text;
+}
+
+// Returns true when the button was activated by mouse. `hot` highlights it for keyboard / pad focus.
+bool Button(ImDrawList* dl, game_ui::Frame& in, ImVec2 centre, float widthU, const char* label, bool focused, bool primary) {
+    const ImVec2 half(Px(widthU) * 0.5f, Px(40.0f));
+    const ImVec2 mn(centre.x - half.x, centre.y - half.y), mx(centre.x + half.x, centre.y + half.y);
+    const bool hover = in.mouseValid && game_ui::PointIn(in.mouse, mn, mx);
+    const bool hot = hover || focused;
+    const ImU32 fill = primary ? (hot ? IM_COL32(74, 156, 255, 255) : IM_COL32(36, 112, 226, 255))
+                               : (hot ? IM_COL32(120, 150, 186, 255) : IM_COL32(84, 114, 150, 255));
+    game_ui::DrawPill(dl, mn, mx, fill, IM_COL32(244, 249, 253, 255), 1.0f, std::max(2.0f, Px(3.0f)));
+    game_ui::TextCentered(dl, 30.0f, centre, game_ui::kWhite, label);
+    return hover && in.mouseClicked;
+}
+
+void DrawBackground(ImDrawList* dl, const ImVec2& size) {
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), size, IM_COL32(14, 28, 58, 255), IM_COL32(14, 28, 58, 255), IM_COL32(4, 8, 20, 255),
+                                IM_COL32(4, 8, 20, 255));
+}
+
+}  // namespace
+
+bool Run() {
+    Launcher l;
+
+    // The default 854x480 window renders the 1080p-based UI far too small; use 720p while the launcher is up.
+    SDL_Window* window = aurora_get_window();
+    int originalW = 0, originalH = 0;
+    bool resized = false;
+    if (window && aurora_get_display_mode() == AURORA_DISPLAY_MODE_WINDOWED &&
+        !(SDL_GetWindowFlags(window) & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_FULLSCREEN))) {
+        SDL_GetWindowSize(window, &originalW, &originalH);
+        if (originalH < 720) {
+            SDL_SetWindowSize(window, 1280, 720);
+            resized = true;
+        }
+    }
+
+    game_ui::Suppress(0.4f);
+    bool finished = false;
+
+    // QA hooks: SIN_LAUNCHER_DROP=a;b;c feeds the paths through the same path as a window drop (one every SIN_LAUNCHER_DROP_GAP
+    // seconds while no import runs); SIN_LAUNCHER_AUTOPLAY=1 presses Play when the import is done.
+    std::vector<fs::path> hookDrops;
+    if (const char* env = std::getenv("SIN_LAUNCHER_DROP")) {
+        const std::string all = env;
+        for (size_t at = 0; at <= all.size();) {
+            const size_t semi = all.find(';', at);
+            const std::string item = all.substr(at, semi == std::string::npos ? std::string::npos : semi - at);
+            if (!item.empty()) hookDrops.push_back(RuntimeConfigFile::PathFromUtf8(item));
+            if (semi == std::string::npos) break;
+            at = semi + 1;
+        }
+    }
+    const char* gapEnv = std::getenv("SIN_LAUNCHER_DROP_GAP");
+    const double hookGap = gapEnv ? std::atof(gapEnv) : 3.0;
+    const bool hookAutoplay = std::getenv("SIN_LAUNCHER_AUTOPLAY") != nullptr;
+    const char* cancelEnv = std::getenv("SIN_LAUNCHER_CANCEL_AFTER_MS");
+    const double cancelAfterMs = cancelEnv ? std::atof(cancelEnv) : 0.0;
+    size_t hookNext = 0;
+    auto hookClock = std::chrono::steady_clock::now();
+
+    auto stopWorkers = [&] {
+        l.progress.cancel = true;
+        JoinFinished(l.importThread);
+        JoinFinished(l.dialogThread);
+    };
+
+    while (!finished) {
+        // ---- events
+        const AuroraEvent* events = aurora_update();
+        game_ui::InstallFont();
+        for (const AuroraEvent* ev = events; ev && ev->type != AURORA_NONE; ++ev) {
+            if (ev->type == AURORA_EXIT) {
+                // Give an import in flight a moment to remove its half-written files.
+                l.progress.cancel = true;
+                for (int i = 0; i < 60 && l.importState.load() == 0 && l.phase == Phase::Importing; ++i) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                ExitForAuroraWindowClose();
+            }
+            if (ev->type != AURORA_SDL_EVENT) continue;
+            switch (ev->sdl.type) {
+            case SDL_EVENT_DROP_BEGIN: l.dropHover = true; break;
+            case SDL_EVENT_DROP_COMPLETE: l.dropHover = false; break;
+            case SDL_EVENT_DROP_FILE:
+                l.dropHover = false;
+                if (ev->sdl.drop.data) l.dropped = RuntimeConfigFile::PathFromUtf8(ev->sdl.drop.data);
+                break;
+            default: break;
+            }
+        }
+
+        if (hookNext < hookDrops.size() && l.phase != Phase::Importing && l.phase != Phase::Done &&
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - hookClock).count() >= hookGap) {
+            l.dropped = hookDrops[hookNext++];
+            hookClock = std::chrono::steady_clock::now();
+        }
+        if (cancelAfterMs > 0 && l.phase == Phase::Importing &&
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - l.importStart).count() >= cancelAfterMs) {
+            l.progress.cancel = true;
+        }
+        if (hookAutoplay && l.phase == Phase::Done &&
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - hookClock).count() >= hookGap) {
+            finished = true;
+        }
+
+        // ---- state transitions
+        if (l.dialogState.load() == 2) {
+            JoinFinished(l.dialogThread);
+            l.dialogState = 0;
+            fs::path chosen;
+            {
+                std::lock_guard<std::mutex> guard(l.lock);
+                chosen = std::move(l.picked);
+                l.picked.clear();
+            }
+            if (!chosen.empty() && l.phase != Phase::Importing && l.phase != Phase::Done) StartImport(l, chosen);
+        }
+        if (!l.dropped.empty()) {
+            const fs::path file = std::move(l.dropped);
+            l.dropped.clear();
+            if (l.phase != Phase::Importing && l.phase != Phase::Done) StartImport(l, file);
+        }
+        if (l.phase == Phase::Importing && l.importState.load() != 0) {
+            JoinFinished(l.importThread);
+            const int state = l.importState.load();
+            if (state == 1) {
+                PointConfigAtManagedGame();
+                l.phase = Phase::Done;
+                hookClock = std::chrono::steady_clock::now();
+            } else {
+                l.phase = Phase::Failed;
+                if (state == 3) l.phase = Phase::Idle;
+            }
+            l.focus = 0;
+            game_ui::Suppress(0.3f);
+        }
+
+        // ---- frame
+        if (!BeginAuroraFrame()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        game_ui::Frame& in = game_ui::PollInput();
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const ImVec2 size = ImGui::GetIO().DisplaySize;
+        DrawBackground(dl, size);
+
+        const float cx = size.x * 0.5f;
+        const float panelW = std::min(Px(1100.0f), size.x - Px(60.0f)), panelH = Px(640.0f);
+        const float top = std::max(Px(20.0f), (size.y - panelH) * 0.5f - Px(20.0f));
+        const ImVec2 pmin(cx - panelW * 0.5f, top), pmax(cx + panelW * 0.5f, top + panelH);
+        game_ui::DrawGlassPanel(dl, pmin, pmax, 1.0f);
+        if (l.dropHover) dl->AddRect(pmin, pmax, game_ui::kTitleYellow, Px(40.0f), 0, std::max(3.0f, Px(5.0f)));
+
+        game_ui::TextCentered(dl, 76.0f, ImVec2(cx, top + Px(95.0f)), game_ui::kTitleYellow, "SIN & PUNISHMENT");
+        game_ui::TextCentered(dl, 40.0f, ImVec2(cx, top + Px(165.0f)), game_ui::kWhite, "STAR SUCCESSOR");
+
+        const float bodyX = pmin.x + Px(90.0f), bodyW = panelW - Px(180.0f), bodyY = top + Px(225.0f);
+        const float btnY = top + panelH - Px(85.0f);
+        bool primary = false, secondary = false;
+
+        if (l.phase == Phase::Idle || l.phase == Phase::Failed) {
+            if (l.phase == Phase::Failed) {
+                std::string message;
+                {
+                    std::lock_guard<std::mutex> guard(l.lock);
+                    message = l.error;
+                }
+                game_ui::DrawWrapped(dl, 28.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kBad, "Import failed", game_ui::Outline::Thin, 1.0f, true);
+                game_ui::DrawWrapped(dl, 26.0f, ImVec2(bodyX, bodyY + Px(50.0f)), bodyW, game_ui::kWhite, message, game_ui::Outline::Thin, 1.0f, true);
+            } else {
+                game_ui::DrawWrapped(dl, 30.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kWhite,
+                                     "Welcome! To get started, select your own disc image of Sin & Punishment: Star Successor (North America).",
+                                     game_ui::Outline::Thin, 1.0f, true);
+                game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(105.0f)), bodyW, game_ui::kTextDim,
+                                     "Supported: .iso, .wbfs, or .cue/.bin. The game files are copied into this app once; the disc image is not needed afterwards.",
+                                     game_ui::Outline::Thin, 1.0f, true);
+            }
+            const bool busy = l.dialogState.load() == 1;
+            const char* label = busy ? "Waiting for file dialog..." : (l.phase == Phase::Failed ? "Select another disc image" : "Select disc image");
+            primary = Button(dl, in, ImVec2(cx, btnY - Px(70.0f)), 560.0f, label, l.focus == 0, true);
+            game_ui::TextCentered(dl, 22.0f, ImVec2(cx, btnY + Px(10.0f)), game_ui::kTextDim, "or drag and drop the file onto this window",
+                                  game_ui::Outline::Thin);
+            if (in.accept && l.focus == 0) primary = true;
+            if (busy) primary = false;
+            if (primary) {
+                l.dialogState = 1;
+                JoinFinished(l.dialogThread);
+                const HWND owner = WindowHandle();
+                l.dialogThread = std::thread([&l, owner] {
+                    fs::path chosen = PickDiscImage(owner);
+                    {
+                        std::lock_guard<std::mutex> guard(l.lock);
+                        l.picked = std::move(chosen);
+                    }
+                    l.dialogState = 2;
+                });
+            }
+        } else if (l.phase == Phase::Importing) {
+            std::string stage, detail;
+            l.progress.Get(stage, detail);
+            const uint64_t done = l.progress.done.load(), total = std::max<uint64_t>(1, l.progress.total.load());
+            const float fraction = std::clamp(static_cast<float>(static_cast<double>(done) / static_cast<double>(total)), 0.0f, 1.0f);
+            game_ui::TextCentered(dl, 32.0f, ImVec2(cx, bodyY + Px(10.0f)), game_ui::kWhite, (stage.empty() ? "Starting..." : stage + "...").c_str());
+            if (!detail.empty()) {
+                game_ui::TextCentered(dl, 22.0f, ImVec2(cx, bodyY + Px(60.0f)), game_ui::kTextDim,
+                                      game_ui::Ellipsize(detail, 22.0f, bodyW, true).c_str(), game_ui::Outline::Thin);
+            }
+            const ImVec2 bmin(bodyX, bodyY + Px(110.0f)), bmax(bodyX + bodyW, bodyY + Px(150.0f));
+            game_ui::DrawPill(dl, bmin, bmax, IM_COL32(10, 30, 66, 230), IM_COL32(244, 249, 253, 255), 1.0f, std::max(2.0f, Px(3.0f)));
+            const float fillW = (bmax.x - bmin.x - Px(8.0f)) * fraction;
+            if (fillW > Px(20.0f)) {
+                game_ui::DrawPill(dl, ImVec2(bmin.x + Px(4.0f), bmin.y + Px(4.0f)), ImVec2(bmin.x + Px(4.0f) + fillW, bmax.y - Px(4.0f)),
+                                  IM_COL32(74, 190, 255, 255), IM_COL32(0, 0, 0, 0), 1.0f);
+            }
+            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - l.importStart).count();
+            char info[128];
+            std::snprintf(info, sizeof info, "%.0f%%   %s of %s   %.0f MB/s", fraction * 100.0, Megabytes(done).c_str(), Megabytes(total).c_str(),
+                          seconds > 0.5 ? static_cast<double>(done) / (1024.0 * 1024.0) / seconds : 0.0);
+            game_ui::TextCentered(dl, 24.0f, ImVec2(cx, bodyY + Px(190.0f)), game_ui::kTextNormal, info, game_ui::Outline::Thin);
+            secondary = Button(dl, in, ImVec2(cx, btnY), 320.0f, "Cancel", l.focus == 0, false);
+            if (in.accept || in.back) secondary = true;
+            if (secondary) l.progress.cancel = true;
+        } else {  // Done
+            const DiscImport::Summary& s = l.summary;
+            game_ui::TextCentered(dl, 34.0f, ImVec2(cx, bodyY + Px(10.0f)), game_ui::kGood, "Import complete");
+            char text[256];
+            std::snprintf(text, sizeof text, "%u game files (%s) and %u stage modules prepared in %.0f seconds.", s.files,
+                          Megabytes(s.bytes).c_str(), s.modules, s.seconds);
+            game_ui::DrawWrapped(dl, 26.0f, ImVec2(bodyX, bodyY + Px(70.0f)), bodyW, game_ui::kWhite, text, game_ui::Outline::Thin, 1.0f, true);
+            game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(150.0f)), bodyW, game_ui::kTextDim,
+                                 "Your disc image is no longer needed. Game data lives in: " + RuntimeConfigFile::PathToUtf8(ManagedGameDirectory()),
+                                 game_ui::Outline::Thin, 1.0f, true);
+            primary = Button(dl, in, ImVec2(cx, btnY), 420.0f, "Play", l.focus == 0, true);
+            if (in.accept) primary = true;
+            if (primary) finished = true;
+        }
+
+        std::vector<std::pair<std::string, std::string>> hints;
+        if (l.phase == Phase::Importing) hints = {{"B", "Cancel"}};
+        else if (l.phase == Phase::Done) hints = {{"A", "Play"}};
+        else hints = {{"A", "Select"}};
+        game_ui::DrawHints(dl, ImVec2(cx, pmax.y + Px(70.0f)), hints, 1.0f, 1);
+
+        EndAuroraFrame();
+    }
+
+    stopWorkers();
+    if (resized && window) {
+        SDL_SetWindowSize(window, originalW, originalH);
+    }
+    return true;
+}
+
+#endif  // _WIN32
+
+}  // namespace first_run_launcher

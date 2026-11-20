@@ -1,11 +1,17 @@
 param(
     [string]$Source = "build\native",     # build tree with the freshly built WiiCompiled.exe
-    [string]$Target = "ready"
+    [string]$Target = "ready",
+    [switch]$FetchDlss,                   # download the NVIDIA Streamline / DLSS SDK release (263 MB zip) into third_party\nvidia first
+    [switch]$NoDlss                       # do not copy the NVIDIA DLSS DLLs
 )
 # Refreshes the self-contained, ready-to-play folder `ready\` from the current build.
 #   * copies the exe, runtime DLLs, pipeline cache, wii_bootstrap and the prelinked stage modules (modules\stgNN.bin)
 #   * NEVER overwrites ready\UserData (settings and saves) once it exists; Config.toml is only created the first time
 #   * writes BUILD-INFO.txt (git commit, exe SHA-256, date) and Play.bat
+#   * copies the NVIDIA DLSS DLLs (sl.interposer.dll, sl.common.dll, sl.dlss.dll, nvngx_dlss.dll + their licence texts)
+#     from third_party\nvidia\streamline\bin\x64 when present (-FetchDlss downloads the SDK; -NoDlss skips them).
+#     They are NVIDIA-licensed (NVIDIA RTX SDKs LICENSE) and are NOT part of the GPL source tree; the game starts without
+#     them and the DLSS option then reports "NVIDIA RTX GPU and nvngx_dlss.dll required" (docs/DLSS-NOTES.md).
 # Usage (repo root): powershell -File tools\update_ready.ps1
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
@@ -18,10 +24,49 @@ if (Get-Process WiiCompiled -ErrorAction SilentlyContinue | Where-Object { $_.Pa
 }
 New-Item -ItemType Directory -Force $dst | Out-Null
 
-foreach ($f in "WiiCompiled.exe", "SDL3.dll", "webgpu_dawn.dll", "dxcompiler.dll", "dxil.dll", "libc++.dll", "libpng16.dll",
-               "libunwind.dll", "libzlib1.dll", "initial_pipeline_cache.db") {
-    $p = Join-Path $src $f
-    if (Test-Path $p) { Copy-Item $p $dst -Force } else { Write-Warning "missing $f in $Source" }
+$dlssDir = Join-Path $root "third_party\nvidia\streamline"
+if ($FetchDlss -and -not (Test-Path (Join-Path $dlssDir "bin\x64\sl.interposer.dll"))) {
+    # Official release zip (the binaries are not in the git repository since SL 2.7.32). 2.14.16 = the version this
+    # integration was tested with (DLSS 310.9.16 inside). Only the pieces the game needs are kept.
+    $slVersion = "v2.14.16"
+    $zip = Join-Path $env:TEMP "streamline-sdk-$slVersion.zip"
+    $tmp = Join-Path $env:TEMP "streamline-sdk-$slVersion"
+    Invoke-WebRequest "https://github.com/NVIDIA-RTX/Streamline/releases/download/$slVersion/streamline-sdk-$slVersion.zip" -OutFile $zip -UseBasicParsing
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    Expand-Archive $zip $tmp -Force
+    $sdk = if (Test-Path (Join-Path $tmp "bin\x64")) { $tmp } else { (Get-ChildItem $tmp -Directory | Select-Object -First 1).FullName }
+    if (-not (Test-Path (Join-Path $sdk "bin\x64\sl.interposer.dll"))) { throw "unexpected Streamline SDK layout in $tmp" }
+    New-Item -ItemType Directory -Force (Join-Path $dlssDir "bin\x64"), (Join-Path $dlssDir "docs") | Out-Null
+    Copy-Item (Join-Path $sdk "include") $dlssDir -Recurse -Force
+    foreach ($f in "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.dlss_g.dll", "sl.pcl.dll", "sl.reflex.dll",
+                   "nvngx_dlss.dll", "nvngx_dlssg.dll", "nvngx_dlss.license.txt", "reflex.license.txt") {
+        $s = Join-Path $sdk "bin\x64\$f"
+        if (Test-Path $s) { Copy-Item $s (Join-Path $dlssDir "bin\x64") -Force }
+    }
+    foreach ($f in "license.txt", "3rd-party-licenses.md", "README.md") { Copy-Item (Join-Path $sdk $f) $dlssDir -Force -ErrorAction SilentlyContinue }
+    foreach ($f in "ProgrammingGuide.md", "ProgrammingGuideDLSS.md", "ProgrammingGuideDLSS_G.md", "ProgrammingGuideManualHooking.md") {
+        Copy-Item (Join-Path $sdk "docs\$f") (Join-Path $dlssDir "docs") -Force -ErrorAction SilentlyContinue
+    }
+    Copy-Item (Join-Path $dlssDir "bin\x64\nvngx_dlss.license.txt") (Join-Path $dlssDir "NVIDIA-RTX-SDKs-LICENSE.txt") -Force -ErrorAction SilentlyContinue
+    Remove-Item $tmp, $zip -Recurse -Force
+    "fetched the Streamline SDK $slVersion into $dlssDir"
+}
+if (-not $NoDlss) {
+    $dllSrc = Join-Path $dlssDir "bin\x64"
+    if (Test-Path (Join-Path $dllSrc "sl.interposer.dll")) {
+        foreach ($f in "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "nvngx_dlss.dll") {
+            $p = Join-Path $dllSrc $f
+            if (Test-Path $p) { Copy-Item $p $dst -Force } else { Write-Warning "DLSS: missing $f in $dllSrc" }
+        }
+        New-Item -ItemType Directory -Force (Join-Path $dst "licenses") | Out-Null
+        foreach ($f in "nvngx_dlss.license.txt", "..\..\license.txt", "..\..\3rd-party-licenses.md") {
+            $p = Join-Path $dllSrc $f
+            if (Test-Path $p) { Copy-Item $p (Join-Path $dst ("licenses\nvidia-" + (Split-Path $f -Leaf))) -Force }
+        }
+        "copied the NVIDIA DLSS DLLs from $dllSrc"
+    } else {
+        "NVIDIA DLSS DLLs not staged ($dllSrc); the in-game DLSS option will report them as missing (run with -FetchDlss)"
+    }
 }
 if (Test-Path (Join-Path $src "wii_bootstrap")) {
     Copy-Item (Join-Path $src "wii_bootstrap") $dst -Recurse -Force

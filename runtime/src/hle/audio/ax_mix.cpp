@@ -1,4 +1,5 @@
 #include "ax_dsp.h"
+#include "perf_sched.h"
 #include "audio_debug.h"
 
 #include "ax_internal.h"
@@ -1386,6 +1387,7 @@ private:
 
     void MixWorkerMain() {
         t_onMixWorker = true;
+        PerfSched::TuneThread("audio");
         for (;;) {
             {
                 std::unique_lock<std::mutex> lock(m_mixMutex);

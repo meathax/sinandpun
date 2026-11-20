@@ -5,9 +5,13 @@
 
 #include <tracy/Tracy.hpp>
 
-#ifdef TRACY_ENABLE
+#include <cstdio>
+#include <cstdlib>
+#include <map>
 
+#ifdef TRACY_ENABLE
 #include <tracy/TracyC.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -72,6 +76,62 @@ struct TimestampBounds {
   bool valid() const { return begin != 0 && end > begin; }
 };
 
+// SIN_GPU_PROF=1: aggregate GPU zone times and log them once per second (works without Tracy).
+bool g_logEnabled = false;
+int64_t now_ns();
+struct ZoneAgg {
+  double ms = 0;
+  uint32_t count = 0;
+};
+std::map<std::string, ZoneAgg> g_agg;
+double g_aggFrameMs = 0;
+double g_aggSpanMs = 0;
+uint32_t g_aggFrames = 0;
+int64_t g_aggStartNs = 0;
+
+void log_accumulate(const Slot& slot, const uint64_t* ts, uint64_t frameBegin, uint64_t frameEnd) {
+  ++g_aggFrames;
+  g_aggSpanMs += double(frameEnd - frameBegin) * 1e-6;
+  double busy = 0;
+  for (const auto& event : slot.events) {
+    if (event.kind == EventKind::End || ts[event.query] == 0 || ts[event.query + 1] < ts[event.query]) {
+      continue;
+    }
+    std::string name = event.name;
+    while (!name.empty() && name.back() >= '0' && name.back() <= '9') {
+      name.pop_back();
+    }
+    while (!name.empty() && name.back() == ' ') {
+      name.pop_back();
+    }
+    const double ms = double(ts[event.query + 1] - ts[event.query]) * 1e-6;
+    auto& agg = g_agg[name];
+    agg.ms += ms;
+    ++agg.count;
+    if (event.kind == EventKind::PassBegin) {
+      busy += ms;
+    }
+  }
+  g_aggFrameMs += busy;
+  const int64_t now = now_ns();
+  if (g_aggStartNs == 0) {
+    g_aggStartNs = now;
+  }
+  if (now - g_aggStartNs < 1'000'000'000) {
+    return;
+  }
+  std::string line = fmt::format("[gpu-prof] frames={} span={:.2f}ms passes={:.2f}ms/frame |", g_aggFrames,
+                                 g_aggSpanMs / g_aggFrames, g_aggFrameMs / g_aggFrames);
+  for (const auto& [name, agg] : g_agg) {
+    line += fmt::format(" {}={:.2f}ms/{:.1f}", name, agg.ms / g_aggFrames, double(agg.count) / g_aggFrames);
+  }
+  Log.info("{}", line);
+  g_agg.clear();
+  g_aggFrameMs = g_aggSpanMs = 0;
+  g_aggFrames = 0;
+  g_aggStartNs = now;
+}
+
 bool g_enabled = false;
 bool g_timestampsEnabled = false;
 wgpu::QuerySet g_querySet;
@@ -126,6 +186,7 @@ uint8_t tracy_context_type(wgpu::BackendType backend) {
   }
 }
 
+#ifdef TRACY_ENABLE
 void emit_context(const Slot& slot, uint64_t frameBegin) {
   // Tracy has no notion of WebGPU's opaque timestamp epoch, so the context
   // anchor pairs a GPU timestamp with "now" at emission. Shift the timestamp
@@ -161,6 +222,8 @@ void emit_zone_end(uint64_t gpuNs) {
   ___tracy_emit_gpu_zone_end_serial({.queryId = queryId, .context = ContextId});
   ___tracy_emit_gpu_time_serial({.gpuTime = int64_t(gpuNs), .queryId = queryId, .context = ContextId});
 }
+
+#endif
 
 TimestampBounds event_bounds(const Slot& slot, const uint64_t* ts) {
   TimestampBounds bounds;
@@ -214,6 +277,10 @@ void emit_frame(Slot& slot) {
     }
   }
 
+  if (g_logEnabled) {
+    log_accumulate(slot, ts, frameBegin, frameEnd);
+  }
+#ifdef TRACY_ENABLE
   if (!TracyIsConnected) {
     return;
   }
@@ -277,6 +344,7 @@ void emit_frame(Slot& slot) {
   TracyPlot("aurora: gpuFrameMs", double(frameEnd - frameBegin) * 1e-6);
   TracyPlot("aurora: gpuIdleMs", double(idleNs) * 1e-6);
   TracyPlot("aurora: gpuPasses", int64_t(slot.passCount));
+#endif
 }
 
 Slot& record_slot() { return g_slots[g_recordSlot]; }
@@ -290,6 +358,14 @@ uint32_t alloc_zone() {
 } // namespace
 
 void initialize() {
+  const char* logEnv = std::getenv("SIN_GPU_PROF");
+  g_logEnabled = logEnv != nullptr && *logEnv != '\0' && *logEnv != '0';
+#ifndef TRACY_ENABLE
+  if (!g_logEnabled) {
+    g_enabled = false;
+    return;
+  }
+#endif
   g_enabled = g_device.HasFeature(wgpu::FeatureName::TimestampQuery);
   if (!g_enabled) {
     Log.info("Timestamp queries unsupported; GPU profiling disabled");
@@ -457,18 +533,3 @@ Zone::~Zone() {
 }
 
 } // namespace aurora::webgpu::gpu_prof
-
-#else
-
-namespace aurora::webgpu::gpu_prof {
-void initialize() {}
-void shutdown() {}
-void frame_begin(const wgpu::CommandEncoder&) {}
-void frame_end(const wgpu::CommandEncoder&) {}
-void after_submit() {}
-const wgpu::PassTimestampWrites* pass_writes(std::string_view) { return nullptr; }
-Zone::Zone(const wgpu::CommandEncoder&, std::string_view) {}
-Zone::~Zone() = default;
-} // namespace aurora::webgpu::gpu_prof
-
-#endif
