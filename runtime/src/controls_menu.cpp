@@ -89,9 +89,7 @@ InputMap::AimSource UpdatePreview(const AimSettings::Settings& s) {
         if (s.mouse.raw) {
             DualAnalog::MouseRelativeStep(g_preview.pointer, s.aim, mdx, mdy, s.mouse.sensitivity);
         } else if (ms.valid) {
-            const DualAnalog::Rect rect = DualAnalog::ContentRect(
-                ms.winW, ms.winH, RuntimeConfigFile::ForceAspectEnabled(),
-                RuntimeConfigFile::WidescreenEnabled() ? 16.0f / 9.0f : 4.0f / 3.0f);
+            const DualAnalog::Rect rect = AimInput::PictureRect(ms);
             float u = 0.5f, v = 0.5f, tx = g_preview.pointer.x, ty = g_preview.pointer.y;
             DualAnalog::WindowToNormalized(rect, ms.x, ms.y, u, v);
             DualAnalog::NormalizedToCamera(s.aim, u, v, s.mouse.rangeX, s.mouse.rangeY, tx, ty);

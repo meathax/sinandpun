@@ -229,7 +229,8 @@ struct PerfLog {
                             "run n=%u p50=%.2f p99=%.2f p99.9=%.2f max=%.2f over25=%u | present_max_run=%.2f\n",
                             PerfPacing::SecondsSinceStart(), w.n, w.p50, w.p99, w.p999, w.max, w.over25, t.n, t.p50, t.p99, t.p999, t.max, t.over25,
                             presentMaxRun = std::max(presentMaxRun, static_cast<double>(timing.maxFrameTimeMs)));
-                }                lastPageFaults = pmc.PageFaultCount;
+                }
+                lastPageFaults = pmc.PageFaultCount;
                 lastTime = now;
                 lastFrames = frames;
                 lastCpu = cpu;

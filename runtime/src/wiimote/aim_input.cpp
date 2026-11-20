@@ -2,6 +2,7 @@
 
 #include "aim_settings.h"
 #include "runtime_log.h"
+#include "virtual_mouse.h"
 #include "virtual_remote.h"
 
 #include <SDL3/SDL_gamepad.h>
@@ -256,6 +257,15 @@ MouseSample MouseNow() {
     return g.mouse;
 }
 
+DualAnalog::Rect PictureRect(const MouseSample& ms) {
+    float l = 0.f, t = 0.f, w = 1.f, h = 1.f;
+    if (ms.winW > 0.f && ms.winH > 0.f && aurora_get_present_viewport(&l, &t, &w, &h) && w > 0.f && h > 0.f) {
+        return {l * ms.winW, t * ms.winH, w * ms.winW, h * ms.winH};
+    }
+    return DualAnalog::ContentRect(ms.winW, ms.winH, RuntimeConfigFile::ForceAspectEnabled(),
+                                   RuntimeConfigFile::WidescreenEnabled() ? 16.0f / 9.0f : 4.0f / 3.0f);
+}
+
 void ConsumeMouseDelta(float& dx, float& dy) {
     State& g = G();
     std::lock_guard<std::mutex> lock(g.mutex);
@@ -364,6 +374,7 @@ SchemeNotice LatestSwitch() {
 }
 
 void UpdateWindowState(bool inputBlocked) {
+    VirtualMouse::Tick();
     State& g = G();
     const AimSettings::MouseConfig mouse = AimSettings::Get().mouse;
     SDL_Window* window = aurora_get_window();

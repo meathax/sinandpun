@@ -193,6 +193,58 @@ size_t KeyIndex(const std::array<const char*, N>& keys, const std::string& value
     return fallback;
 }
 
+// Test harness overrides (tools/aim_test.ps1), applied after Config.toml and never saved:
+//   SIN_INPUT_SCHEME=classic|pointer|auto
+//   SIN_AIM_OVERRIDE="invert_y=1,sensitivity_x=1.5,right_deadzone=0.2,pointer_mode=absolute,curve=power,..."
+// Keys are the [aim] keys of Config.toml (numbers, booleans, curve, deadzone_mode, pointer_mode).
+inline void ApplyTestOverrides(Settings& s) {
+    if (const char* e = std::getenv("SIN_INPUT_SCHEME"); e && *e) {
+        s.schemeMode = InputMap::ParseSchemeMode(e, kSchemaVersion, s.schemeMode);
+    }
+    const char* o = std::getenv("SIN_AIM_OVERRIDE");
+    if (!o || !*o) return;
+    DualAnalog::Config& c = s.aim;
+    std::string text(o);
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        size_t end = text.find(',', pos);
+        if (end == std::string::npos) end = text.size();
+        const std::string item = text.substr(pos, end - pos);
+        pos = end + 1;
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string k = item.substr(0, eq), v = item.substr(eq + 1);
+        const float f = static_cast<float>(std::atof(v.c_str()));
+        const bool b = v == "1" || v == "true";
+        if (k == "right_deadzone") c.radialDeadzone = f;
+        else if (k == "right_saturation") c.outerSaturation = f;
+        else if (k == "curve_exponent") c.curveExponent = f;
+        else if (k == "sensitivity_x") c.sensitivityX = f;
+        else if (k == "sensitivity_y") c.sensitivityY = f;
+        else if (k == "invert_y") c.invertY = b;
+        else if (k == "smoothing_ms") c.smoothingMs = f;
+        else if (k == "precision_scale") c.precisionScale = f;
+        else if (k == "max_speed") { c.maxSpeedX = f; c.maxSpeedY = f * (700.0f / 900.0f); }
+        else if (k == "speed_cap") c.speedCap = f;
+        else if (k == "ramp_ms") c.rampSeconds = f * 0.001f;
+        else if (k == "edge_boost") c.edgeBoost = f;
+        else if (k == "recenter_on_release") c.recenterOnRelease = b;
+        else if (k == "left_deadzone") c.leftDeadzone = f;
+        else if (k == "left_saturation") c.leftSaturation = f;
+        else if (k == "invert_move_y") c.invertMoveY = b;
+        else if (k == "pointer_mode") c.absoluteMode = v == "absolute";
+        else if (k == "curve") {
+            for (size_t i = 0; i < DualAnalog::kCurveKeys.size(); ++i) {
+                if (v == DualAnalog::kCurveKeys[i]) c.curve = static_cast<DualAnalog::Curve>(i);
+            }
+        } else if (k == "deadzone_mode") {
+            for (size_t i = 0; i < DualAnalog::kDeadzoneModeKeys.size(); ++i) {
+                if (v == DualAnalog::kDeadzoneModeKeys[i]) c.deadzoneMode = static_cast<DualAnalog::DeadzoneMode>(i);
+            }
+        }
+    }
+}
+
 inline void LoadFromConfig(Settings& s) {
     std::ifstream file(RuntimeConfigFile::ResolveConfigPath(), std::ios::binary);
     if (!file) return;
@@ -245,6 +297,8 @@ inline void LoadFromConfig(Settings& s) {
     num("left_saturation", c.leftSaturation);
     num("trigger_threshold", c.triggerThreshold);
     flag("aim", "invert_move_y", c.invertMoveY);
+
+    ApplyTestOverrides(s);
 
     MouseConfig& m = s.mouse;
     flag("mouse", "enabled", m.enabled);

@@ -30,11 +30,17 @@
 #include <optional>
 #include <vector>
 
+void AimTelemetryStart();  // hle/aim_telemetry.cpp
+namespace VirtualPad { void Start(); }  // wiimote/virtual_pad.cpp
+
 namespace VirtualRemote {
 namespace {
 
 using Clock = std::chrono::steady_clock;
 using Report = std::vector<uint8_t>;
+
+std::mutex g_dbgMutex;
+AimDebug g_dbg;
 
 // SetScheme(): requested extension (-1 = none requested yet; otherwise an InputMap::Scheme value).
 std::atomic<int> g_requestedScheme{-1};
@@ -92,6 +98,8 @@ class VirtualWiimote {
 public:
     VirtualWiimote() {
         AimInput::Install();
+        AimTelemetryStart();
+        VirtualPad::Start();
         ResetState();
     }
 
@@ -792,9 +800,7 @@ private:
         } else if (byMouse) {
             const AimInput::MouseSample ms = AimInput::MouseNow();
             if (ms.valid) {
-                const bool letterbox = RuntimeConfigFile::ForceAspectEnabled();
-                const float aspect = RuntimeConfigFile::WidescreenEnabled() ? 16.0f / 9.0f : 4.0f / 3.0f;
-                const DualAnalog::Rect rect = DualAnalog::ContentRect(ms.winW, ms.winH, letterbox, aspect);
+                const DualAnalog::Rect rect = AimInput::PictureRect(ms);
                 float u = 0.5f, v = 0.5f, tx = m_pointer.x, ty = m_pointer.y;
                 DualAnalog::WindowToNormalized(rect, ms.x, ms.y, u, v);
                 DualAnalog::NormalizedToCamera(m_config, u, v, mouse.rangeX, mouse.rangeY, tx, ty);
@@ -805,6 +811,37 @@ private:
             // Stick right moves the pointer right, which moves the sensor bar left in the camera.
             DualAnalog::Advance(m_pointer, m_config, -in.rx, in.ry, dt, in.precision);
         }
+    }
+
+    void PublishDebug(const Input& in, float classicX, float classicY) {
+        AimDebug d;
+        d.scheme = static_cast<int>(m_scheme);
+        d.scripted = in.scripted;
+        d.extPresent = m_extPresent;
+        d.rx = in.rx;
+        d.ry = in.ry;
+        d.lx = in.lx;
+        d.ly = in.ly;
+        d.camX = m_pointer.x;
+        d.camY = m_pointer.y;
+        d.classicX = classicX;
+        d.classicY = classicY;
+        d.lxQ = DualAnalog::QuantizeStick(in.lx, 32, 31);
+        d.lyQ = DualAnalog::QuantizeStick(-in.ly, 32, 31);
+        d.rxQ = DualAnalog::QuantizeStick(classicX, 16, 15);
+        d.ryQ = DualAnalog::QuantizeStick(-classicY, 16, 15);
+        d.nunX = in.sx;
+        d.nunY = in.sy;
+        d.nunC = in.c;
+        d.nunZ = in.z;
+        d.buttons = in.buttons;
+        d.cl4 = in.cl4;
+        d.cl5 = in.cl5;
+        d.lt = in.lt;
+        d.rt = in.rt;
+        std::lock_guard<std::mutex> lock(g_dbgMutex);
+        d.serial = g_dbg.serial + 1;
+        g_dbg = d;
     }
 
     void BuildDataReport(Report& out) {
@@ -831,6 +868,8 @@ private:
                         m_pointer.x, m_pointer.y, in.rx, in.ry, in.sx, in.sy, in.buttons);
             }
         }
+
+        PublishDebug(in, classicX, classicY);
 
         static const struct { uint8_t id; size_t size; } kSizes[] = {
             {0x30, 3}, {0x31, 6}, {0x32, 11}, {0x33, 18}, {0x34, 22}, {0x35, 22}, {0x36, 22}, {0x37, 22}, {0x3D, 22}};
@@ -1014,6 +1053,11 @@ void SetScheme(InputMap::Scheme scheme) {
     }();
     if (scriptOwns) return;
     g_requestedScheme.store(static_cast<int>(scheme), std::memory_order_relaxed);
+}
+
+AimDebug GetAimDebug() {
+    std::lock_guard<std::mutex> lock(g_dbgMutex);
+    return g_dbg;
 }
 
 InputMap::Scheme GetScheme() {

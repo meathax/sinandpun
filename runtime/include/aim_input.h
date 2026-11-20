@@ -4,6 +4,7 @@
 // them together with the gamepad for the virtual remote (any thread), manages the relative mouse mode, and
 // implements press-to-bind capture for the settings menu.
 
+#include "dual_analog.h"
 #include "input_map.h"
 
 #include <SDL3/SDL_events.h>
@@ -31,6 +32,9 @@ struct MouseSample {
 // Latest cursor position (window coordinates) as of the call; the virtual remote reads this when the game
 // polls, not on a timer.
 MouseSample MouseNow();
+// The part of the window (window coordinates, same units as MouseSample) that shows the game picture: the real
+// presented viewport from the renderer when known, else the configured aspect.
+DualAnalog::Rect PictureRect(const MouseSample& ms);
 // Accumulated motion since the last call.
 void ConsumeMouseDelta(float& dx, float& dy);
 

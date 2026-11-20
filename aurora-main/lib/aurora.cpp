@@ -58,6 +58,10 @@ using webgpu::g_device;
 using webgpu::g_queue;
 using webgpu::g_surface;
 
+// Last presented picture rectangle as fractions of the surface (left, top, width, height); mouse mapping reads it.
+std::atomic<float> g_presentVp[4] = {{0.f}, {0.f}, {1.f}, {1.f}};
+std::atomic<bool> g_presentVpValid{false};
+
 std::atomic<bool> g_metalfxRequested{false};
 std::atomic<bool> g_metalfxSupported{false};
 std::atomic<AuroraMetalFXStatus> g_metalfxStatus{AURORA_METALFX_DISABLED};
@@ -604,6 +608,13 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
           ? webgpu::calculate_present_viewport_for_aspect(surfaceWidth, surfaceHeight, presentAspect)
           : webgpu::calculate_present_viewport(surfaceWidth, surfaceHeight, presentSource.size.width,
                                                presentSource.size.height);
+  if (surfaceWidth > 0 && surfaceHeight > 0 && viewport.width > 0.f && viewport.height > 0.f) {
+    g_presentVp[0].store(viewport.left / static_cast<float>(surfaceWidth), std::memory_order_relaxed);
+    g_presentVp[1].store(viewport.top / static_cast<float>(surfaceHeight), std::memory_order_relaxed);
+    g_presentVp[2].store(viewport.width / static_cast<float>(surfaceWidth), std::memory_order_relaxed);
+    g_presentVp[3].store(viewport.height / static_cast<float>(surfaceHeight), std::memory_order_relaxed);
+    g_presentVpValid.store(true, std::memory_order_release);
+  }
 
   wgpu::BindGroup rmlBindGroup;
   bool rmlOverlay = false;
@@ -955,6 +966,20 @@ void aurora_end_frame_gx(AuroraImguiFrame* frame) {
 }
 
 SDL_Window* aurora_get_window() { return aurora::window::get_sdl_window(); }
+
+bool aurora_get_present_viewport(float* left, float* top, float* width, float* height) {
+#ifdef AURORA_ENABLE_GX
+  if (aurora::g_presentVpValid.load(std::memory_order_acquire)) {
+    *left = aurora::g_presentVp[0].load(std::memory_order_relaxed);
+    *top = aurora::g_presentVp[1].load(std::memory_order_relaxed);
+    *width = aurora::g_presentVp[2].load(std::memory_order_relaxed);
+    *height = aurora::g_presentVp[3].load(std::memory_order_relaxed);
+    return true;
+  }
+#endif
+  (void)left; (void)top; (void)width; (void)height;
+  return false;
+}
 
 AuroraWindowSize aurora_get_window_size() {
   return aurora::window::get_sdl_window() != nullptr ? aurora::window::get_window_size() : AuroraWindowSize{};

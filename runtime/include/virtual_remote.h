@@ -28,6 +28,27 @@ InputMap::Scheme GetScheme();
 // present (or SIN_VIRTUAL_REMOTE=1 forces it for testing).
 Bluetooth::RemoteHost& Host();
 
+// Latest values the virtual remote put into a data report (aim telemetry / tests, runtime/src/hle/aim_telemetry.cpp).
+// Sticks are SDL convention (+x right, +y down) as the remote sees them after bindings; cam* is the synthetic IR
+// pointer in 1024x768 camera pixels (pointer scheme); classic*/q* are what the Classic report carried.
+struct AimDebug {
+    uint32_t serial = 0;            // data reports built so far
+    int scheme = 1;                 // InputMap::Scheme value attached right now
+    bool scripted = false;          // SIN_VREMOTE_SCRIPT drove this report (gamepad bypassed)
+    bool extPresent = false;
+    float rx = 0, ry = 0;           // aim stick, raw (before deadzone/curve)
+    float lx = 0, ly = 0;           // move stick after the left deadzone
+    float camX = 0, camY = 0;
+    float classicX = 0, classicY = 0;   // shaped right stick sent as Classic RX / RY (+y down)
+    uint8_t rxQ = 0, ryQ = 0, lxQ = 0, lyQ = 0;  // Classic raw 5/6-bit values
+    uint8_t nunX = 0x80, nunY = 0x80;
+    bool nunC = false, nunZ = false;
+    uint16_t buttons = 0;           // Wii Remote core buttons
+    uint8_t cl4 = 0, cl5 = 0;       // Classic pressed masks (1 = pressed)
+    float lt = 0, rt = 0;
+};
+AimDebug GetAimDebug();
+
 // Presses the game's B / cancel button on the virtual remote for `millis` ms (used to close the stock Options page
 // once the recomp settings overlay that replaced it has been dismissed). Thread-safe.
 void InjectCancel(int millis);

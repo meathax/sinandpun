@@ -267,6 +267,8 @@ void aurora_set_timescale(float scale);
 
 SDL_Window* aurora_get_window();
 AuroraWindowSize aurora_get_window_size();
+/** Picture rectangle of the last presented frame as fractions of the window client area (letterbox aware). */
+bool aurora_get_present_viewport(float* left, float* top, float* width, float* height);
 
 AuroraBackend aurora_get_backend();
 const AuroraBackend* aurora_get_available_backends(size_t* count);
