@@ -20,18 +20,22 @@
 //   SIN_AUTOSTAGE_DELAY=sec  do not touch anything before this many seconds after boot (default 0)
 //   SIN_AUTOSTAGE_FORCE=0    never redirect a stage that is already loading/loaded (default 1)
 //   SIN_AUTOSTAGE_SEED=0     do not pre-seed the GameData stage bytes (default 1)
+//   SIN_AUTOSTAGE_TRACE=1    log scene / game-over jingle slot / sound-manager entry changes (see TraceSoundSlot)
 //   SIN_AUTOSTAGE_PROBE=1    only log flow-task/GameData changes (use during a normal menu run)
 //   SIN_AUTOSTAGE_FIXED_ADDR=0xADDR  skip the heap scan, use this address for F
 
 #include "memory.h"
 #include "runtime_log.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <iterator>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -99,9 +103,71 @@ int EnvInt(const char* name, int def) {
     return (e && *e) ? static_cast<int>(std::strtol(e, nullptr, 0)) : def;
 }
 
+// SIN_AUTOSTAGE_TRACE=1: log every change of the state that decides the game-over crash (docs/SWAP-CRASH-NOTES.md):
+// current scene (GM+96 -> scene object, label string at +4), game-over jingle slot variable 0x804B1CD0, sound
+// manager entry for that slot (mgr = *(GM+92), entries = *(mgr+1004), 68 bytes each: +40 state (5 = unloaded),
+// +44 handle h, +48 data), *h, and the game-data flags. "DANGLING" = slot var names an unloaded entry whose
+// handle no longer points at a MEM2 sound object.
+void TraceSoundSlot(uint32_t gm, double now) {
+    static uint32_t last[10];
+    static bool first = true;
+    uint32_t scene = 0, vp = 0, l0 = 0, l1 = 0, slot = 0xFFFFFFFFu, mgr = 0, arr = 0, flags = 0;
+    Rd32(gm + 96, scene);
+    if (scene >= 0x80000000u) {
+        Rd32(scene, vp);
+        Rd32(scene + 4, l0);
+        Rd32(scene + 8, l1);
+    }
+    Rd32(0x804B1CD0u, slot);
+    Rd32(gm + 92, mgr);
+    Rd32(gm + 100, flags);
+    uint32_t st = 0, h = 0, ph = 0, d48 = 0;
+    if (mgr >= 0x80000000u && slot < 32 && Rd32(mgr + 1004, arr) && arr >= 0x80000000u) {
+        const uint32_t e = arr + slot * 68u;
+        Rd32(e + 40, st);
+        Rd32(e + 44, h);
+        Rd32(e + 48, d48);
+        if (h >= 0x80000000u) {
+            Rd32(h, ph);
+        }
+    }
+    const uint32_t cur[10] = {vp, l0, l1, slot, st, h, ph, d48, flags, 0};
+    if (!first && std::equal(std::begin(cur), std::end(cur), std::begin(last))) {
+        return;
+    }
+    first = false;
+    std::copy(std::begin(cur), std::end(cur), std::begin(last));
+    char label[9] = {0};
+    for (int i = 0; i < 4; ++i) {
+        label[i] = static_cast<char>(l0 >> (24 - 8 * i));
+        label[4 + i] = static_cast<char>(l1 >> (24 - 8 * i));
+    }
+    for (char& c : label) {
+        if (c < 32 || c > 126) c = c ? '.' : 0;
+    }
+    const bool dangling = slot < 32 && st == 5 && d48 == 0 && ph < 0x90000000u;
+    RT_LOGF("autostage", "t=%.2f scene=%08X vptr=%08X '%s' slotvar=%d entry.state=%u h=%08X *h=%08X data=%08X flags=%08X%s\n",
+            now, scene, vp, label, static_cast<int>(slot), st, h, ph, d48, flags, dangling ? " DANGLING" : "");
+}
+
 void Watcher() {
     const char* stageEnv = std::getenv("SIN_AUTOSTAGE");
-    const int stage = static_cast<int>(std::strtol(stageEnv, nullptr, 0));
+    int stage = static_cast<int>(std::strtol(stageEnv, nullptr, 0));
+    // SIN_AUTOSTAGE_SEQ="a,b,c": after the first load is reached, keep switching stages (swap test) every GAP seconds.
+    std::vector<int> seq;
+    if (const char* s = std::getenv("SIN_AUTOSTAGE_SEQ")) {
+        for (const char* c = s; *c;) {
+            char* end = nullptr;
+            const long v = std::strtol(c, &end, 0);
+            if (end == c) break;
+            seq.push_back(static_cast<int>(v));
+            c = (*end == ',' || *end == '/' || *end == ';') ? end + 1 : end;
+        }
+        if (!seq.empty()) stage = seq[0];
+    }
+    size_t seqIndex = 0;
+    const double seqGap = std::getenv("SIN_AUTOSTAGE_GAP") ? std::atof(std::getenv("SIN_AUTOSTAGE_GAP")) : 25.0;
+    double nextSwapAt = 0.0;
     const bool probe = EnvInt("SIN_AUTOSTAGE_PROBE", 0) != 0;
     if (!probe && (stage < 0 || stage > 7)) {
         RT_LOGF("autostage", "SIN_AUTOSTAGE=%s invalid (0..7); disabled\n", stageEnv);
@@ -130,7 +196,8 @@ void Watcher() {
     int lastState = -1;
     uint32_t lastFlags = 0xFFFFFFFFu;
     uint32_t lastLoaded = 0xFFFFFFFFu;
-    double nextScan = 0.0, nextStatus = 5.0;
+    double nextScan = 0.0, nextStatus = 5.0, nextTrace = 0.0;
+    const bool trace = EnvInt("SIN_AUTOSTAGE_TRACE", 0) != 0;
     bool patched = false, forced = false, announcedFlow = false;
 
     while (!g_stop.load(std::memory_order_relaxed)) {
@@ -160,7 +227,12 @@ void Watcher() {
             }
         }
 
-        if (now < delaySec) {
+        if (trace && now >= nextTrace) {
+            nextTrace = now + 0.05;
+            TraceSoundSlot(gm, now);
+        }
+
+        if (now < delaySec || now < nextSwapAt) {
             continue;
         }
 
@@ -244,10 +316,18 @@ void Watcher() {
             }
         }
 
-        if ((patched || forced) && st >= 4 && static_cast<int>(s0) == stage) {
-            RT_LOGF("autostage", "t=%.2f stage %d load reached (F state %u, loadedId=%u); watcher done\n", now, stage,
-                    st, loaded);
-            return;
+        if ((patched || forced || !seq.empty()) && st >= 4 && static_cast<int>(s0) == stage) {
+            RT_LOGF("autostage", "t=%.2f stage %d load reached (F state %u, loadedId=%u)\n", now, stage, st, loaded);
+            if (seqIndex + 1 >= seq.size()) {
+                RT_LOGF("autostage", "watcher done\n");
+                return;
+            }
+            ++seqIndex;
+            stage = seq[seqIndex];
+            nextSwapAt = now + seqGap;
+            patched = false;
+            forced = false;
+            RT_LOGF("autostage", "sequence: next stage %d in %.0fs\n", stage, seqGap);
         }
     }
 }

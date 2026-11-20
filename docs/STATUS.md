@@ -62,17 +62,33 @@ virtual remote deterministically. Log lines `[bt] pointer cam=(x,y) stick R=.. L
 
 Audio mixer (SIN_AUDIO_LOG=1): 103-112 of 150 logged seconds had non-silent PCM blocks in stages 6 and 7 (up to 8 voices). Audibility on the real device is NOT verified.
 Not yet tested: A -> B -> A module swap, boss/credits/continue flow, save -> quit -> reload, Classic extension / mouse / aim sweep in game, the tabbed options menu in game.
+## Acceptance checklist (docs/PLAN-NEXT.md section 11) - evidence as of 2026-11-20
+
+| Item | State | Evidence |
+|---|---|---|
+| Clean build from scratch with documented commands | PASS | `tools/clean_build.ps1`: fresh configure 34 s + full build 157 s total, exit 0; `build/clean/WiiCompiled.exe` 131,651,072 bytes, SHA-256 `9E11C5976188E15EA11B21480DAA93975A1F90BF990475310B41CD7D9C2F6ED5`; that exe boots to the title at 60 fps with 0 fatal lines (`build/screenshots/clean_boots.png`) |
+| Translator tests pass | PASS | `dotnet test translator`: Passed 767, Failed 0, Skipped 8 (after the budget/entry_hooks translator changes) |
+| Boot to title with picture and audio | PASS (audio: mixer only) | `rfixTs.png`, `clean_boots.png`; `SIN_AUDIO_LOG=1`: ~333 AX frames/s, non-silent PCM in 103-112 of 150 s; audibility on a real device not verified |
+| All 8 stages load and play | PASS (idle player) | stage table above (8/8 modules link and render, `g6_90s.png`, `g7_90s.png`, `pz3_124s.png`, ...); module swap A -> B proven (`RSOUnLinkList: stg01 unlinked`, `RSOLinkListFixed: stg02`); A -> B -> A NOT proven: the second, forced swap crashed (see `docs/SWAP-CRASH-NOTES.md`); stage 2 alone ran 290 s without a crash |
+| Right stick aims, left stick moves, buttons mapped, setup UI persists | PARTIAL | stick direction verified in game earlier (cursor follows stick); recomp options overlay opens from the game's title and pause OPTIONS (`nav2_sheet.png`, `pa2_sheet.png`); Classic Controller extension, mouse pointer, remapping with a real device and persistence across a restart NOT verified |
+| Save/load works | NOT VERIFIED | save files are created; file 1 shows `A (STAGE 1 - ISA)` progress after runs; save -> quit -> reload not run |
+| No fatal errors in a full playthrough, no unbounded log growth | NOT VERIFIED | stages 0-7 ran 90-290 s each with 0 fatals under an idle scripted player; no full playthrough |
+| `git status` clean, committed, nothing pushed | PASS | no remote is configured; `git log` shows local commits only |
+
 ## Known problems / not done
 
-* Title screen shows a pale rectangle top-left and no "press" text; right edge looks cut (window is 698x422, aspect
-  handling unverified). Likely GX fidelity gaps (TEV/texture formats). Re-run `tools/gx_retarget_report.py`
-  whenever a new screen is reached.
-* The scripted A press did not advance the title screen within the run; input handling past the title is untested.
-* M3 (stage modules) is not implemented at all. Translator test suite was not re-run this session
-  (`dotnet test translator`); the translator gained the optional `loop_poll_functions` manifest field.
-* NAND save files `sdat0..3.bin` do not exist on first boot (`IOS_Open FAILED` lines); save/load is untested.
-* Audio: streaming/voices start (calltrace shows StrmSound/AXAcquireVoice) but audible output is unverified.
-* Debug logging added this session is rate-limited; `[bt]`, `[trace]`, `[prof]` lines are diagnostics only.
+* FIXED: top-left rectangle (native `GXSetViewport` at 0x801DB3B0 + partial EFB texture copies written 1:1 in aurora);
+  title shows the full picture and "Press A" (`build/screenshots/rfixTs.png`). A sepia game-over scene was not re-checked.
+* NOT VERIFIED: A -> B -> A stage swap (A -> B proven: `RSOUnLinkList: stg01 unlinked`, `RSOLinkListFixed: stg02`),
+  Classic Controller extension accepted by the game, aim sweep, mouse pointer, keyboard/mouse/gamepad remapping with a
+  real device, save -> quit -> reload, HOME/quit flow, audio audibility on a real output device, a full playthrough
+  (bosses, credits), performance (frame-time) pass.
+* Audio: AX/AI pipeline fixed (AI callback + donor DSP/AX addresses); 103-112 of 150 logged seconds are non-silent PCM
+  (`SIN_AUDIO_LOG=1`). Per-category sliders were removed (they only worked for Mario Kart).
+* Save files `sdat0..3.bin` are created on first boot; file 1 shows "STAGE 7 - ISA" progress after earlier runs.
+* The game's own Options page stays alive under the recomp overlay; the hook presses B on the virtual remote when the
+  overlay closes (`VirtualRemote::InjectCancel`, verified in `pa3_sheet.png`).
+* Debug logging is rate-limited; `[bt]`, `[trace]`, `[prof]`, `[copylog]`, `[audio-dbg]` lines are diagnostics only.
 
 ## Debug switches and tools
 
@@ -80,7 +96,10 @@ Not yet tested: A -> B -> A module swap, boss/credits/continue flow, save -> qui
 * `SIN_CALLPROF=1` (with CALLTRACE) prints the hottest call targets every 10 s (`[prof]`, `[prof-game]`).
 * `SIN_TRACE_ARGS=hex+hex` logs r3..r6/lr on entry to listed targets (200 hits each).
 * `SIN_WATCHDOG_SECS=N` writes a crash-style snapshot and host-RIP samples every N s (3 times).
-* `SIN_GX_COPYLOG=<frame>` (+ `SIN_GX_COPYLOG_EVERY=<n>`) logs texture copies, viewport, scissor and draw state for 3 frames.`n* `SIN_AUTOSTAGE=<0..7>` redirects the stage the game loads (after the menu run; the game stage id to module map is not identity: 3->stg05, 5->stg03). `SIN_AUDIO_LOG=1` logs AX/AI mixer stats per second. `SIN_DUMP_ON=<hex>` + `SIN_DUMP_EXIT=1` snapshot memory at first entry of a traced target and exit.`n* `SIN_VIRTUAL_REMOTE=1` forces the virtual remote; `SIN_VREMOTE_SCRIPT=...` scripted input; `SIN_GX_TEST_RED=1`
+* `SIN_GX_COPYLOG=<frame>` (+ `SIN_GX_COPYLOG_EVERY=<n>`) logs texture copies, viewport, scissor and draw state for 3 frames.
+* `SIN_AUTOSTAGE=<0..7>` redirects the stage the game loads (after the menu run; the game stage id to module map is not identity: 3->stg05, 5->stg03). `SIN_AUDIO_LOG=1` logs AX/AI mixer stats per second. `SIN_DUMP_ON=<hex>` + `SIN_DUMP_EXIT=1` snapshot memory at first entry of a traced target and exit.
+* `SIN_AUTOSTAGE_SEQ=a,b,c` (+`SIN_AUTOSTAGE_GAP=<s>`) swaps stages in sequence via the game's own stage-change path; `SIN_OPEN_OPTIONS_AT=<s>`, `SIN_OPEN_OPTIONS=1`, `SIN_MENU_AUTOCLOSE=<s>`, `SIN_MENU_HOOK_LOG=1`, `SIN_MENU_HOOK=0` drive/inspect the menu hook; script field `@u/v` places the pointer at screen fractions.
+* `SIN_VIRTUAL_REMOTE=1` forces the virtual remote; `SIN_VREMOTE_SCRIPT=...` scripted input; `SIN_GX_TEST_RED=1`
   is an unreliable renderer probe (see lesson).
 * `tools/run_game.ps1 -Env "A=1,B=2"` (ONE quoted string; `-Env` is split on commas), `tools/xref_up.py`,
   `tools/callees.py`, `tools/gx_retarget_report.py`, `tools/find_sc_funcs.py`, `tools/thread_dump.py`,
