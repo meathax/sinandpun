@@ -10,6 +10,7 @@
 #include <aurora/texture.hpp>
 #include "gfx/frame.hpp"
 #include "gfx/depth_peek.hpp"
+#include "gfx/encoding.hpp"
 #include "gfx/recording.hpp"
 #include "gfx/render_worker.hpp"
 #include "gx/command_processor.hpp"
@@ -39,7 +40,10 @@
 #include <SDL3/SDL_filesystem.h>
 #include <magic_enum.hpp>
 
+#include <array>
 #include <cstdio>
+#include <mutex>
+#include <optional>
 
 #include "system_info.hpp"
 #include "tracy/Tracy.hpp"
@@ -59,8 +63,8 @@ using webgpu::g_queue;
 using webgpu::g_surface;
 
 // Last presented picture rectangle as fractions of the surface (left, top, width, height); mouse mapping reads it.
-std::atomic<float> g_presentVp[4] = {{0.f}, {0.f}, {1.f}, {1.f}};
-std::atomic<bool> g_presentVpValid{false};
+std::mutex g_presentVpMutex;
+std::optional<std::array<float, 4>> g_presentVp;
 
 std::atomic<bool> g_metalfxRequested{false};
 std::atomic<bool> g_metalfxSupported{false};
@@ -108,6 +112,7 @@ struct DlssPresentState {
   wgpu::BindGroup bindGroup;
   wgpu::TextureView boundView;
   bool wasActive = false;
+  bool hadSeparateHud = false;
 };
 DlssPresentState g_dlss;
 
@@ -122,7 +127,7 @@ void sync_upscale_window() {
 }
 
 webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgpu::TextureWithSampler& source,
-                                      const webgpu::Viewport& viewport) {
+                                      const webgpu::Viewport& viewport, bool separateHud) {
   const auto settings = webgpu::upscale::settings();
   if (settings.mode != AURORA_UPSCALER_DLSS || !webgpu::dlss::ready() || !source.view) {
     g_dlss.wasActive = false;
@@ -139,7 +144,7 @@ webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgp
   params.outputHeight = outH;
   params.mode = webgpu::dlss::mode_for_scale_factor(settings.scaleFactor);
   params.sharpness = settings.sharpness;
-  params.reset = !g_dlss.wasActive;
+  params.reset = !g_dlss.wasActive || g_dlss.hadSeparateHud != separateHud;
   webgpu::dlss::set_jitter_enabled(true, params.renderWidth, outW);
   if (!webgpu::dlss::dispatch(encoder, params, g_dlss.output)) {
     g_dlss.wasActive = false;
@@ -147,6 +152,7 @@ webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgp
     return {};
   }
   g_dlss.wasActive = true;
+  g_dlss.hadSeparateHud = separateHud;
   if (!g_dlss.bindGroup || g_dlss.boundView.Get() != g_dlss.output.view.Get()) {
     g_dlss.image = webgpu::TextureWithSampler{.texture = g_dlss.output.texture,
                                               .view = g_dlss.output.view,
@@ -613,17 +619,26 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
   const auto surfaceWidth = webgpu::g_graphicsConfig.surfaceConfiguration.width;
   const auto surfaceHeight = webgpu::g_graphicsConfig.surfaceConfiguration.height;
   float presentAspect = 0.f;
-  const auto viewport =
+  auto viewport =
       window::get_present_aspect_ratio(presentAspect)
           ? webgpu::calculate_present_viewport_for_aspect(surfaceWidth, surfaceHeight, presentAspect)
           : webgpu::calculate_present_viewport(surfaceWidth, surfaceHeight, presentSource.size.width,
                                                presentSource.size.height);
+  const bool metalfxEnabled = g_metalfxRequested.load();
+  const auto requestedSampler = webgpu::get_resampler();
+  const bool integerPresentation = requestedSampler == SAMPLER_INTEGER && !metalfxEnabled &&
+      webgpu::upscale::settings().mode == AURORA_UPSCALER_OFF;
+  const auto sampler = requestedSampler == SAMPLER_INTEGER && !integerPresentation ? SAMPLER_BILINEAR : requestedSampler;
+  if (integerPresentation) {
+    viewport = webgpu::calculate_integer_present_viewport(surfaceWidth, surfaceHeight, presentSource.size.width,
+                                                          presentSource.size.height, viewport);
+  }
   if (surfaceWidth > 0 && surfaceHeight > 0 && viewport.width > 0.f && viewport.height > 0.f) {
-    g_presentVp[0].store(viewport.left / static_cast<float>(surfaceWidth), std::memory_order_relaxed);
-    g_presentVp[1].store(viewport.top / static_cast<float>(surfaceHeight), std::memory_order_relaxed);
-    g_presentVp[2].store(viewport.width / static_cast<float>(surfaceWidth), std::memory_order_relaxed);
-    g_presentVp[3].store(viewport.height / static_cast<float>(surfaceHeight), std::memory_order_relaxed);
-    g_presentVpValid.store(true, std::memory_order_release);
+    const std::lock_guard lock{g_presentVpMutex};
+    g_presentVp = std::array{viewport.left / static_cast<float>(surfaceWidth),
+                             viewport.top / static_cast<float>(surfaceHeight),
+                             viewport.width / static_cast<float>(surfaceWidth),
+                             viewport.height / static_cast<float>(surfaceHeight)};
   }
 
   wgpu::BindGroup rmlBindGroup;
@@ -637,11 +652,12 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
 #endif
 
   const auto schedule = gfx::presentation::present_schedule();
+  const auto sealedAt = gfx::presentation::now_nanos();
   const bool black = video::is_black();
   const float brightness = video::brightness();
-  const bool metalfxEnabled = g_metalfxRequested.load();
-  gfx::end_frame([black, brightness, metalfxEnabled, rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport,
-                  presentSource, displayCopy = std::move(displayCopy), pixelPerfectGui, schedule,
+  gfx::end_frame([black, brightness, metalfxEnabled, integerPresentation, sampler,
+                  rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport,
+                  presentSource, displayCopy = std::move(displayCopy), pixelPerfectGui, schedule, sealedAt,
                   imguiDrawData = std::move(imguiDrawData)](
                      wgpu::CommandEncoder& encoder, std::vector<gfx::AfterSubmitCallback> afterSubmitCallbacks,
                      const gfx::InterpolationReplay& replay) {
@@ -705,34 +721,42 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
         if (rmlBindGroup && !rmlOverlay) {
           presentBindGroup = rmlBindGroup;
         } else {
-          // FSR1 (EASU + RCAS) first; MetalFX only when no FSR upscaler is selected; otherwise a plain resample.
+          const bool exactPixels = integerPresentation &&
+              gfx::pixel_perfect::integer_scale(presentSource.size.width, static_cast<uint32_t>(viewport.width)) &&
+              gfx::pixel_perfect::integer_scale(presentSource.size.height, static_cast<uint32_t>(viewport.height)) &&
+              static_cast<uint32_t>(viewport.width) / presentSource.size.width ==
+                  static_cast<uint32_t>(viewport.height) / presentSource.size.height;
+          const bool replayHud = !exactPixels && displayCopy && gfx::presentation_hud_ready(pixelPerfectGui);
+          const auto scene = replayHud ? gfx::prepare_presentation_hud_scene(encoder, pixelPerfectGui) : presentSource;
           const webgpu::TextureWithSampler* gameImage = nullptr;
-          // NVIDIA DLSS first (temporal, needs the jittered frames); FSR1 when DLSS is off, unavailable or failed.
-          auto fsr = dlss_dispatch(encoder, presentSource, viewport);
+          bool fsrOutput = false;
+          auto fsr = dlss_dispatch(encoder, scene, viewport, replayHud);
           if (!fsr.bindGroup) {
-            fsr = webgpu::upscale::fsr1_dispatch(encoder, presentSource, viewport);
+            fsr = webgpu::upscale::fsr1_dispatch(encoder, scene, viewport);
+            fsrOutput = fsr.image != nullptr;
           }
           if (fsr.bindGroup) {
             presentBindGroup = std::move(fsr.bindGroup);
             gameImage = fsr.image;
           } else {
-            presentBindGroup = upscale_presentation(encoder, presentSource, viewport, metalfxEnabled);
+            presentBindGroup = upscale_presentation(encoder, scene, viewport, metalfxEnabled);
             if (presentBindGroup) {
               gameImage = g_metalfxPendingImage;
             }
           }
-          if (!presentBindGroup) {
-            const auto& resampledSource = webgpu::resample_present_source(encoder, viewport, presentSource);
-            presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
-            gameImage = &resampledSource;
-            gameImage = &resampledSource;
-          }
-          if (gameImage != nullptr && pixelPerfectGui.scene.view && pixelPerfectGui.baseline.view) {
-            const auto& composited = webgpu::composite_pixel_perfect_gui(
-                encoder, viewport, *gameImage, pixelPerfectGui.scene, pixelPerfectGui.baseline,
-                pixelPerfectGui.mapping);
-            presentBindGroup = webgpu::create_copy_bind_group(composited);
-            gameImage = &composited;
+          if (replayHud) {
+            const auto& target = fsrOutput ? *gameImage
+                : webgpu::resample_present_source(encoder, viewport, gameImage ? *gameImage : scene, sampler);
+            gfx::render_presentation_hud(encoder, pixelPerfectGui, target);
+            gameImage = &target;
+            if (!fsrOutput) {
+              presentBindGroup = webgpu::create_copy_bind_group(target);
+            }
+          } else if (!presentBindGroup) {
+            const bool oneToOne = viewport.width == static_cast<float>(scene.size.width) &&
+                                  viewport.height == static_cast<float>(scene.size.height);
+            gameImage = oneToOne ? &scene : &webgpu::resample_present_source(encoder, viewport, scene, sampler);
+            presentBindGroup = webgpu::create_copy_bind_group(*gameImage);
           }
           if (gameImage != nullptr) {
             webgpu::upscale::capture_encode(encoder, *gameImage);
@@ -868,8 +892,8 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
           webgpu::release_surface();
           break;
         case wgpu::SurfaceGetCurrentTextureStatus::Error:
-          Log.warn("Surface texture is {}, dropping surface", magic_enum::enum_name(surfaceStatus));
-          g_surface = {};
+          Log.warn("Surface texture is {}, releasing surface", magic_enum::enum_name(surfaceStatus));
+          webgpu::release_surface();
           break;
         default:
           if (!window::is_presentable()) {
@@ -884,12 +908,15 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
       if(acquiredAsync) gfx::presentation::finish_native_surface(replay.nativeUncapped);
       static const bool profile = std::getenv("SIN_RENDER_PROF") != nullptr;
       if (profile && canPresent) {
-        static uint64_t count=0, acquire=0, submit=0, display=0, total=0;
+        static uint64_t count=0, acquire=0, submit=0, display=0, total=0, maxPacketAge=0;
         acquire+=acquireNanos; submit+=submitNanos; display+=presentNanos;
-        total+=gfx::presentation::now_nanos()-phaseStart;
+        const auto finishedAt = gfx::presentation::now_nanos();
+        total+=finishedAt-phaseStart;
+        maxPacketAge=std::max(maxPacketAge, finishedAt-sealedAt);
         if (++count==120) {
-          std::fprintf(stderr,"[present-phase] acquire=%.3fms submit=%.3fms present=%.3fms total=%.3fms\n",acquire/120000000.0,submit/120000000.0,display/120000000.0,total/120000000.0);
-          count=acquire=submit=display=total=0;
+          std::fprintf(stderr,"[present-phase] acquire=%.3fms submit=%.3fms present=%.3fms total=%.3fms max_packet_age=%.3fms\n",
+                       acquire/120000000.0,submit/120000000.0,display/120000000.0,total/120000000.0,maxPacketAge/1000000.0);
+          count=acquire=submit=display=total=maxPacketAge=0;
         }
       }
     };
@@ -916,6 +943,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
       return !blockingPresent ||
              gfx::presentation::admit_display_present(std::max(presentAt, gfx::presentation::now_nanos()));
     };
+    bool replayUnavailable = false;
     for (uint32_t slot = 0; slot < slots; ++slot) {
       const uint64_t due = deadline(plan.weight[slot]);
       // A slot that would only show after the next grid point is due adds latency without motion.
@@ -928,17 +956,21 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
       const uint64_t encodeStart = gfx::presentation::now_nanos();
       const wgpu::CommandEncoderDescriptor slotDescriptor{.label = "Interpolated frame encoder"};
       auto slotEncoder = g_device.CreateCommandEncoder(&slotDescriptor);
-      replay.encode(slotEncoder, slot);
+      if (!replay.encode(slotEncoder, slot)) {
+        replayUnavailable = true;
+        break;
+      }
       const uint64_t encodeNanos = gfx::presentation::now_nanos() - encodeStart;
       if (!replay.nativeUncapped) gfx::presentation::pace_present(due);
       const uint64_t presentStart = gfx::presentation::now_nanos();
       present(slotEncoder, false, true);
       gx::report_present_cost(encodeNanos + (gfx::presentation::now_nanos() - presentStart));
     }
+    if (replay.restoreBeforeNative) replay.restoreBeforeNative();
     // The native frame was encoded with its own jitter before the slots changed the current one.
     webgpu::dlss::restore_native_jitter();
-    if (nativeShown) {
-      const uint64_t due = deadline(1.f);
+    if (nativeShown || replayUnavailable) {
+      const uint64_t due = replayUnavailable ? 0 : deadline(1.f);
       if (!replay.nativeUncapped) gfx::presentation::pace_present(due);
       present(encoder, !replay.scenePresentOnly, admit(due));
     } else {
@@ -1023,11 +1055,12 @@ SDL_Window* aurora_get_window() { return aurora::window::get_sdl_window(); }
 
 bool aurora_get_present_viewport(float* left, float* top, float* width, float* height) {
 #ifdef AURORA_ENABLE_GX
-  if (aurora::g_presentVpValid.load(std::memory_order_acquire)) {
-    *left = aurora::g_presentVp[0].load(std::memory_order_relaxed);
-    *top = aurora::g_presentVp[1].load(std::memory_order_relaxed);
-    *width = aurora::g_presentVp[2].load(std::memory_order_relaxed);
-    *height = aurora::g_presentVp[3].load(std::memory_order_relaxed);
+  const std::lock_guard lock{aurora::g_presentVpMutex};
+  if (const auto& viewport = aurora::g_presentVp) {
+    *left = (*viewport)[0];
+    *top = (*viewport)[1];
+    *width = (*viewport)[2];
+    *height = (*viewport)[3];
     return true;
   }
 #endif

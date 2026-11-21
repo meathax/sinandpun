@@ -1703,7 +1703,7 @@ int RuntimeMain(int argc, char** argv) {
         auroraConfig.msaa = static_cast<uint32_t>(SystemSettings::Get().msaa);
         auroraConfig.maxTextureAnisotropy = static_cast<uint16_t>(SystemSettings::Get().anisotropy);
         auroraConfig.desiredBackend = BACKEND_AUTO;
-        const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+        const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier();
         ConfigureDynamicAspect(configWidescreen, forceAspect,
                                   auroraConfig.windowWidth, auroraConfig.windowHeight);
         VISetFrameBufferScale(resolutionMultiplier);

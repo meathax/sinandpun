@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -37,6 +39,7 @@ using webgpu::g_queue;
 namespace {
 constexpr Module Log{"aurora::gfx"};
 WGPURenderPipeline g_currentPipeline = nullptr;
+TextureHandle g_hudSceneCopy;
 
 void apply_viewport(const wgpu::RenderPassEncoder& pass, const Viewport& vp, bool suppressDlssJitter) {
   const float minDepth = gx::UseReversedZ ? 1.f - vp.zfar : vp.znear;
@@ -438,7 +441,7 @@ void copy_scene_texture(wgpu::CommandEncoder& cmd, const wgpu::Texture& srcTextu
   }
 }
 void capture_scene_texture_before(wgpu::CommandEncoder& cmd, FramePacket& frame, const wgpu::Texture& texture) {
-  if (!texture || !gx::native_scene_enabled()) return;
+  if (!texture) return;
   for (const auto& state : frame.sceneTextures) if (state.texture.Get()==texture.Get()) return;
   const wgpu::TextureUsage required=wgpu::TextureUsage::CopySrc|wgpu::TextureUsage::CopyDst;
   if (!static_cast<bool>(texture.GetUsage()&wgpu::TextureUsage::CopySrc) || !static_cast<bool>(texture.GetUsage()&wgpu::TextureUsage::CopyDst) || texture.GetSampleCount()!=1 || texture.GetDimension()!=wgpu::TextureDimension::e2D) {
@@ -466,7 +469,19 @@ void capture_scene_texture_before(wgpu::CommandEncoder& cmd, FramePacket& frame,
   copy_scene_texture(cmd,texture,cached.before);
 }
 }
-void clear_scene_texture_pool() { sceneTexturePools.clear(); }
+void clear_scene_texture_pool() {
+  sceneTexturePools.clear();
+  g_hudSceneCopy.reset();
+}
+bool capture_replay_textures(wgpu::CommandEncoder& cmd, FramePacket& frame) {
+  for (const auto& op : frame.ops) {
+    if (op.renderPass && op.renderPass->resolveTarget)
+      capture_scene_texture_before(cmd, frame, op.renderPass->resolveTarget->texture);
+    if (op.textureCopy)
+      capture_scene_texture_before(cmd, frame, op.textureCopy->dst.texture);
+  }
+  return frame.sceneTexturesReady;
+}
 void capture_scene_texture_after(wgpu::CommandEncoder& cmd, FramePacket& frame) {
   for (const auto& state : frame.sceneTextures) copy_scene_texture(cmd,state.texture,state.after);
   frame.sceneAfterCaptured=true;
@@ -521,9 +536,11 @@ void encode_replay_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const Frame
 
 void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op) {
   copy_staging_to_high_water(cmd, frame, op);
-  if (op.renderPass && op.renderPass->resolveTarget)
-    capture_scene_texture_before(cmd,frame,op.renderPass->resolveTarget->texture);
-  if (op.textureCopy) capture_scene_texture_before(cmd,frame,op.textureCopy->dst.texture);
+  if (gx::native_scene_enabled()) {
+    if (op.renderPass && op.renderPass->resolveTarget)
+      capture_scene_texture_before(cmd,frame,op.renderPass->resolveTarget->texture);
+    if (op.textureCopy) capture_scene_texture_before(cmd,frame,op.textureCopy->dst.texture);
+  }
   switch (op.type) {
   case FrameOpType::RenderPass:
     if (op.renderPass != nullptr) {
@@ -556,6 +573,112 @@ void bind_pipeline(const wgpu::RenderPipeline& pipeline, const wgpu::RenderPassE
   }
   pass.SetPipeline(pipeline);
   g_currentPipeline = pipeline.Get();
+}
+
+bool presentation_hud_ready(const PixelPerfectGuiPresent& hud) {
+  if (!hud.pass || !hud.pass->resolveTarget) {
+    return false;
+  }
+  PipelineRef lastPipeline{};
+  for (const auto& command : hud.pass->commands) {
+    if (command.type == detail::CommandType::Draw && command.data.draw.presentationPipeline != lastPipeline) {
+      lastPipeline = command.data.draw.presentationPipeline;
+      CompiledPipeline pipeline;
+      if (!get_pipeline(lastPipeline, pipeline)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+webgpu::TextureWithSampler prepare_presentation_hud_scene(const wgpu::CommandEncoder& encoder,
+                                                         const PixelPerfectGuiPresent& hud) {
+  const auto& copy = *hud.pass;
+  const auto& size = copy.resolveTarget->size;
+  if (!g_hudSceneCopy || g_hudSceneCopy->size.width != size.width || g_hudSceneCopy->size.height != size.height ||
+      g_hudSceneCopy->format != copy.resolveTarget->format) {
+    g_hudSceneCopy = new_render_texture(size.width, size.height, GX_TF_RGBA8, "HUD-free display copy");
+  }
+  const bool scaled = size.width != static_cast<uint32_t>(copy.resolveRect.width) ||
+                      size.height != static_cast<uint32_t>(copy.resolveRect.height);
+  tex_copy_conv::blit(encoder, {
+      .fmt = copy.resolveFormat,
+      .srcFmt = copy.resolveSourceFormat,
+      .srcView = hud.background.view,
+      .uniformRange = copy.resolveUniformRange,
+      .dst = g_hudSceneCopy,
+      .sampleFilter = scaled ? tex_copy_conv::SampleFilter::Linear : tex_copy_conv::SampleFilter::Nearest,
+  });
+  return {.texture = g_hudSceneCopy->texture, .view = g_hudSceneCopy->sampleTextureView, .sampler = hud.background.sampler,
+          .size = size, .format = g_hudSceneCopy->format};
+}
+
+void render_presentation_hud(const wgpu::CommandEncoder& encoder, const PixelPerfectGuiPresent& hud,
+                             const webgpu::TextureWithSampler& target) {
+  const auto& source = hud.pass->resolveRect;
+  if (static const bool trace = std::getenv("SIN_HUD_TRACE") != nullptr; trace) {
+    static bool reported = false;
+    if (!reported) {
+      reported = true;
+      Log.info("[hud-present] replayed GX HUD from {}x{} at {}x{}", source.width, source.height,
+               target.size.width, target.size.height);
+    }
+  }
+  const float scaleX = static_cast<float>(target.size.width) / static_cast<float>(source.width);
+  const float scaleY = static_cast<float>(target.size.height) / static_cast<float>(source.height);
+  const auto edge = [](int64_t coordinate, float scale) {
+    // Scissors include pixels whose centers lie inside the scaled source rectangle.
+    return static_cast<int32_t>(std::ceil(static_cast<double>(coordinate) * scale - 0.5));
+  };
+  const wgpu::RenderPassColorAttachment color{
+      .view = target.view,
+      .loadOp = wgpu::LoadOp::Load,
+      .storeOp = wgpu::StoreOp::Store,
+  };
+  const wgpu::RenderPassDescriptor desc{
+      .label = "GX HUD at presentation resolution",
+      .colorAttachmentCount = 1,
+      .colorAttachments = &color,
+      .timestampWrites = webgpu::gpu_prof::pass_writes("GX HUD presentation"),
+  };
+  const auto pass = encoder.BeginRenderPass(&desc);
+  g_currentPipeline = nullptr;
+  pass.SetBindGroup(0, detail::resources().staticBindGroup);
+  pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
+  for (const auto& command : hud.pass->commands) {
+    switch (command.type) {
+    case detail::CommandType::SetViewport: {
+      auto vp = command.data.setViewport;
+      vp.left *= scaleX;
+      vp.top *= scaleY;
+      vp.width *= scaleX;
+      vp.height *= scaleY;
+      apply_viewport(pass, vp, true);
+      break;
+    }
+    case detail::CommandType::SetScissor: {
+      const auto& sc = command.data.setScissor;
+      const auto left = edge(sc.x, scaleX);
+      const auto top = edge(sc.y, scaleY);
+      const auto right = edge(static_cast<int64_t>(sc.x) + sc.width, scaleX);
+      const auto bottom = edge(static_cast<int64_t>(sc.y) + sc.height, scaleY);
+      apply_scissor(pass, {left, top, right - left, bottom - top}, target.size);
+      break;
+    }
+    case detail::CommandType::Draw: {
+      gx::DrawData draw;
+      std::memcpy(&draw, command.data.draw.payload.data(), sizeof(draw));
+      draw.pipeline = command.data.draw.presentationPipeline;
+      gx::render(draw, pass);
+      break;
+    }
+    case detail::CommandType::CustomDraw:
+    case detail::CommandType::DebugMarker:
+      break;
+    }
+  }
+  pass.End();
 }
 
 bool bind_pipeline(PipelineRef ref, const wgpu::RenderPassEncoder& pass) {

@@ -20,8 +20,10 @@
 #include "../rmlui/pipeline.hpp"
 #endif
 #include "../window.hpp"
+#include "../webgpu/upscale.hpp"
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <optional>
@@ -244,6 +246,7 @@ void snapshot_current_pass_color(webgpu::TextureWithSampler& output) {
   AURORA_ASSERT(!pass.snapshotColorDst, "Pixel-perfect GUI snapshot collided with another color consumer");
   pass.snapshotColorDst = entry.color.texture;
   output = entry.color;
+  output.sampler = webgpu::present_source().sampler;
 }
 
 FramePacket& current_frame_packet() { return g_recorder.frame(); }
@@ -1127,60 +1130,95 @@ bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out) {
   return true;
 }
 
-void note_projection_draw(bool orthographic) noexcept {
+bool note_projection_draw(bool orthographic) noexcept {
   if (!g_recorder.active() || g_recorder.inOffscreen || g_recorder.currentRenderPass == UINT32_MAX) {
-    return;
+    return false;
   }
 
+  auto& frame = current_frame_packet();
   const bool wasOrthographic = g_recorder.projectionTracker.known && g_recorder.projectionTracker.orthographic;
   const auto transition = g_recorder.projectionTracker.observe(orthographic);
   if (transition == pixel_perfect::GuiProjectionTransition::BeginThreeD) {
-    current_frame_packet().pixelPerfectGui = {};
-    if (wasOrthographic) {
-      auto& frame = current_frame_packet();
+    frame.hudCandidate = nullptr;
+    if (wasOrthographic && current_render_passes()[g_recorder.currentRenderPass].suppressDlssJitter) {
       auto& previous = current_render_passes()[g_recorder.currentRenderPass];
       previous.discardable = false;
       enqueue_pass(frame, g_recorder.currentRenderPass);
       resume_efb_pass_loading(previous);
     }
-    return;
+    return false;
   }
   if (transition != pixel_perfect::GuiProjectionTransition::BeginGui) {
-    return;
+    return frame.hudCandidate == &current_render_passes()[g_recorder.currentRenderPass];
   }
 
-  auto& frame = current_frame_packet();
-  frame.pixelPerfectGui = {};
-  snapshot_current_pass_color(frame.pixelPerfectGui.baseline);
   auto& previous = current_render_passes()[g_recorder.currentRenderPass];
+  const auto& surface = webgpu::g_graphicsConfig.surfaceConfiguration;
+  const auto& size = previous.colorAttachments[SceneColorAttachmentIndex].size;
+  float aspect = 0.f;
+  const auto output = window::get_present_aspect_ratio(aspect)
+      ? webgpu::calculate_present_viewport_for_aspect(surface.width, surface.height, aspect)
+      : webgpu::calculate_present_viewport(surface.width, surface.height, size.width, size.height);
+  const auto mode = webgpu::upscale::settings().mode;
+  const auto& xfb = gx::g_gxState.displayCopyTexture;
+  const bool scaled = output.width != static_cast<float>(size.width) ||
+                      output.height != static_cast<float>(size.height) || mode != AURORA_UPSCALER_OFF ||
+                      (xfb && (xfb->size.width != size.width || xfb->size.height != size.height));
+  if (!scaled || output.width <= 0.f || output.height <= 0.f || !previous.copySourceTexture ||
+      previous.snapshotColorDst) {
+    return false;
+  }
+  snapshot_current_pass_color(frame.hudBackground);
   previous.discardable = false;
   enqueue_pass(frame, g_recorder.currentRenderPass);
   resume_efb_pass_loading(previous);
-  current_render_passes()[g_recorder.currentRenderPass].suppressDlssJitter = true;
+  auto& hud = current_render_passes()[g_recorder.currentRenderPass];
+  hud.suppressDlssJitter = true;
+  frame.hudCandidate = &hud;
+  return true;
 }
 
-void capture_pixel_perfect_gui_scene(const pixel_perfect::GuiCopyMapping& mapping) {
+void capture_pixel_perfect_gui_scene(const ClipRect& source, const wgpu::Extent3D& destination,
+                                    const std::array<u32, 3>& filter) {
   if (!g_recorder.active() || g_recorder.inOffscreen || g_recorder.currentRenderPass == UINT32_MAX) {
     return;
   }
-  auto& gui = current_frame_packet().pixelPerfectGui;
-  if (!gui.baseline.texture || !gui.baseline.view) {
-    return;
+  auto& frame = current_frame_packet();
+  frame.displayHud = {};
+  const auto& pass = current_render_passes()[g_recorder.currentRenderPass];
+  const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
+  const bool fullDestination = source.x == 0 && source.y == 0 && source.width > 0 && source.height > 0 &&
+      static_cast<uint32_t>(source.width) <= size.width && static_cast<uint32_t>(source.height) <= size.height &&
+      !(destination.width > static_cast<uint32_t>(source.width) &&
+        destination.height > static_cast<uint32_t>(source.height));
+  const bool identityFilter = filter == std::array<u32, 3>{0, 64, 0};
+  const bool terminalHud = frame.hudCandidate == &pass && pass.hasDraws;
+  const bool independent = terminalHud && std::ranges::all_of(pass.commands, [](const Command& command) {
+        return command.type != CommandType::CustomDraw &&
+               (command.type != CommandType::Draw || command.data.draw.presentationPipeline);
+      });
+  if (fullDestination && identityFilter && independent) {
+    frame.displayHud = {frame.hudBackground, &pass};
   }
-  snapshot_current_pass_color(gui.scene);
-  gui.mapping = mapping;
+  if (static const bool trace = std::getenv("SIN_HUD_TRACE") != nullptr; trace) {
+    const unsigned flags = fullDestination | (identityFilter << 1) | (terminalHud << 2) | (independent << 3);
+    static uint32_t reported = 0;
+    if (!(reported & (1u << flags))) {
+      reported |= 1u << flags;
+      Log.info("[hud-present] source {}x{} at {},{} in {}x{}, XFB {}x{}, filter {}/{}/{}, terminal={}, independent={}, split={}",
+               source.width, source.height, source.x, source.y, size.width, size.height, destination.width,
+               destination.height, filter[0], filter[1], filter[2], terminalHud, independent, frame.displayHud.pass != nullptr);
+    }
+  }
+  frame.hudCandidate = nullptr;
+  frame.hudBackground = {};
 }
 
 PixelPerfectGuiPresent pixel_perfect_gui_present() noexcept {
   if (!g_recorder.active()) {
     return {};
   }
-  const auto& gui = current_frame_packet().pixelPerfectGui;
-  return {
-      .baseline = gui.baseline,
-      .scene = gui.scene,
-      .mapping = gui.mapping,
-  };
+  return current_frame_packet().displayHud;
 }
 
 ReadbackCapture readback_capture() noexcept {
@@ -1288,7 +1326,9 @@ bool push_encoder_task_from_fifo(EncoderTaskId type, const void* payload, size_t
 
 template <>
 void push_draw_command(gx::DrawData data) {
-  push_draw_command(make_draw_command<gx::render>(data));
+  auto command = make_draw_command<gx::render>(data);
+  command.presentationPipeline = data.presentationPipeline;
+  push_draw_command(command);
 }
 
 #ifdef AURORA_ENABLE_RMLUI
@@ -1318,15 +1358,6 @@ void finish() {
   AURORA_ASSERT(!g_recorder.inOffscreen, "finish called while offscreen rendering is active");
   if (g_recorder.currentRenderPass != UINT32_MAX) {
     auto& frame = current_frame_packet();
-    auto& gui = frame.pixelPerfectGui;
-    if (gui.baseline.texture && !gui.scene.texture) {
-      if (gx::g_gxState.displayCopyProduced) {
-        gui = {};
-      } else {
-        gui.scene = webgpu::present_source();
-        gui.mapping = pixel_perfect::GuiCopyMapping{};
-      }
-    }
     frame.uniforms.append_zeroes(gx::MaxUniformSize);
     frame.renderPasses[g_recorder.currentRenderPass].captureDepthSnapshot = true;
     enqueue_pass(frame, g_recorder.currentRenderPass);

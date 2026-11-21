@@ -144,12 +144,7 @@ void copy_disp(GXBool clear, u32 copyControl) noexcept {
   const auto clearColor = clear && g_gxState.colorUpdate;
   const auto clearAlpha = clear && g_gxState.alphaUpdate && efb_has_alpha(g_gxState.pixelFmt);
   const auto clearDepth = clear && g_gxState.depthUpdate;
-  const auto [sceneWidth, sceneHeight] = gfx::get_render_target_size();
-  const bool partialDst =
-      dstWidth > static_cast<uint32_t>(rect.width) && dstHeight > static_cast<uint32_t>(rect.height);
-  gfx::capture_pixel_perfect_gui_scene(gfx::pixel_perfect::display_copy_mapping(
-      sceneWidth, sceneHeight, rect.x, rect.y, static_cast<uint32_t>(rect.width),
-      static_cast<uint32_t>(rect.height), dstWidth, dstHeight, partialDst));
+  gfx::capture_pixel_perfect_gui_scene(rect, texture->size, filter);
   gfx::resolve_pass_into(texture, rect, clearColor, clearAlpha, clearDepth, g_gxState.clearColor, clear_depth_value(),
                          GX_TF_RGBA8, g_gxState.pixelFmt,
                          {

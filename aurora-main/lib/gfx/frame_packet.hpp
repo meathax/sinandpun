@@ -40,6 +40,7 @@ using DrawEncoder = void (*)(void* payload, const wgpu::RenderPassEncoder& pass,
 
 struct DrawCommand {
   DrawEncoder encoder = nullptr;
+  PipelineRef presentationPipeline{};
   alignas(std::max_align_t) std::array<std::byte, InlineDrawPayloadSize> payload{};
 };
 
@@ -214,11 +215,9 @@ struct FramePacket {
   std::deque<ReadbackTask> readbackTasks;
   std::deque<FrameOp> ops;
   std::deque<TextureUpload> textureUploads;
-  struct PixelPerfectGui {
-    webgpu::TextureWithSampler baseline;
-    webgpu::TextureWithSampler scene;
-    pixel_perfect::GuiCopyMapping mapping;
-  } pixelPerfectGui;
+  webgpu::TextureWithSampler hudBackground;
+  const RenderPass* hudCandidate = nullptr;
+  PixelPerfectGuiPresent displayHud;
 #ifdef AURORA_GFX_DEBUG_GROUPS
   std::vector<std::string> debugMarkers;
 #endif

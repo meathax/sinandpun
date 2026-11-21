@@ -971,15 +971,20 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
   }
   float jx = 0.f, jy = 0.f;
   current_jitter(jx, jy);
-  if (g_constantMotion.load()) {
+  const bool constantMotion = g_constantMotion.load();
+  const bool estimateMotion = g_motionEnabled.load();
+  if (constantMotion || !estimateMotion) {
     // test hook: every pixel moves by the same known vector
     const wgpu::RenderPassColorAttachment attachment{.view = inst.mv.view, .loadOp = wgpu::LoadOp::Clear,
                                                      .storeOp = wgpu::StoreOp::Store,
-                                                     .clearValue = {g_constantMotionX.load(), g_constantMotionY.load(), 0, 0}};
+                                                     .clearValue = {constantMotion ? g_constantMotionX.load() : 0.0f,
+                                                                    constantMotion ? g_constantMotionY.load() : 0.0f,
+                                                                    0, 0}};
     const wgpu::RenderPassDescriptor rd{.label = "DLSS constant motion", .colorAttachmentCount = 1, .colorAttachments = &attachment};
     encoder.BeginRenderPass(&rd).End();
+    inst.flow.invalidate_history();
   } else {
-    inst.flow.encode(encoder, inst.color.view, inst.mv.view, inst.needReset || !g_motionEnabled.load(), jx - inst.prevJitter[0],
+    inst.flow.encode(encoder, inst.color.view, inst.mv.view, inst.needReset, jx - inst.prevJitter[0],
                      jy - inst.prevJitter[1]);
   }
   inst.prevJitter[0] = jx;

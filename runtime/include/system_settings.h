@@ -1,7 +1,7 @@
 #pragma once
 
 // Persisted options of the in-game options menu that have no home in runtime_config.h:
-//   [video]  scaling_filter = "bilinear" | "area"   (live)
+//   [video]  scaling_filter = "bilinear" | "area" | "integer"   (live)
 //            msaa = 1 | 2 | 4 | 8                   (restart; AuroraConfig.msaa)
 //            anisotropy = 1 | 2 | 4 | 8 | 16        (restart; AuroraConfig.maxTextureAnisotropy)
 //   [system] config_version = 1
@@ -28,8 +28,9 @@ inline constexpr std::array<const char*, 3> kStartupCoverKeys = {"auto", "skip",
 inline constexpr std::array<const char*, 3> kStartupCoverLabels = {
     "Automatic (about 2 seconds)", "Skip", "Show until a button is pressed"};
 
-inline constexpr std::array<const char*, 2> kScalingFilterKeys = {"bilinear", "area"};
-inline constexpr std::array<const char*, 2> kScalingFilterLabels = {"Bilinear (sharper)", "Area (smoother)"};
+inline constexpr std::array<const char*, 3> kScalingFilterKeys = {"bilinear", "area", "integer"};
+inline constexpr std::array<const char*, 3> kScalingFilterLabels = {
+    "Bilinear (sharper)", "Area (smoother)", "Integer (upscaler off)"};
 
 inline constexpr std::array<int, 4> kMsaaChoices = {1, 2, 4, 8};
 inline constexpr std::array<int, 5> kAnisotropyChoices = {1, 2, 4, 8, 16};

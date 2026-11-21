@@ -18,6 +18,11 @@
 #include <vector>
 
 namespace aurora::gfx {
+namespace detail { struct RenderPass; }
+struct PixelPerfectGuiPresent {
+  webgpu::TextureWithSampler background;
+  const detail::RenderPass* pass = nullptr;
+};
 using BindGroupRef = HashType;
 using PipelineRef = HashType;
 using SamplerRef = HashType;
@@ -56,7 +61,8 @@ struct InterpolationReplay {
     bool scenePresentOnly = false;
   uint32_t slots = 0;
   InterpolationPlan plan;
-  std::function<void(wgpu::CommandEncoder& cmd, uint32_t slot)> encode;
+  std::function<bool(wgpu::CommandEncoder& cmd, uint32_t slot)> encode;
+  std::function<void()> restoreBeforeNative;
 };
 using EndFrameCallback =
     std::function<void(wgpu::CommandEncoder&, std::vector<AfterSubmitCallback>, const InterpolationReplay&)>;

@@ -4,6 +4,7 @@
 #include "runtime_log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -131,6 +132,19 @@ bool AudioBackend::QueueHasCapacityLocked(int incomingBytes) {
         return true;
     }
     const uint32_t maxQueued = QueueLimitBytesLocked();
+    if (AudioDebug::Enabled() && maxQueued != 0) {
+        using Clock = std::chrono::steady_clock;
+        static auto lastReport = Clock::now();
+        static int peakQueued = 0;
+        peakQueued = std::max(peakQueued, queued);
+        const auto now = Clock::now();
+        if (now - lastReport >= std::chrono::seconds(1)) {
+            RT_LOG(RT_TAG_AUDIO) << "output queue peak " << peakQueued * 120.0 / maxQueued
+                                 << " ms (120 ms limit)" << std::endl;
+            peakQueued = 0;
+            lastReport = now;
+        }
+    }
     if (static_cast<uint64_t>(queued) + static_cast<uint64_t>(std::max(incomingBytes, 0)) > maxQueued) {
         // Match Dolphin's FIFO overflow behavior: preserve the continuous audio
         // already queued and discard the new block.  Clearing SDL's entire

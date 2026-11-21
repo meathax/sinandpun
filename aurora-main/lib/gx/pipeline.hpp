@@ -7,6 +7,7 @@
 namespace aurora::gx {
 struct DrawData {
   gfx::PipelineRef pipeline;
+  gfx::PipelineRef presentationPipeline{};
   GXBindGroups bindGroups;
   gfx::Range vertRange;
   gfx::Range idxRange;

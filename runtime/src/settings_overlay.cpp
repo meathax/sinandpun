@@ -92,7 +92,7 @@ constexpr const char* kGameTitle = "Sin & Punishment: Star Successor recomp";
 
 // ---- persisted option mirrors ------------------------------------------------------------------------
 bool g_rumbleEnabled = RuntimeConfigFile::RumbleEnabled(true);
-float g_resolutionScale = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+float g_resolutionScale = RuntimeConfigFile::ResolutionMultiplier(0.0f);
 int g_audioVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::AudioVolume(1.0f) * 100.0f));
 bool g_audioMuted = RuntimeConfigFile::AudioMuted(false);
 int32_t g_muteHotkey = RuntimeConfigFile::MuteHotkey(SDL_SCANCODE_BACKSLASH);
@@ -844,7 +844,7 @@ void ResetDisplayPage() {
 
 void ResetGraphicsPage() {
     DisplayState next = CurrentDisplay();
-    next.resolution = 1.0f;
+    next.resolution = 0.0f;
     next.interpolation = 0;
     ApplyAndPersistDisplay(next);
     ResetUpscaler();
@@ -1583,6 +1583,10 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImGuiIO& io = ImGui::GetIO();
     const float S = game_ui::Scale();
+    const float framebufferScaleX = io.DisplayFramebufferScale.x > 0.0f ? io.DisplayFramebufferScale.x : 1.0f;
+    const float framebufferScaleY = io.DisplayFramebufferScale.y > 0.0f ? io.DisplayFramebufferScale.y : 1.0f;
+    const auto snapX = [framebufferScaleX](float value) { return std::round(value * framebufferScaleX) / framebufferScaleX; };
+    const auto snapY = [framebufferScaleY](float value) { return std::round(value * framebufferScaleY) / framebufferScaleY; };
     const float a = Ease(g_anim);
     const bool live = interactive && g_menuTarget;
 
@@ -1595,11 +1599,12 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
     g_tabAnim = std::min(1.0f, g_tabAnim + in.dt * 7.0f);
 
     dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, game_ui::Fade(IM_COL32(0, 8, 22, 150), a));
-    const float pw = std::min(1320.0f * S, io.DisplaySize.x * 0.94f);
-    const float ph = std::min(960.0f * S, io.DisplaySize.y * 0.94f);
-    const float slide = (1.0f - a) * 36.0f * S;
-    const ImVec2 pmin((io.DisplaySize.x - pw) * 0.5f, (io.DisplaySize.y - ph) * 0.5f + slide);
-    const ImVec2 pmax(pmin.x + pw, pmin.y + ph);
+    const float pw = snapX(std::min(1320.0f * S, io.DisplaySize.x * 0.94f));
+    const float ph = snapY(std::min(960.0f * S, io.DisplaySize.y * 0.94f));
+    const float slide = snapY((1.0f - a) * 36.0f * S);
+    const ImVec2 pmin(snapX((io.DisplaySize.x - pw) * 0.5f),
+                      snapY((io.DisplaySize.y - ph) * 0.5f + slide));
+    const ImVec2 pmax(snapX(pmin.x + pw), snapY(pmin.y + ph));
     game_ui::DrawGlassPanel(dl, pmin, pmax, a, 9.0f, 42.0f);
     auto U = [&](float u) { return u * S; };
 

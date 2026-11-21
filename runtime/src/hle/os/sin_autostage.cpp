@@ -32,6 +32,7 @@
 #include "memory.h"
 #include "runtime_log.h"
 
+#include <aurora/aurora.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -39,6 +40,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <thread>
 #include <vector>
 
@@ -219,6 +221,9 @@ void Watcher() {
     size_t seqIndex = 0;
     const double seqGap = std::getenv("SIN_AUTOSTAGE_GAP") ? std::atof(std::getenv("SIN_AUTOSTAGE_GAP")) : 25.0;
     double nextSwapAt = 0.0;
+    const char* captureDir = std::getenv("SIN_AUTOSTAGE_CAPTURE_DIR");
+    int captureStage = -1;
+    double captureAt = 0.0;
     const bool probe = EnvInt("SIN_AUTOSTAGE_PROBE", 0) != 0;
     if (!probe && (stage < 0 || stage > 7)) {
         RT_LOGF("autostage", "SIN_AUTOSTAGE=%s invalid (0..7); disabled\n", stageEnv);
@@ -263,6 +268,15 @@ void Watcher() {
         Rd32(gm + kGameData, flags);
         uint8_t loaded = 0xFF;
         Rd8(kLoadedStageAddr, loaded);
+        if (captureStage >= 0 && now >= captureAt) {
+            if (loaded == captureStage) {
+                const auto path = std::filesystem::path(captureDir) /
+                                  ("stage-" + std::to_string(captureStage) + ".png");
+                aurora_capture_present_image(path.string().c_str());
+            }
+            captureStage = -1;
+            if (done && !trace) return;
+        }
 
         if (probe) {
             uint8_t c0 = 0, c1 = 0, c2 = 0, n0 = 0, n1 = 0, n2 = 0;
@@ -384,9 +398,13 @@ void Watcher() {
 
         if ((patched || forced || !seq.empty()) && st >= 4 && static_cast<int>(s0) == stage) {
             RT_LOGF("autostage", "t=%.2f stage %d load reached (F state %u, loadedId=%u)\n", now, stage, st, loaded);
+            if (captureDir && *captureDir) {
+                captureStage = stage;
+                captureAt = now + std::max(seqGap - 3.0, 1.0);
+            }
             if (seqIndex + 1 >= seq.size()) {
                 RT_LOGF("autostage", "watcher done%s\n", trace ? " (tracing continues)" : "");
-                if (!trace) return;
+                if (!trace && captureStage < 0) return;
                 done = true;
                 continue;
             }

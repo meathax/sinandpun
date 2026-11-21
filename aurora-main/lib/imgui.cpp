@@ -190,19 +190,50 @@ void process_event(const SDL_Event& event) noexcept {
     if (SDL_Renderer* renderer = window::get_sdl_renderer()) {
       SDL_ConvertEventToRenderCoordinates(renderer, &renderEvent);
     }
+  } else if (renderEvent.type == SDL_EVENT_MOUSE_MOTION || renderEvent.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+             renderEvent.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+    // WGPU ImGui draw data uses physical framebuffer pixels as its coordinate space.
+    // SDL mouse events are in window points, so apply the same transform as new_frame().
+    const AuroraWindowSize size = window::get_window_size();
+    if (size.width > 0 && size.height > 0) {
+      const float scaleX = size.native_fb_width > 0
+                               ? static_cast<float>(size.native_fb_width) / static_cast<float>(size.width)
+                               : 1.0f;
+      const float scaleY = size.native_fb_height > 0
+                               ? static_cast<float>(size.native_fb_height) / static_cast<float>(size.height)
+                               : 1.0f;
+      switch (renderEvent.type) {
+      case SDL_EVENT_MOUSE_MOTION:
+        renderEvent.motion.x *= scaleX;
+        renderEvent.motion.y *= scaleY;
+        break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        renderEvent.button.x *= scaleX;
+        renderEvent.button.y *= scaleY;
+        break;
+      default:
+        break;
+      }
+    }
   }
   ImGui_ImplSDL3_ProcessEvent(&renderEvent);
 }
 
 void new_frame(const AuroraWindowSize& size) noexcept {
   ZoneScoped;
-  ImVec2 framebufferScale{
-      size.width > 0 ? static_cast<float>(size.native_fb_width) / static_cast<float>(size.width) : 1.0f,
-      size.height > 0 ? static_cast<float>(size.native_fb_height) / static_cast<float>(size.height) : 1.0f,
-  };
-  ImVec2 displaySize{static_cast<float>(size.width), static_cast<float>(size.height)};
+  ImVec2 framebufferScale{1.0f, 1.0f};
+  // The WGPU overlay is rendered into the native presentation surface. Using its
+  // physical pixel dimensions directly gives the UI a stable pixel grid at fractional DPI.
+  ImVec2 displaySize{static_cast<float>(size.native_fb_width > 0 ? size.native_fb_width : size.width),
+                     static_cast<float>(size.native_fb_height > 0 ? size.native_fb_height : size.height)};
 
   if (g_useSdlRenderer) {
+    displaySize = {static_cast<float>(size.width), static_cast<float>(size.height)};
+    framebufferScale = {
+        size.width > 0 ? static_cast<float>(size.native_fb_width) / static_cast<float>(size.width) : 1.0f,
+        size.height > 0 ? static_cast<float>(size.native_fb_height) / static_cast<float>(size.height) : 1.0f,
+    };
     if (SDL_Renderer* renderer = window::get_sdl_renderer()) {
       float renderScaleX = 1.0f;
       float renderScaleY = 1.0f;
@@ -239,6 +270,16 @@ void new_frame(const AuroraWindowSize& size) noexcept {
   ImGui_ImplSDL3_NewFrame();
 
   ImGuiIO& io = ImGui::GetIO();
+  if (!g_useSdlRenderer) {
+    auto* sdlWindow = window::get_sdl_window();
+    if (sdlWindow && SDL_GetMouseFocus() == sdlWindow && !SDL_GetWindowRelativeMouseMode(sdlWindow) &&
+        size.width > 0 && size.height > 0) {
+      float x, y;
+      SDL_GetMouseState(&x, &y);
+      // The SDL backend can enqueue a fallback window-point position in NewFrame().
+      io.AddMousePosEvent(x * displaySize.x / size.width, y * displaySize.y / size.height);
+    }
+  }
   io.DisplayFramebufferScale = framebufferScale;
   ImGui::GetIO().DisplaySize = displaySize;
   ImGui::NewFrame();

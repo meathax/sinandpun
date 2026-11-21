@@ -508,7 +508,7 @@ inline void EnsureConfigFile() {
               "[video]\n"
               "widescreen = true\n"
               "force_aspect = false\n"
-              "resolution_multiplier = 1.0\n"
+              "resolution_multiplier = 0.0\n"
               "# Presentation rate: \"original\" (60), \"display\" (match the monitor), \"uncapped\" or an fps\n"
               "# number such as 90/120/144/165/180/240. Game logic, physics and audio stay at 60 Hz.\n"
               "frame_rate = \"original\"\n"
@@ -1310,7 +1310,7 @@ inline uint32_t WindowHeight(uint32_t fallback) {
     return Get().windowHeight.value_or(fallback);
 }
 
-inline float ResolutionMultiplier(float fallback = 1.0f) {
+inline float ResolutionMultiplier(float fallback = 0.0f) {
     return std::max(0.0f, Get().resolutionMultiplier.value_or(fallback));
 }
 

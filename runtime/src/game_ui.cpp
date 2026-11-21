@@ -28,7 +28,7 @@ float Ease(float t) {
     return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
 }
 
-float FontPx(float sizeU) { return std::max(6.0f, sizeU * Scale()); }
+float FontPx(float sizeU) { return std::max(6.0f, std::round(sizeU * Scale())); }
 
 ImU32 OutlineFor(ImU32 colour) {
     const int r = static_cast<int>((colour >> IM_COL32_R_SHIFT) & 0xFF);
@@ -114,6 +114,11 @@ void Text(ImDrawList* dl, float sizeU, ImVec2 pos, ImU32 colour, const char* tex
     if (text == nullptr || *text == '\0') return;
     ImFont* font = Font();
     const float px = FontPx(sizeU);
+    const ImGuiIO& io = ImGui::GetIO();
+    const auto snap = [](float p, float framebufferScale) {
+        return framebufferScale > 0 ? std::round(p * framebufferScale) / framebufferScale : std::round(p);
+    };
+    pos = {snap(pos.x, io.DisplayFramebufferScale.x), snap(pos.y, io.DisplayFramebufferScale.y)};
     const float own = static_cast<float>((colour >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;
     if (outline != Outline::None) {
         const float t = std::max(1.0f, px * (outline == Outline::Thick ? 0.075f : 0.055f));

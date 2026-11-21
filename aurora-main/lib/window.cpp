@@ -202,13 +202,13 @@ void update_mouse_pointer() {
 	float width = static_cast<float>(size.native_fb_width);
 	float height = static_cast<float>(size.native_fb_height);
 #ifdef AURORA_ENABLE_GX
-	const auto& source = webgpu::present_source();
-	const auto viewport = webgpu::calculate_present_viewport(size.native_fb_width, size.native_fb_height,
-		source.size.width, source.size.height);
-	left = viewport.left;
-	top = viewport.top;
-	width = viewport.width;
-	height = viewport.height;
+	float normalizedLeft, normalizedTop, normalizedWidth, normalizedHeight;
+	if (aurora_get_present_viewport(&normalizedLeft, &normalizedTop, &normalizedWidth, &normalizedHeight)) {
+		left = normalizedLeft * size.native_fb_width;
+		top = normalizedTop * size.native_fb_height;
+		width = normalizedWidth * size.native_fb_width;
+		height = normalizedHeight * size.native_fb_height;
+	}
 #endif
 	if (width <= 0 || height <= 0) {
 		return;

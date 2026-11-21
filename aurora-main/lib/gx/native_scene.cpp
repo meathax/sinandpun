@@ -29,7 +29,7 @@ struct Draw {
   std::vector<uint32_t> joins;
   size_t previousIndex = SIZE_MAX;
   std::array<float, 3> center{};
-  bool matched = false, used = false;
+  bool matched = false, used = false, translucent = false;
 };
 std::vector<Draw> previous, current, recycled;
 std::unordered_map<HashType, std::vector<size_t>> history;
@@ -188,6 +188,10 @@ bool capture_scene_vertices(Draw& draw, const ShaderConfig& config, const uint8_
       ++rejected;
       return false;
     }
+    // Emitters can replace particles without changing their count, UVs or
+    // material. Require the same local geometry before borrowing a pose.
+    if (draw.translucent)
+      key.update(p, sizeof(p));
     Pose pose;
     pose.pos = transform(g_gxState.pnMtx[matrix].pos, p, 1.f);
     pose.normal = transform(g_gxState.pnMtx[matrix].nrm, n, 0.f);
@@ -217,14 +221,17 @@ bool capture_scene_vertices(Draw& draw, const ShaderConfig& config, const uint8_
   return true;
 }
 NativeSceneDraw* record_native_scene(const ShaderConfig& config, GXPrimitive prim, const uint8_t* vertices,
-                                     uint16_t count, const Mat4x4<float>& projection, HashType material) noexcept {
+                                     uint16_t count, const Mat4x4<float>& projection, HashType material,
+                                     bool translucent) noexcept {
   if (!safe || !count)
     return {};
   if (!vertices || config.vtxStride == 0) {
     ++rejected;
+    discard_native_scene();
     return {};
   }
   Draw draw;
+  draw.translucent = translucent;
   vertexCache.erase(vertexCache.begin(), vertexCache.end());
   if (!recycled.empty()) {
     draw.pose = std::move(recycled.back().pose);
@@ -245,8 +252,10 @@ NativeSceneDraw* record_native_scene(const ShaderConfig& config, GXPrimitive pri
   const std::array camera{viewport.left, viewport.top, viewport.width, viewport.height, viewport.znear, viewport.zfar};
   draw.camera = xxh3_hash_s(camera.data(), sizeof(camera), xxh3_hash_s(&projection, sizeof(projection)));
   key.update(draw.camera);
-  if (!capture_scene_vertices(draw, config, vertices, count, projection))
+  if (!capture_scene_vertices(draw, config, vertices, count, projection)) {
+    discard_native_scene();
     return {};
+  }
   auto* result = draw.output.get();
   current.push_back(std::move(draw));
   return result;
@@ -334,6 +343,13 @@ bool seal_native_scene() noexcept {
   for (size_t d = 0; d < current.size(); ++d) {
     current[d].joins.resize(current[d].pose.size());
     for (size_t v = 0; v < current[d].pose.size(); ++v) {
+      // Coincident translucent vertices can belong to independent particles
+      // and layers. Never inherit another layer's previous position.
+      if (current[d].translucent) {
+        current[d].joins[v] = static_cast<uint32_t>(owners.size());
+        owners.push_back({d, v});
+        continue;
+      }
       const auto key = joinKey(current[d], current[d].pose[v]);
       auto [it, inserted] = joins.emplace(key, static_cast<uint32_t>(owners.size()));
       if (inserted)
@@ -343,7 +359,7 @@ bool seal_native_scene() noexcept {
       current[d].joins[v] = it->second;
     }
   }
-  size_t matched = 0, welded = 0;
+  size_t matched = 0, welded = 0, translucent = 0, translucentMatched = 0;
   const size_t vertices = totalVertices;
   const auto beforePose = [](const Draw& draw, size_t v) -> const Pose& {
     return draw.matched ? previous[draw.previousIndex].pose[v] : draw.pose[v];
@@ -357,6 +373,8 @@ bool seal_native_scene() noexcept {
   }
   for (auto& draw : current) {
     matched += draw.matched;
+    translucent += draw.translucent;
+    translucentMatched += draw.translucent && draw.matched;
     for (size_t v = 0; v < draw.pose.size(); ++v) {
       const auto owner = owners[draw.joins[v]];
       const auto& canonical = current[owner.draw];
@@ -394,9 +412,10 @@ bool seal_native_scene() noexcept {
   if (++frames % 60 == 0)
     std::fprintf(stderr,
                  "[native-scene] draws=%zu matched=%zu vertices=%zu shared=%zu records=%zu rejected=%u capture=%.3fms "
-                 "seal=%.3fms\n",
+                 "seal=%.3fms translucent=%zu translucent_matched=%zu\n",
                  current.size(), matched, vertices, welded, packed.size(), rejected, captureMs,
-                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+                 translucent, translucentMatched);
   recycled.clear();
   for (auto it = previous.rbegin(); it != previous.rend(); ++it)
     recycled.push_back(std::move(*it));

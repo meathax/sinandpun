@@ -30,6 +30,7 @@ translation:
   loop_poll_functions:
     - 0x800380D8
   entry_hooks:
+    - 0x8008F408
     - 0x8010BC48
     - 0x8010C1E4
     - 0x8010C6C8

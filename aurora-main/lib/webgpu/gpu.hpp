@@ -83,13 +83,11 @@ Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_hei
                                     uint32_t content_height) noexcept;
 Viewport calculate_present_viewport_for_aspect(uint32_t surface_width, uint32_t surface_height,
                                                float content_aspect) noexcept;
+Viewport calculate_integer_present_viewport(uint32_t surfaceWidth, uint32_t surfaceHeight,
+                                            uint32_t sourceWidth, uint32_t sourceHeight,
+                                            const Viewport& fitted) noexcept;
 const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
-                                                  const TextureWithSampler& source);
-const TextureWithSampler& composite_pixel_perfect_gui(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
-                                                      const TextureWithSampler& scaled,
-                                                      const TextureWithSampler& scene,
-                                                      const TextureWithSampler& baseline,
-                                                      const gfx::pixel_perfect::GuiCopyMapping& mapping);
+                                                  const TextureWithSampler& source, AuroraSampler sampler);
 void draw_clear(const wgpu::RenderPassEncoder& pass, bool clearColor, bool clearAlpha, bool clearDepth,
                 const Vec4<float>& clearColorValue, float clearDepthValue);
 

@@ -82,13 +82,14 @@ The one intentional gameplay change is modern controller support:
 
 ### Display and graphics
 
-- Native, 1.5x, 2x, 3x and 4x internal rendering.
+- Window-sized rendering by default. Fixed internal resolution multipliers are also available.
 - Optional FSR 1 spatial upscaling and NVIDIA DLSS where available.
 - Original 60 Hz mode, match-display mode and interpolated presentation.
 - VRR/G-SYNC/FreeSync support.
 - Game-styled Display, Graphics, Audio, Controls, System and About pages.
 - Settings are staged until **Apply and confirm** is selected, followed by a single Keep/Revert safety prompt.
-- HUD/GUI/text is recomposited after 3D upscaling with nearest-neighbor sampling.
+- Eligible Wii HUD draws are rendered over the scaled scene at output resolution using the original textures and blending.
+- Integer presentation repeats each display-buffer pixel evenly when the source fits the selected aspect. It centers the image with margins when needed. At other sizes the game uses the regular aspect fit. Use it with the upscaler off.
 
 <p align="center">
   <img src="docs/screenshots/settings.png" alt="In-game graphics settings" width="900">

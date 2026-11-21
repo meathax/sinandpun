@@ -184,6 +184,19 @@ static void TitleRoot(CpuContext* ctx) {
 // Called by the translated handlers listed in projects/r2ve01/recomp.yml translation.entry_hooks. The menu page
 // handlers are only reached through an indirect call, so a registry wrapper cannot see them.
 void GuestEntryHook(uint32_t address, CpuContext* ctx) {
+    // R2VE01 StrapMsg update: state 10 waits for the existing fade to finish,
+    // then returns completion to the task owner. The owner still releases the
+    // strap archive and runs controller/save initialization before the title.
+    // Only redirect a newly constructed StrapMsg, never other task classes.
+    if (address == 0x8008F408u && ctx != nullptr) {
+        const uint32_t task = ctx->gpr[3];
+        if (task != 0 && Memory::Contains(task, 0x54) &&
+            Memory::Read32(task) == 0x802FB018u && Memory::Read8(task + 0x36) == 0) {
+            Memory::Write8(task + 0x36, 10);
+            RT_LOGF(RT_TAG_HLE, "startup: skipping StrapMsg control notices\n");
+        }
+        return;
+    }
     if (address == 0x8003B950u && ctx != nullptr) {
         SinSoundSlotGuard(ctx);  // hle/sound_slot_guard.cpp
         return;

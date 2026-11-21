@@ -822,7 +822,10 @@ void end_frame(EndFrameCallback callback) {
             [&packet, &stagingCopied](wgpu::CommandEncoder& cmd, uint32_t slot) {
               if (!stagingCopied) {
                 detail::encode_full_staging_copy(cmd, packet);
+                if (!detail::capture_replay_textures(cmd, packet)) return false;
                 stagingCopied = true;
+              } else {
+                detail::restore_scene_textures(cmd, packet, false);
               }
               webgpu::dlss::advance_jitter(true);
               gx::g_interpolationEncodeSlot = static_cast<int>(slot);
@@ -830,6 +833,15 @@ void end_frame(EndFrameCallback callback) {
                 detail::encode_replay_op(cmd, packet, op);
               }
               gx::g_interpolationEncodeSlot = -1;
+              return true;
+            },
+        .restoreBeforeNative =
+            [&packet, &stagingCopied] {
+              if (!stagingCopied || packet.sceneTextures.empty()) return;
+              auto restore = g_device.CreateCommandEncoder();
+              detail::restore_scene_textures(restore, packet, false);
+              auto commands = restore.Finish();
+              g_queue.Submit(1, &commands);
             },
     };
     g_resources.stats.drawCallCount = stats.drawCallCount;

@@ -8,6 +8,7 @@
 #include "native_scene.hpp"
 #include "gx.hpp"
 #include "pipeline.hpp"
+#include "../gfx/frame_packet.hpp"
 #include "readback.hpp"
 #include "regs.hpp"
 #include "shader_info.hpp"
@@ -136,6 +137,7 @@ struct DrawCache {
   PipelineConfig config{};
   ShaderInfo shaderInfo{};
   gfx::PipelineRef pipelineRef{};
+  gfx::PipelineRef presentationPipeline{};
   GXBindGroups bindGroups{};
   uint64_t bindGeneration = 0;
   GXVtxFmt fmt = GX_MAX_VTXFMT;
@@ -488,8 +490,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
                          u32 numIndices, const uint8_t* sourceVertices) noexcept {
   auto& state = g_gxState;
   auto& cache = sDrawCache;
-  const bool pixelPerfectTextures = state.projType == GX_ORTHOGRAPHIC;
-  gfx::note_projection_draw(pixelPerfectTextures);
+  const bool hudCandidate = gfx::note_projection_draw(state.projType == GX_ORTHOGRAPHIC);
 
   DrawImmediateData immediates{.vtxStart = vertRange.offset, .currentPnMtx = state.currentPnMtx};
   for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {
@@ -514,6 +515,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     populate_pipeline_config(cache.config, prim, fmt);
     cache.shaderInfo = build_shader_info(cache.config.shaderConfig);
     cache.pipelineRef = gfx::pipeline_ref(cache.config);
+    cache.presentationPipeline = {};
     cache.targetLayoutKey = targetLayoutKey;
     cache.fmt = fmt;
     cache.lineMode = lineMode;
@@ -523,6 +525,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
         prevSampledIndTextures != cache.shaderInfo.sampledIndTextures) {
       cache.bindGeneration = 0;
     }
+  }
+
+  const auto usesDestinationAlpha = [](GXBlendFactor factor) {
+    return factor == GX_BL_DSTALPHA || factor == GX_BL_INVDSTALPHA;
+  };
+  const bool independentHud = hudCandidate && (!cache.config.depthCompare || cache.config.depthFunc == GX_ALWAYS) &&
+      (cache.config.blendMode != GX_BM_BLEND ||
+       (!usesDestinationAlpha(cache.config.blendFacSrc) && !usesDestinationAlpha(cache.config.blendFacDst)));
+  if (independentHud && !cache.presentationPipeline) {
+    gfx::RenderTargetLayout layout{};
+    layout.colorAttachmentCount = 1;
+    layout.colorAttachments[0] = gfx::get_render_target_layout().colorAttachments[0];
+    gfx::detail::finalize_render_target_layout(layout);
+    auto config = cache.config;
+    config.depthCompare = false;
+    config.depthUpdate = false;
+    cache.presentationPipeline = gfx::find_pipeline(config, layout);
   }
 
   const bool bindGroupsValid =
@@ -622,16 +641,22 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     instanceCount = vtxCount;
   }
   NativeSceneDraw* scene = nullptr;
-  if (nativeScene) {
+  const bool translucent = cache.config.blendMode == GX_BM_BLEND && !cache.config.depthUpdate;
+  // Direct translucent vertices carry no persistent particle IDs. Keep that
+  // stream at its authored pose while other geometry keeps interpolating.
+  const bool directParticles = translucent && cache.config.shaderConfig.attrs[GX_VA_POS].attrType == GX_DIRECT;
+  if (nativeScene && !directParticles) {
     const size_t projOffset = 16 + (cache.shaderInfo.lineMode != 0 ? 16 : 0);
     Mat4x4<float> projection;
     std::memcpy(&projection, gfx::uniform_data(cache.uniformRange) + projOffset, sizeof(projection));
     const HashType material = xxh3_hash_s(&cache.bindGroups.textureBindGroup, sizeof(cache.bindGroups.textureBindGroup), cache.pipelineRef);
-    scene = record_native_scene(cache.config.shaderConfig, prim, sourceVertices, vtxCount, projection, material);
+    scene = record_native_scene(cache.config.shaderConfig, prim, sourceVertices, vtxCount, projection, material,
+                                translucent);
   }
   cache.lastDrawFmt = fmt;
   gfx::push_draw_command(DrawData{
       .pipeline = cache.pipelineRef,
+      .presentationPipeline = independentHud ? cache.presentationPipeline : gfx::PipelineRef{},
       .bindGroups = cache.bindGroups,
       .vertRange = vertRange,
       .idxRange = idxRange,
