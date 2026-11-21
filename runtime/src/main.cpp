@@ -1040,13 +1040,15 @@ void ReportStructuredException(EXCEPTION_POINTERS* info) {
 
 
 LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
+    if (info == nullptr || info->ExceptionRecord == nullptr) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     // Guest-space faults are the flat memory interception mechanism (MMIO,
     // deferred EFB reads, the executable-write guard, unmapped pages). The
     // flat module registers its own handler first, but registration order is
     // not guaranteed once another VEH is installed later, so consult it here
     // too - resolving a fault twice is a no-op.
-    if (info->ExceptionRecord != nullptr &&
-        info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
         info->ExceptionRecord->NumberParameters >= 2 &&
         GuestFlat::HandleAccessViolation(
             reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]),
@@ -1064,28 +1066,10 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
         }
         longjmp(*g_sehJumpTarget, 1);
     }
-    if (g_suppressSehReporting) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // Let C++ exceptions propagate to std::terminate so we can log their what().
-    if (info->ExceptionRecord->ExceptionCode == kCppExceptionCodeGcc ||
-        info->ExceptionRecord->ExceptionCode == kCppExceptionCodeMsvc) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    if (info->ExceptionRecord->ExceptionCode == 0x40010006 || // DBG_PRINTEXCEPTION_C
-        info->ExceptionRecord->ExceptionCode == 0x4001000A || // DBG_PRINTEXCEPTION_WIDE_C (OutputDebugStringW)
-        info->ExceptionRecord->ExceptionCode == 0x406D1388 || // SetThreadName
-        info->ExceptionRecord->ExceptionCode == kAsanFatalAppExit) { // ASan reporting - let it print first
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // Software-raised exceptions (customer bit set) are used for internal control flow by
-    // system DLLs (e.g. msxml6 while mscms parses a display colour profile) and are caught
-    // by their own frame handlers. Only hardware faults are fatal at first chance; anything
-    // else that truly goes unhandled reaches UnhandledSehFilter.
-    if ((info->ExceptionRecord->ExceptionCode & 0x20000000u) != 0) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    return ReportFatalSehAndExit(info);
+    // A first-chance notification precedes the system's frame handlers.
+    // Shell/RPC code can raise plain Win32 errors such as ERROR_ACCESS_DENIED
+    // and handle them internally. Only the unhandled filter reports a crash.
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 LONG WINAPI UnhandledSehFilter(EXCEPTION_POINTERS* info) {

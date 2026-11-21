@@ -374,7 +374,9 @@ bool Run() {
                                      "Select your NTSC-U disc image, then your 16-byte Wii key file. RVZ and GCZ also need DolphinTool. Setup uses the key once and does not keep it.",
                                      game_ui::Outline::Thin, 1.0f, true);
             }
-            const bool busy = l.dialogState.load() == 1;
+            // A dialog may finish during this frame. Consume its result and
+            // join the worker before accepting another activation.
+            const bool busy = l.dialogState.load() != 0;
             const char* label = busy ? "Waiting for file dialog..." : (l.phase == Phase::Failed ? "Select another disc image" : "Select disc image");
             primary = Button(dl, in, ImVec2(cx, btnY - Px(70.0f)), 560.0f, label, l.focus == 0, true);
             game_ui::TextCentered(dl, 22.0f, ImVec2(cx, btnY + Px(10.0f)), game_ui::kTextDim, "or drag and drop the file onto this window",
