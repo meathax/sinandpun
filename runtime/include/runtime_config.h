@@ -476,10 +476,12 @@ inline std::filesystem::path ApplicationDataDirectory() {
     // XDG Base Directory spec equivalent of FOLDERID_LocalAppData: $XDG_DATA_HOME if set and
     // non-empty, otherwise its default of $HOME/.local/share.
     if (const char* xdgDataHome = std::getenv("XDG_DATA_HOME"); xdgDataHome && *xdgDataHome) {
-        return std::filesystem::path(xdgDataHome) / kApplicationDirectoryName;
+        const std::filesystem::path directory(xdgDataHome);
+        if (directory.is_absolute()) return directory / kApplicationDirectoryName;
     }
     if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / kApplicationDirectoryName;
+        const std::filesystem::path directory(home);
+        if (directory.is_absolute()) return directory / ".local" / "share" / kApplicationDirectoryName;
     }
 #endif
     return std::filesystem::current_path() / kApplicationDirectoryName;

@@ -91,6 +91,9 @@ The one intentional gameplay change is modern controller support:
 
 ## Requirements
 
+See [Linux](docs/LINUX.md) and [macOS](docs/MACOS.md) for platform validation and build guidance.
+The release instructions below currently describe Windows.
+
 - Windows 10 or 11, 64-bit.
 - A D3D12/Vulkan-capable GPU.
 - .NET 8 SDK, CMake, Ninja and a 64-bit Clang/LLVM toolchain for building from source.

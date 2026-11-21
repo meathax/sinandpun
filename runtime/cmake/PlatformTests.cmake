@@ -35,6 +35,7 @@ target_include_directories(mkw_runtime_config_tests PRIVATE
     "${MKW_TEST_RUNTIME_DIR}/include"
     "${MKW_TEST_RUNTIME_DIR}/third_party/toml11")
 target_compile_features(mkw_runtime_config_tests PRIVATE cxx_std_20)
+target_link_libraries(mkw_runtime_config_tests PRIVATE mkw_platform)
 add_test(NAME mkw_runtime_config_tests COMMAND mkw_runtime_config_tests)
 
 add_executable(mkw_controls_tests "${MKW_TEST_RUNTIME_DIR}/tests/controls_tests.cpp")

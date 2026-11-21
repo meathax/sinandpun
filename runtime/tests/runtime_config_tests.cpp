@@ -35,6 +35,25 @@ bool SetsOffset(const std::string& original, const char* message) {
 } // namespace
 
 int main() {
+#if defined(__linux__)
+    // Do not let launcher overrides mask the default XDG path regression.
+    unsetenv("RECOMPLAUNCHER_DATA");
+    if (setenv("HOME", "/tmp/sin-config-home", 1) != 0 ||
+        setenv("XDG_DATA_HOME", "relative-data", 1) != 0) return 1;
+    if (!RuntimeConfigFile::PortableRootDirectory() &&
+        !Require(RuntimeConfigFile::ApplicationDataDirectory() ==
+                     std::filesystem::path("/tmp/sin-config-home/.local/share") /
+                         RuntimeConfigFile::kApplicationDirectoryName,
+                 "relative XDG_DATA_HOME must fall back to HOME")) return 1;
+#elif defined(__APPLE__)
+    unsetenv("RECOMPLAUNCHER_DATA");
+    if (setenv("HOME", "/tmp/sin-config-home", 1) != 0) return 1;
+    if (!RuntimeConfigFile::PortableRootDirectory() &&
+        !Require(RuntimeConfigFile::ResolveConfigPath() ==
+                     std::filesystem::path("/tmp/sin-config-home/Library/Application Support") /
+                         RuntimeConfigFile::kApplicationDirectoryName / "Config.toml",
+                 "macOS config must be under Application Support")) return 1;
+#endif
     {
         const char* argv[] = {"WiiCompiled.exe", "--headless", nullptr};
         RecompLauncher::Arguments arguments;

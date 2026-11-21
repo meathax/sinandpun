@@ -15,6 +15,8 @@
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#endif
+#if defined(__APPLE__) || defined(__linux__)
 #include <pwd.h>
 #endif
 
@@ -71,6 +73,20 @@ std::filesystem::path ApplicationDataDirectory(std::string_view applicationName)
         const std::filesystem::path directory = std::filesystem::path(rawPath) / applicationName;
         CoTaskMemFree(rawPath);
         return directory;
+    }
+#elif defined(__linux__)
+    // XDG paths must be absolute. Never put saves in the launch directory just
+    // because a desktop launcher supplies a different working directory.
+    if (const char* data = std::getenv("XDG_DATA_HOME"); data && *data) {
+        const std::filesystem::path directory(data);
+        if (directory.is_absolute()) return directory / applicationName;
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        const std::filesystem::path directory(home);
+        if (directory.is_absolute()) return directory / ".local" / "share" / applicationName;
+    }
+    if (const passwd* user = getpwuid(getuid()); user && user->pw_dir && *user->pw_dir) {
+        return std::filesystem::path(user->pw_dir) / ".local" / "share" / applicationName;
     }
 #elif defined(__APPLE__)
     if (const char* home = std::getenv("HOME"); home && *home) {
