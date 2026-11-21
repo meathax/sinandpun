@@ -38,6 +38,11 @@ def audit(source, package, modules, require_launcher_clean=False):
     if not checks["exe_matches_build"]:
         errors.append("WiiCompiled.exe is missing, stale, or differs from the build source")
 
+    for asset in ("dsp_coef.bin", "initial_pipeline_cache.db"):
+        checks[asset] = same_file(source / asset, package / asset)
+        if not checks[asset]:
+            errors.append(f"{asset} is missing, stale, or differs from the build source")
+
     dll_names = sorted(path.name for path in source.glob("*.dll") if path.is_file())
     missing_dlls = [name for name in dll_names if not same_file(source / name, package / name)]
     checks["runtime_dlls"] = dll_names

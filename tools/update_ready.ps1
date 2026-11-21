@@ -19,6 +19,12 @@ $src = Join-Path $root $Source
 $dst = Join-Path $root $Target
 $exe = Join-Path $src "WiiCompiled.exe"
 if (-not (Test-Path $exe)) { throw "no exe at $exe - build first" }
+$runtimeAssets = @("dsp_coef.bin", "initial_pipeline_cache.db")
+foreach ($asset in $runtimeAssets) {
+    if (-not (Test-Path -LiteralPath (Join-Path $src $asset) -PathType Leaf)) {
+        throw "missing runtime asset in build: $asset"
+    }
+}
 if (Get-Process WiiCompiled -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $dst "WiiCompiled.exe") }) {
     throw "the game in $Target is running; close it first"
 }
@@ -32,6 +38,14 @@ foreach ($moduleName in $moduleNames) {
 New-Item -ItemType Directory -Force $dst | Out-Null
 Remove-Item (Join-Path $dst "*.dll") -Force -ErrorAction SilentlyContinue
 Copy-Item $exe (Join-Path $dst "WiiCompiled.exe") -Force
+foreach ($asset in $runtimeAssets) {
+    Copy-Item -LiteralPath (Join-Path $src $asset) -Destination $dst -Force
+}
+$achievementNotices = Join-Path $src "recomp_achievements_licenses"
+if (Test-Path -LiteralPath $achievementNotices) {
+    $noticesDir = New-Item -ItemType Directory -Force (Join-Path $dst "recomp_achievements_licenses")
+    Copy-Item (Join-Path $achievementNotices "*.txt") $noticesDir -Force
+}
 Get-ChildItem $src -File -Filter "*.dll" | ForEach-Object {
     Copy-Item $_.FullName $dst -Force
 }

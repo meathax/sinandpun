@@ -34,7 +34,7 @@ New-Item -ItemType Directory $stagePath | Out-Null
 # Copy only known release assets. Loose keys and foreign tools never enter staging.
 $nativePath = Join-Path $root "build/native"
 $runtimeDlls = Get-ChildItem $nativePath -File -Filter "*.dll" | Select-Object -ExpandProperty Name
-$allowed = @("WiiCompiled.exe", "LICENSE", "wii_bootstrap", "Play.bat", "initial_pipeline_cache.db") + @($runtimeDlls)
+$allowed = @("WiiCompiled.exe", "LICENSE", "wii_bootstrap", "Play.bat", "dsp_coef.bin", "initial_pipeline_cache.db") + @($runtimeDlls)
 Get-ChildItem $sourcePath -Force | Where-Object {
     $_.Name -in $allowed -and
     $_.Name -notmatch "^(sl\.(interposer|common|dlss|dlss_g|pcl|reflex)|nvngx_dlss(g)?)\.dll$"
