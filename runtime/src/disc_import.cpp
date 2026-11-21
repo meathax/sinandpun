@@ -71,12 +71,6 @@ constexpr uint32_t kClusterDataBytes = 0x7C00;
 constexpr uint64_t kSpaceMargin = 64ull << 20;
 constexpr uint64_t kModuleProgressWeight = 16ull << 20;
 
-// Public retail / Korean / vWii common keys (as used by Dolphin and wiitools).
-constexpr uint8_t kCommonKeys[3][16] = {
-    {0xeb, 0xe4, 0x2a, 0x22, 0x5e, 0x85, 0x93, 0xe4, 0x48, 0xd9, 0xc5, 0x45, 0x73, 0x81, 0xaa, 0xf7},
-    {0x63, 0xb8, 0x2b, 0xb4, 0xf4, 0x61, 0x4e, 0x2e, 0x13, 0xf2, 0xfe, 0xfb, 0xba, 0x4c, 0x9b, 0x7e},
-    {0x30, 0xbf, 0xc7, 0x6e, 0x7c, 0x19, 0xaf, 0xbb, 0x23, 0x16, 0x33, 0x30, 0xce, 0xd7, 0xc2, 0x8d},
-};
 
 // ---- CNG (bcrypt.dll, resolved at run time so the build needs no extra import library) -----------------------
 
@@ -372,19 +366,85 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
 
 // ---- Wii partition ----------------------------------------------------------------------------------------
 
+// DolphinTool is selected by the player and runs locally. Neither it nor its data ships here.
+struct DiscConversion {
+    fs::path directory;
+
+    ~DiscConversion() {
+        if (!directory.empty()) {
+            std::error_code ignored;
+            fs::remove_all(directory, ignored);
+        }
+    }
+
+    fs::path Convert(const fs::path& input, const fs::path& parent, fs::path tool, Progress& progress) {
+        if (tool.empty()) {
+            if (const wchar_t* configured = _wgetenv(L"SIN_DOLPHIN_TOOL")) tool = configured;
+        }
+        if (!tool.is_absolute() || !fs::is_regular_file(tool)) {
+            throw ImportError("RVZ and GCZ need DolphinTool.exe. Select it in first-run setup or set SIN_DOLPHIN_TOOL to its full path.");
+        }
+        fs::create_directories(parent);
+        const auto scratch = parent / (L".disc-conversion-" + std::to_wstring(GetCurrentProcessId()) +
+                                       L"-" + std::to_wstring(GetTickCount64()));
+        if (!fs::create_directory(scratch)) throw ImportError("Could not create a disc conversion folder.");
+        directory = scratch;
+        const auto output = directory / "disc.iso";
+        const auto quote = [](const fs::path& path) { return L"\"" + path.wstring() + L"\""; };
+        auto command = quote(tool) + L" convert -i " + quote(input) + L" -o " + quote(output) +
+                       L" -f iso -u " + quote(directory / "dolphin-user");
+        STARTUPINFOW startup{};
+        startup.cb = sizeof startup;
+        PROCESS_INFORMATION process{};
+        progress.SetStage("Converting compressed disc with DolphinTool");
+        if (!CreateProcessW(tool.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                            nullptr, directory.c_str(), &startup, &process)) {
+            throw ImportError("Could not start DolphinTool.");
+        }
+        CloseHandle(process.hThread);
+        while (WaitForSingleObject(process.hProcess, 100) == WAIT_TIMEOUT) {
+            if (progress.cancel.load()) {
+                TerminateProcess(process.hProcess, 1);
+                WaitForSingleObject(process.hProcess, INFINITE);
+                CloseHandle(process.hProcess);
+                throw ImportCancelled{};
+            }
+        }
+        DWORD code = 1;
+        const bool finished = GetExitCodeProcess(process.hProcess, &code) && code == 0;
+        CloseHandle(process.hProcess);
+        if (!finished || !fs::is_regular_file(output)) {
+            throw ImportError("DolphinTool could not convert the disc. Check the image and available disk space.");
+        }
+        return output;
+    }
+};
+
 class WiiPartition {
 public:
-    WiiPartition(RawImage& raw, uint64_t partitionOffset, const Sha1& sha, std::atomic<bool>& cancel)
+    WiiPartition(RawImage& raw, uint64_t partitionOffset, const Sha1& sha, std::atomic<bool>& cancel,
+                 const fs::path& keyFile)
         : m_raw(raw), m_sha(sha), m_cancel(cancel) {
         uint8_t ticket[0x2C0];
         if (!raw.Read(partitionOffset, ticket, sizeof ticket)) throw ImportError("The disc image is truncated (partition header).");
         const uint8_t commonIndex = ticket[0x1F1];
         if (commonIndex > 2) throw ImportError("The disc uses an unknown common key; the image may be damaged.");
+        struct Key {
+            uint8_t bytes[16]{};
+            ~Key() { SecureZeroMemory(bytes, sizeof bytes); }
+        } commonKey, titleKey;
+        if (keyFile.empty()) {
+            throw ImportError("Select your own 16-byte Wii common key file, or use an extracted game folder.");
+        }
+        std::ifstream keyInput(keyFile, std::ios::binary);
+        if (!keyInput.read(reinterpret_cast<char*>(commonKey.bytes), sizeof commonKey.bytes) ||
+            keyInput.peek() != std::char_traits<char>::eof() || keyInput.bad()) {
+            throw ImportError("The Wii common key file must contain exactly 16 binary bytes.");
+        }
         uint8_t iv[16] = {};
         std::memcpy(iv, ticket + 0x1DC, 8);
-        uint8_t titleKey[16];
-        AesCbcDecryptor(kCommonKeys[commonIndex]).Decrypt(iv, ticket + 0x1BF, titleKey, 16);
-        m_aes = std::make_unique<AesCbcDecryptor>(titleKey);
+        AesCbcDecryptor(commonKey.bytes).Decrypt(iv, ticket + 0x1BF, titleKey.bytes, 16);
+        m_aes = std::make_unique<AesCbcDecryptor>(titleKey.bytes);
         m_dataStart = partitionOffset + (static_cast<uint64_t>(Be32(ticket + 0x2B8)) << 2);
         const uint64_t encryptedSize = static_cast<uint64_t>(Be32(ticket + 0x2BC)) << 2;
         m_clusters = encryptedSize / kClusterSize;
@@ -543,7 +603,7 @@ void WriteFile(const fs::path& path, const void* data, size_t size, Progress& pr
 
 bool IsSupportedDiscExtension(const fs::path& path) {
     const std::string ext = ExtensionOf(path);
-    return ext == ".iso" || ext == ".wbfs" || ext == ".bin" || ext == ".cue" || ext == ".gcm";
+    return ext == ".rvz" || ext == ".gcz" || ext == ".iso" || ext == ".wbfs" || ext == ".bin" || ext == ".cue" || ext == ".gcm";
 }
 
 bool IsGameDirectoryComplete(const fs::path& gameDir) {
@@ -552,7 +612,8 @@ bool IsGameDirectoryComplete(const fs::path& gameDir) {
            fs::is_regular_file(gameDir / "sys" / "fst.bin", ec) && fs::is_regular_file(gameDir / "sys" / "main.dol", ec);
 }
 
-Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& progress, Summary& summary, std::string& error) {
+Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& progress, Summary& summary, std::string& error,
+                  const fs::path& requestedKeyFile, const fs::path& dolphinTool) {
     const auto started = std::chrono::steady_clock::now();
     const fs::path staging = fs::path(gameDir).concat(".importing");
     auto cleanup = [&] {
@@ -563,7 +624,23 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         progress.done = 0;
         progress.total = 1;
         progress.SetStage("Reading disc image");
-        auto raw = OpenDiscImage(image);
+        auto keyFile = requestedKeyFile;
+        if (keyFile.empty()) {
+            if (const wchar_t* configured = _wgetenv(L"SIN_WII_KEY_FILE")) keyFile = configured;
+        }
+        if (keyFile.empty()) {
+            throw ImportError("Disc import needs your own 16-byte Wii common key file. Pass --keys or choose an extracted game folder.");
+        }
+        std::error_code keyError;
+        if (fs::file_size(keyFile, keyError) != 16 || keyError) {
+            throw ImportError("The Wii common key file must contain exactly 16 binary bytes.");
+        }
+        DiscConversion conversion;
+        const auto ext = ExtensionOf(image);
+        const auto source = (ext == ".rvz" || ext == ".gcz")
+            ? conversion.Convert(fs::absolute(image), fs::absolute(gameDir).parent_path(), dolphinTool, progress)
+            : image;
+        auto raw = OpenDiscImage(source);
 
         uint8_t header[0x60];
         if (!raw->Read(0, header, sizeof header)) throw ImportError("The disc image is truncated.");
@@ -604,7 +681,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         if (partitionOffset == 0) throw ImportError("The disc image has no game partition (damaged or scrubbed image).");
 
         Sha1 sha;
-        WiiPartition part(*raw, partitionOffset, sha, progress.cancel);
+        WiiPartition part(*raw, partitionOffset, sha, progress.cancel, keyFile);
 
         uint8_t bootBin[0x440];
         part.Read(0, bootBin, sizeof bootBin);
@@ -700,8 +777,31 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         progress.done = progress.total.load();
 
         progress.SetStage("Finishing");
-        fs::remove_all(gameDir, ec);
-        fs::rename(staging, gameDir);
+        const auto previous = fs::path(gameDir).concat(".previous");
+        const auto moveDirectory = [](const fs::path& from, const fs::path& to) {
+            DWORD failure = ERROR_SUCCESS;
+            for (int attempt = 0; attempt != 20; ++attempt) {
+                if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)) return;
+                failure = GetLastError();
+                if (failure != ERROR_ACCESS_DENIED && failure != ERROR_SHARING_VIOLATION) break;
+                Sleep(50);
+            }
+            throw fs::filesystem_error("Could not move imported game folder", from, to,
+                                       std::error_code(failure, std::system_category()));
+        };
+        if (fs::exists(previous)) {
+            if (fs::exists(gameDir)) fs::remove_all(previous);
+            else moveDirectory(previous, gameDir);
+        }
+        const bool replacing = fs::exists(gameDir);
+        if (replacing) moveDirectory(gameDir, previous);
+        try {
+            moveDirectory(staging, gameDir);
+        } catch (...) {
+            if (replacing) moveDirectory(previous, gameDir);
+            throw;
+        }
+        if (replacing) fs::remove_all(previous, ec);
         summary.bytes = bytes;
         summary.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         return Result::Ok;
@@ -960,7 +1060,8 @@ bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<ui
 namespace DiscImport {
 void Progress::SetStage(std::string, std::string) {}
 void Progress::Get(std::string&, std::string&) const {}
-Result ImportDisc(const std::filesystem::path&, const std::filesystem::path&, Progress&, Summary&, std::string& error) {
+Result ImportDisc(const std::filesystem::path&, const std::filesystem::path&, Progress&, Summary&, std::string& error,
+                  const std::filesystem::path&, const std::filesystem::path&) {
     error = "Disc import is only available on Windows.";
     return Result::Failed;
 }

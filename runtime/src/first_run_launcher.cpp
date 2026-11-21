@@ -79,7 +79,7 @@ struct Launcher {
     std::thread dialogThread;
     std::atomic<int> dialogState{0};  // 0 idle, 1 open, 2 finished
     std::mutex lock;
-    fs::path picked;
+    fs::path picked, pickedKeys, pickedTool;
 
     // import thread
     std::thread importThread;
@@ -100,18 +100,18 @@ HWND WindowHandle() {
     return static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
 }
 
-fs::path PickDiscImage(HWND owner) {
+fs::path PickFile(HWND owner, const wchar_t* title, const wchar_t* label, const wchar_t* pattern) {
     fs::path result;
     const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     IFileOpenDialog* dialog = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_IFileOpenDialog,
                                    reinterpret_cast<void**>(&dialog))) && dialog) {
         static const COMDLG_FILTERSPEC filters[] = {
-            {L"Wii disc images (*.iso, *.wbfs, *.cue, *.bin)", L"*.iso;*.wbfs;*.cue;*.bin"},
+            {label, pattern},
             {L"All files", L"*.*"},
         };
         dialog->SetFileTypes(2, filters);
-        dialog->SetTitle(L"Select your Sin & Punishment: Star Successor disc image");
+        dialog->SetTitle(title);
         DWORD options = 0;
         dialog->GetOptions(&options);
         dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
@@ -132,11 +132,39 @@ fs::path PickDiscImage(HWND owner) {
     return result;
 }
 
+// The dialogs run on a worker so the first-run screen stays visible.
+void PickImportInputs(Launcher& launcher, HWND owner, fs::path image) {
+    launcher.dialogState = 1;
+    launcher.dialogThread = std::thread([&launcher, owner, image = std::move(image)]() mutable {
+        if (image.empty()) {
+            image = PickFile(owner, L"1 of 2: Select your Wii disc image",
+                             L"Wii disc images", L"*.iso;*.wbfs;*.rvz;*.gcz;*.cue;*.bin;*.gcm");
+        }
+        fs::path keys, tool;
+        if (!image.empty()) {
+            keys = PickFile(owner, L"2 of 2: Select your Wii common key file",
+                            L"Binary key files", L"*.bin;*.key");
+        }
+        auto ext = image.extension().wstring();
+        for (auto& c : ext) {
+            if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+        }
+        if (!keys.empty() && (ext == L".rvz" || ext == L".gcz") && !_wgetenv(L"SIN_DOLPHIN_TOOL")) {
+            tool = PickFile(owner, L"Select your installed DolphinTool.exe", L"DolphinTool", L"DolphinTool.exe");
+            if (tool.empty()) keys.clear();
+        }
+        launcher.picked = std::move(image);
+        launcher.pickedKeys = std::move(keys);
+        launcher.pickedTool = std::move(tool);
+        launcher.dialogState = 2;
+    });
+}
+
 void JoinFinished(std::thread& t) {
     if (t.joinable()) t.join();
 }
 
-void StartImport(Launcher& l, const fs::path& image) {
+void StartImport(Launcher& l, const fs::path& image, const fs::path& keys, const fs::path& tool) {
     JoinFinished(l.importThread);
     l.progress.cancel = false;
     l.progress.done = 0;
@@ -149,9 +177,9 @@ void StartImport(Launcher& l, const fs::path& image) {
     l.phase = Phase::Importing;
     l.focus = 0;
     game_ui::Suppress(0.5f);
-    l.importThread = std::thread([&l, image] {
+    l.importThread = std::thread([&l, image, keys, tool] {
         std::string error;
-        const auto result = DiscImport::ImportDisc(image, ManagedGameDirectory(), l.progress, l.summary, error);
+        const auto result = DiscImport::ImportDisc(image, ManagedGameDirectory(), l.progress, l.summary, error, keys, tool);
         {
             std::lock_guard<std::mutex> guard(l.lock);
             l.error = error;
@@ -275,18 +303,20 @@ bool Run() {
         if (l.dialogState.load() == 2) {
             JoinFinished(l.dialogThread);
             l.dialogState = 0;
-            fs::path chosen;
-            {
-                std::lock_guard<std::mutex> guard(l.lock);
-                chosen = std::move(l.picked);
-                l.picked.clear();
+            if (!l.picked.empty() && !l.pickedKeys.empty() &&
+                l.phase != Phase::Importing && l.phase != Phase::Done) {
+                StartImport(l, l.picked, l.pickedKeys, l.pickedTool);
             }
-            if (!chosen.empty() && l.phase != Phase::Importing && l.phase != Phase::Done) StartImport(l, chosen);
+            l.picked.clear();
+            l.pickedKeys.clear();
+            l.pickedTool.clear();
         }
         if (!l.dropped.empty()) {
-            const fs::path file = std::move(l.dropped);
+            auto file = std::move(l.dropped);
             l.dropped.clear();
-            if (l.phase != Phase::Importing && l.phase != Phase::Done) StartImport(l, file);
+            if (l.dialogState.load() == 0 && l.phase != Phase::Importing && l.phase != Phase::Done) {
+                PickImportInputs(l, WindowHandle(), std::move(file));
+            }
         }
         if (l.phase == Phase::Importing && l.importState.load() != 0) {
             JoinFinished(l.importThread);
@@ -341,7 +371,7 @@ bool Run() {
                                      "Welcome! To get started, select your own disc image of Sin & Punishment: Star Successor (North America).",
                                      game_ui::Outline::Thin, 1.0f, true);
                 game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(105.0f)), bodyW, game_ui::kTextDim,
-                                     "Supported: .iso, .wbfs, or .cue/.bin. The game files are copied into this app once; the disc image is not needed afterwards.",
+                                     "Select your NTSC-U disc image, then your 16-byte Wii key file. RVZ and GCZ also need DolphinTool. Setup uses the key once and does not keep it.",
                                      game_ui::Outline::Thin, 1.0f, true);
             }
             const bool busy = l.dialogState.load() == 1;
@@ -352,17 +382,7 @@ bool Run() {
             if (in.accept && l.focus == 0) primary = true;
             if (busy) primary = false;
             if (primary) {
-                l.dialogState = 1;
-                JoinFinished(l.dialogThread);
-                const HWND owner = WindowHandle();
-                l.dialogThread = std::thread([&l, owner] {
-                    fs::path chosen = PickDiscImage(owner);
-                    {
-                        std::lock_guard<std::mutex> guard(l.lock);
-                        l.picked = std::move(chosen);
-                    }
-                    l.dialogState = 2;
-                });
+                PickImportInputs(l, WindowHandle(), {});
             }
         } else if (l.phase == Phase::Importing) {
             std::string stage, detail;

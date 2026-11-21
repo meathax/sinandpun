@@ -46,7 +46,8 @@ enum class Result { Ok, Cancelled, Failed };
 // Imports `image` into `gameDir` (built in a sibling "<gameDir>.importing" directory and swapped in only when
 // everything succeeded). On Failed, `error` holds a user-presentable explanation.
 Result ImportDisc(const std::filesystem::path& image, const std::filesystem::path& gameDir, Progress& progress,
-                  Summary& summary, std::string& error);
+                  Summary& summary, std::string& error, const std::filesystem::path& keyFile,
+                  const std::filesystem::path& dolphinTool = {});
 
 // True when `gameDir` holds a complete extracted game (sys/{boot.bin,fst.bin,main.dol} and files/).
 bool IsGameDirectoryComplete(const std::filesystem::path& gameDir);

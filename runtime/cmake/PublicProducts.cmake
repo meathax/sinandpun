@@ -84,6 +84,21 @@ if(MKW_RUNTIME_USE_PREBUILT)
     file(CONFIGURE OUTPUT "${MKW_RUNTIME_PREBUILT_STAMP}" CONTENT "${MKW_NP_RUNTIME_FINGERPRINT}\n")
 else()
     mkw_add_runtime_library(mkw_runtime_common OBJECT ${SOURCES})
+    option(SIN_RECOMP_ACHIEVEMENTS "Build the Recomp Achievements memory bridge" ON)
+    if(SIN_RECOMP_ACHIEVEMENTS)
+        include(FetchContent)
+        FetchContent_Declare(sin_achievements
+            URL "https://codeload.github.com/elripalda/RecompAchievements/zip/faf094acdf1efb57d8db7c8187b4b47aa1501805"
+            URL_HASH SHA256=e4667f556a4e950ff6c055580a90df2bdfa0e4ea5d8a80beb4a14690bc397beb
+            SOURCE_SUBDIR sdk)
+        FetchContent_MakeAvailable(sin_achievements)
+        set(achievement_notices "${CMAKE_BINARY_DIR}/recomp_achievements_licenses")
+        configure_file("${sin_achievements_SOURCE_DIR}/LICENSE" "${achievement_notices}/RecompAchievements.txt" COPYONLY)
+        configure_file("${sin_achievements_SOURCE_DIR}/sdk/third_party/cjson/LICENSE" "${achievement_notices}/cJSON.txt" COPYONLY)
+        configure_file("${sin_achievements_SOURCE_DIR}/sdk/third_party/rcheevos/LICENSE" "${achievement_notices}/rcheevos.txt" COPYONLY)
+        target_link_libraries(mkw_runtime_common PRIVATE rl_achievements)
+        target_compile_definitions(mkw_runtime_common PRIVATE SIN_RECOMP_ACHIEVEMENTS)
+    endif()
 endif()
 
 add_library(mkw_game_data OBJECT ${MKW_GAME_DATA_SOURCES})
@@ -153,6 +168,9 @@ endif()
 function(mkw_configure_product target)
     if(TARGET mkw_runtime_common)
         target_sources(${target} PRIVATE $<TARGET_OBJECTS:mkw_runtime_common>)
+        if(TARGET rl_achievements)
+            target_link_libraries(${target} PRIVATE rl_achievements)
+        endif()
     else()
         # Natives self-register from static constructors, so every archive
         # member must be kept. Listed before mkw_base_shared so single-pass

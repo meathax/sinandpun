@@ -1,3 +1,7 @@
+#ifdef SIN_RECOMP_ACHIEVEMENTS
+#include <rl_achievements.h>
+#endif
+
 #include "hle_stubs.h"
 #include "memory.h"
 #include "perf_pacing.h"
@@ -314,6 +318,10 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         isBlack = g_vi.black;
         WriteGuestStateLocked();
     }
+
+#ifdef SIN_RECOMP_ACHIEVEMENTS
+    rl_ach_frame();
+#endif
 
     // Wake up threads sleeping on the VI retrace queue (VIWaitForRetrace).
     // The retrace count has been incremented and written to guest memory.

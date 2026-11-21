@@ -81,6 +81,9 @@
 #include "runtime_product.h"
 #include "recomp_mod_loader.h"
 #include "launcher_args.h"
+#ifdef SIN_RECOMP_ACHIEVEMENTS
+#include <rl_achievements.h>
+#endif
 #include <aurora/aurora.h>
 #include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_video.h>
@@ -1427,9 +1430,9 @@ bool ConfigureGamePathForLaunch(const std::filesystem::path& gamePath) {
     return true;
 }
 
-int PrepareForRecompLauncher(const std::filesystem::path& gamePath) {
+int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
     std::error_code ec;
-    const auto absoluteGamePath = std::filesystem::absolute(gamePath, ec);
+    const auto absoluteGamePath = std::filesystem::absolute(*args.gamePath, ec);
     if (ec) {
         std::cerr << "[prepare] Could not resolve the game path: " << ec.message() << '\n';
         return EXIT_FAILURE;
@@ -1447,6 +1450,43 @@ int PrepareForRecompLauncher(const std::filesystem::path& gamePath) {
             return EXIT_FAILURE;
         }
         std::cout << "progress 0.8 Checking extracted game\n";
+        // Folder setup must derive the same images as disc import; release archives
+        // cannot provide prelinked images from somebody else's copy of the game.
+        const auto modules = ManagedGameDirectory() / "modules";
+        std::filesystem::remove(RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile, ec);
+        if (ec) {
+            std::cerr << "[prepare] Could not invalidate setup marker: " << ec.message() << '\n';
+            return EXIT_FAILURE;
+        }
+        try {
+            const auto read = [](const std::filesystem::path& path) {
+                std::ifstream input(path, std::ios::binary);
+                if (!input) throw std::runtime_error("Cannot read " + RuntimeConfigFile::PathToUtf8(path));
+                return std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
+            };
+            const auto sel = read(absoluteGamePath / "files" / "gs2.sel");
+            std::filesystem::create_directories(modules);
+            for (int index = 0; index < DiscImport::kModuleCount; ++index) {
+                char name[16];
+                std::snprintf(name, sizeof name, "stg%02d", index);
+                std::vector<uint8_t> image;
+                if (!DiscImport::BuildModuleImage(
+                        read(absoluteGamePath / "files" / (std::string(name) + ".rso")),
+                        sel, DiscImport::kModuleBase, image, error)) {
+                    throw std::runtime_error(std::string(name) + ": " + error);
+                }
+                std::ofstream output(modules / (std::string(name) + ".bin"),
+                                     std::ios::binary | std::ios::trunc);
+                output.write(reinterpret_cast<const char*>(image.data()),
+                             static_cast<std::streamsize>(image.size()));
+                output.close();
+                if (!output) throw std::runtime_error(std::string("Cannot write module ") + name);
+                std::cout << "progress " << (0.8 + 0.02 * index) << " Preparing " << name << std::endl;
+            }
+        } catch (const std::exception& failure) {
+            std::cerr << "[prepare] " << failure.what() << '\n';
+            return EXIT_FAILURE;
+        }
         if (!WritePreparedConfiguration(absoluteGamePath.lexically_normal(), error)) {
             std::cerr << "[prepare] " << error << '\n';
             return EXIT_FAILURE;
@@ -1457,7 +1497,7 @@ int PrepareForRecompLauncher(const std::filesystem::path& gamePath) {
 
     if (!std::filesystem::is_regular_file(absoluteGamePath, ec) ||
         !DiscImport::IsSupportedDiscExtension(absoluteGamePath)) {
-        std::cerr << "[prepare] Select a supported R2VE01 .iso, .wbfs, .gcm, .bin or .cue disc, "
+        std::cerr << "[prepare] Select a supported R2VE01 .iso, .wbfs, .rvz, .gcz, .gcm, .bin or .cue disc, "
                      "or an extracted folder containing sys/ and files/.\n";
         return EXIT_FAILURE;
     }
@@ -1468,7 +1508,7 @@ int PrepareForRecompLauncher(const std::filesystem::path& gamePath) {
     std::atomic<int> state{0};
     std::thread importer([&] {
         result = DiscImport::ImportDisc(absoluteGamePath, ManagedGameDirectory(),
-                                        progress, summary, error);
+                                        progress, summary, error, args.keyFile, args.dolphinTool);
         state.store(1, std::memory_order_release);
     });
 
@@ -1535,7 +1575,7 @@ int RuntimeMain(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     if (launcherArgs.prepare) {
-        return PrepareForRecompLauncher(*launcherArgs.gamePath);
+        return PrepareForRecompLauncher(launcherArgs);
     }
 
     InitializeProcessTranscript(argc, argv);
@@ -1615,6 +1655,24 @@ int RuntimeMain(int argc, char** argv) {
         }
         RuntimeConfigFile::LogLoadedConfig();
         SystemBridge::Initialize();
+#ifdef SIN_RECOMP_ACHIEVEMENTS
+        if (!g_headless && rl_ach_init("wii", [](uint32_t address, uint8_t* output,
+                                                  uint32_t count, void*) -> uint32_t {
+            const uint64_t end = uint64_t(address) + count;
+            if (!count || !((address >= 0x80000000u && end <= 0x81800000u) ||
+                            (address >= 0x90000000u && end <= 0x94000000u))) return 0;
+            const auto* first = GuestFlat::HostPointer(address);
+            const auto* last = GuestFlat::HostPointer(static_cast<uint32_t>(end - 1));
+            if (!first || reinterpret_cast<uintptr_t>(last) !=
+                          reinterpret_cast<uintptr_t>(first) + count - 1) return 0;
+            std::memcpy(output, first, count);
+            return count;
+        }, nullptr)) {
+            std::atexit(rl_ach_shutdown);
+            // Keep sessions casual until game-specific save-load and progression hooks are verified.
+            rl_ach_casual("save_tracking_unverified");
+        }
+#endif
         TranslatedFunctionRegistry::Finalize();
 
         // Initialize Aurora (graphics backend)

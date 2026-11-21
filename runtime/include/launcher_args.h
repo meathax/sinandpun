@@ -11,6 +11,8 @@
 namespace RecompLauncher {
 
 struct Arguments {
+    std::filesystem::path keyFile;
+    std::filesystem::path dolphinTool;
     bool headless = false;
     bool prepare = false;
     bool help = false;
@@ -50,6 +52,19 @@ inline bool ParseArguments(int argc, char** argv, Arguments& parsed, std::string
         }
         if (argument == "--help" || argument == "-h") {
             parsed.help = true;
+            continue;
+        }
+        if (IsLongOption(argument, "--keys") || IsLongOption(argument, "--dolphin-tool")) {
+            const auto option = IsLongOption(argument, "--keys") ? "--keys" : "--dolphin-tool";
+            auto value = LongOptionValue(argument, option);
+            if (!value && argument == option && index + 1 < argc &&
+                !std::string_view(argv[index + 1]).starts_with("--")) value = argv[++index];
+            auto& path = IsLongOption(argument, "--keys") ? parsed.keyFile : parsed.dolphinTool;
+            if (!value || value->empty() || !path.empty()) {
+                error = std::string(option) + " requires one non-empty path";
+                return false;
+            }
+            path = RuntimeConfigFile::PathFromUtf8(*value);
             continue;
         }
         if (IsLongOption(argument, "--data") || IsLongOption(argument, "--game")) {
@@ -96,7 +111,7 @@ inline bool ParseArguments(int argc, char** argv, Arguments& parsed, std::string
 
 inline const char* Usage() {
     return "Usage: WiiCompiled.exe [--data <path>] [--game <path>] [--headless]\n"
-           "       WiiCompiled.exe --prepare --data <path> --game <path>\n";
+           "       WiiCompiled.exe --prepare --data <path> --game <path> [--keys <file>] [--dolphin-tool <exe>]\n";
 }
 
 }  // namespace RecompLauncher
