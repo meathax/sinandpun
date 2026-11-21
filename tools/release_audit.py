@@ -57,7 +57,9 @@ def audit(source, package, modules, require_launcher_clean=False):
     expected_modules = [f"stg0{index}.bin" for index in range(8)]
     bad_modules = [name for name in expected_modules if not same_file(modules / name, package / "modules" / name)]
     checks["stage_modules"] = len(expected_modules) - len(bad_modules)
-    if bad_modules:
+    if require_launcher_clean and (package / "modules").exists():
+        errors.append("launcher release contains disc-derived stage modules; generate them during setup")
+    if bad_modules and not require_launcher_clean:
         errors.append("stale or missing stage modules: " + ", ".join(bad_modules))
     extra_modules = sorted(
         path.name for path in (package / "modules").glob("stg0?.bin")
@@ -124,7 +126,16 @@ def audit(source, package, modules, require_launcher_clean=False):
     leaked.extend(
         str(path.relative_to(package))
         for path in package.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".iso", ".nkit", ".rvz", ".wbfs", ".wia", ".wad"}
+        if path.is_file() and path.suffix.lower() in {".iso", ".nkit", ".rvz", ".wbfs", ".wia", ".wad", ".gcz", ".chd", ".dol", ".rso", ".sel"}
+    )
+    leaked.extend(
+        str(path.relative_to(package))
+        for path in package.rglob("*")
+        if path.is_file() and (
+            path.suffix.lower() in {".key", ".keys", ".pem"}
+            or "key" in path.stem.lower() and path.suffix.lower() in {".bin", ".dat", ".txt"}
+            or path.name.lower() == "dolphintool.exe"
+        )
     )
     if leaked:
         errors.append("possible game data in package: " + ", ".join(sorted(set(leaked))))

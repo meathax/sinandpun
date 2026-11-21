@@ -7,6 +7,11 @@ orig/*
 *.dol
 *.rso
 *.rel
+*.gcz
+*.key
+*.keys
+*common*key*.bin
+keys.bin
 
 # Third-party clones and binaries are staged locally (see docs/TOOLING.md)
 reference/

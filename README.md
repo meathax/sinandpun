@@ -22,10 +22,15 @@ interfaces are provided by a host runtime. There is no emulator, interpreter, JI
 
 ## How to play
 
-Install the latest Windows x64 release with RecompLauncher, add your legally dumped NTSC-U `R2VE01` disc as an
-ISO/WBFS image or extracted `sys/` and `files/` folder, then select **Play**. RecompLauncher prepares the game once
-and keeps settings, saves, caches and logs in its managed data folder. Manual players can still use the in-game
-disc picker or pass the copy with `--game`, as described below.
+Open `WiiCompiled.exe` and choose **Select Disc Image**. Pick your NTSC-U `R2VE01` image
+(ISO, WBFS, RVZ or GCZ), then your own raw 16-byte Wii common key file. For RVZ or GCZ,
+select an installed [DolphinTool.exe](https://github.com/dolphin-emu/dolphin#dolphintool-usage)
+when prompted. The app imports the disc once and never copies the key into its data folder.
+
+In RecompLauncher, an extracted `sys/` and `files/` folder needs no key. Before starting
+RecompLauncher for disc-image setup, set `SIN_WII_KEY_FILE` to the full path to your key file.
+RVZ and GCZ also need `SIN_DOLPHIN_TOOL` set to the full path to your installed DolphinTool.exe,
+when that launcher build offers the format. These are paths to files you already have.
 
 <p align="center">
   <img src="docs/screenshots/title.png" alt="Recomp title screen" width="900">
@@ -104,25 +109,27 @@ The release instructions below currently describe Windows.
 
 ## Running
 
-Without RecompLauncher, the executable can use an extracted disc folder configured in `UserData/Config.toml`:
+Without RecompLauncher, the executable can use an extracted disc folder configured in
+`%LOCALAPPDATA%/WiiCompiled/Config.toml` (`UserData/Config.toml` beside a portable installation):
 
 ```toml
 [paths]
 dvd_root = 'D:/path/to/R2VE01'
 ```
 
-Run `WiiCompiled.exe`. On first launch, the runtime creates its local NAND save tree under `UserData/NAND`.
+Run `WiiCompiled.exe`. On first launch, the runtime creates its NAND save tree under the same data folder.
 
 The launcher's `--data` option moves all mutable state to one directory. A selected extracted folder or disc image
 can be passed directly with `--game`:
 
 ```powershell
-WiiCompiled.exe --prepare --data C:\Games\SinRecompData --game D:\Dumps\Sin-R2VE01.iso
+WiiCompiled.exe --prepare --data C:\Games\SinRecompData --game D:\Dumps\Sin-R2VE01.iso --keys D:\Private\wii-common-key.bin
 WiiCompiled.exe --data C:\Games\SinRecompData --game D:\Dumps\Sin-R2VE01.iso
 ```
 
 `--prepare` is windowless, prints RecompLauncher progress lines, and accepts the same extracted folder or
-`.iso`/`.wbfs` disc used by the interactive first-run importer.
+disc images used by the interactive first-run importer. Pass `--dolphin-tool <exe>` for RVZ/GCZ
+if it is not already configured. Conversion needs temporary disk space for a full ISO.
 
 ## Building
 
@@ -161,11 +168,15 @@ powershell -File tools\update_ready.ps1 -NoDlss
 powershell -File tools\package_recomplauncher.ps1 -Version 1.0.0
 ```
 
-The package script removes standalone mutable state, verifies the executable, runtime files, stage modules and
+The package script removes standalone mutable state and disc-derived stage modules, verifies the executable, runtime files and
 `recomplauncher.json`, then writes
 `dist\SinAndPunishmentRecomp-1.0.0-Windows-x64.zip`. No `UserData`, `recompdata`, disc image, or extracted game
 files are included. Tag the GitHub release and attach that ZIP; GitHub source archives should be named with
 `-source` if they are uploaded separately.
+
+Setup generates all eight stage-module images from the player's copy. Extracted-folder users must run
+`--prepare` once before playing a launcher release. The current integration checks and outstanding release
+limitations are recorded in [the launcher audit](docs/RECOMPLAUNCHER-AUDIT.md).
 
 ## Controls
 

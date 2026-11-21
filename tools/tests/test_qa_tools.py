@@ -141,6 +141,17 @@ class ReleaseAuditTests(unittest.TestCase):
             self.source, self.package, self.modules, require_launcher_clean=True)
         self.assertTrue(any("mutable" in error.lower() for error in report["errors"]))
 
+    def test_launcher_package_rejects_disc_derived_modules(self):
+        report = release_audit.audit(
+            self.source, self.package, self.modules, require_launcher_clean=True)
+        self.assertTrue(any("disc-derived" in error for error in report["errors"]))
+
+    def test_launcher_package_generates_modules_at_setup(self):
+        shutil.rmtree(self.package / "modules")
+        report = release_audit.audit(
+            self.source, self.package, self.modules, require_launcher_clean=True)
+        self.assertEqual(report["errors"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
