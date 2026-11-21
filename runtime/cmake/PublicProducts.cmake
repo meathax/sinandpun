@@ -299,6 +299,11 @@ endif()
 
 add_custom_target(mkw_release DEPENDS WiiCompiled)
 
+add_custom_command(TARGET WiiCompiled POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_LIST_DIR}/../../recomplauncher.json"
+    "$<TARGET_FILE_DIR:WiiCompiled>/recomplauncher.json"
+    VERBATIM)
+
 # mkw_runtime_common gets the same flags from mkw_add_runtime_library.
 set(MKW_ALL_BUILD_TARGETS
     mkw_game_data mkw_base_shared mkw_base_registration mkw_stage_modules mkw_base_sensitive WiiCompiled)

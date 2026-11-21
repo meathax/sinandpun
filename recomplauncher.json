@@ -1,0 +1,438 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Sin & Punishment: Star Successor Recomp",
+  "repo": "meathax/sinandpun",
+  "game": {
+    "kind": "iso_or_folder",
+    "label": "Your legally dumped NTSC-U Sin & Punishment: Star Successor disc (R2VE01), as an ISO/WBFS disc image or an extracted folder containing sys/ and files/.",
+    "check": {
+      "file": "sys/main.dol",
+      "ids": [
+        "R2VE01"
+      ]
+    }
+  },
+  "start": {
+    "program": [
+      "WiiCompiled.exe"
+    ],
+    "args": [
+      "--data={data}",
+      "--game={game}"
+    ]
+  },
+  "prepare": {
+    "program": [
+      "WiiCompiled.exe"
+    ],
+    "args": [
+      "--prepare",
+      "--data={data}",
+      "--game={game}"
+    ],
+    "label": "Extracting R2VE01 and preparing its stage modules",
+    "timeout": 1200,
+    "version": "1",
+    "done": [
+      "{data}/prepared.txt"
+    ]
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "toml",
+      "file": [
+        {
+          "path": "{data}/Config.toml"
+        }
+      ],
+      "new": {
+        "video/display_mode": "\"windowed\"",
+        "video/widescreen": "true",
+        "video/force_aspect": "false",
+        "video/resolution_multiplier": "1.0",
+        "video/frame_rate": "\"original\"",
+        "video/frame_rate_cap": "1000",
+        "video/vrr": "\"auto\"",
+        "video/vrr_margin_fps": "3",
+        "video/vrr_limiter": "true",
+        "video/upscaler": "\"off\"",
+        "video/fsr_quality": "\"quality\"",
+        "video/fsr_sharpness": "80",
+        "video/graphics_api": "\"auto\"",
+        "video/vsync": "false",
+        "video/show_fps": "false",
+        "audio/volume": "1.0",
+        "audio/muted": "false",
+        "controller/steam_input_override": "true"
+      }
+    }
+  ],
+  "settings": [
+    {
+      "id": "display_mode",
+      "label": "Window mode",
+      "help": "Borderless fills the screen while letting you switch apps quickly.",
+      "choices": [
+        {
+          "label": "Windowed",
+          "set": {
+            "video/display_mode": "\"windowed\""
+          }
+        },
+        {
+          "label": "Borderless",
+          "set": {
+            "video/display_mode": "\"borderless\""
+          }
+        },
+        {
+          "label": "Exclusive",
+          "set": {
+            "video/display_mode": "\"exclusive\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/display_mode": "\"windowed\""
+      },
+      "group": "Display"
+    },
+    {
+      "id": "resolution",
+      "label": "Internal resolution",
+      "help": "Native is the game's original Wii resolution; higher values render sharper but need more GPU power.",
+      "choices": [
+        {
+          "label": "Native",
+          "set": {
+            "video/resolution_multiplier": "1.0"
+          }
+        },
+        {
+          "label": "1.5x",
+          "set": {
+            "video/resolution_multiplier": "1.5"
+          }
+        },
+        {
+          "label": "2x",
+          "set": {
+            "video/resolution_multiplier": "2.0"
+          }
+        },
+        {
+          "label": "3x",
+          "set": {
+            "video/resolution_multiplier": "3.0"
+          }
+        },
+        {
+          "label": "4x",
+          "set": {
+            "video/resolution_multiplier": "4.0"
+          }
+        }
+      ],
+      "defaults": {
+        "video/resolution_multiplier": "1.0"
+      },
+      "group": "Display"
+    },
+    {
+      "id": "aspect",
+      "label": "Aspect ratio",
+      "help": "Choose the Wii game's intended wide picture or a four-by-three picture.",
+      "choices": [
+        {
+          "label": "Widescreen",
+          "set": {
+            "video/widescreen": "true",
+            "video/force_aspect": "false"
+          }
+        },
+        {
+          "label": "4:3",
+          "set": {
+            "video/widescreen": "false",
+            "video/force_aspect": "true"
+          }
+        }
+      ],
+      "defaults": {
+        "video/widescreen": "true",
+        "video/force_aspect": "false"
+      },
+      "group": "Display"
+    },
+    {
+      "id": "frame_rate",
+      "label": "Frame rate",
+      "help": "Original keeps the console's 60 Hz presentation; other choices increase presentation without changing gameplay speed.",
+      "choices": [
+        {
+          "label": "Original (60)",
+          "set": {
+            "video/frame_rate": "\"original\""
+          }
+        },
+        {
+          "label": "Match display",
+          "set": {
+            "video/frame_rate": "\"display\""
+          }
+        },
+        {
+          "label": "120 FPS",
+          "set": {
+            "video/frame_rate": "\"120\""
+          }
+        },
+        {
+          "label": "Uncapped",
+          "set": {
+            "video/frame_rate": "\"uncapped\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/frame_rate": "\"original\""
+      },
+      "group": "Performance"
+    },
+    {
+      "id": "vrr",
+      "label": "Variable refresh",
+      "help": "Lets G-Sync or FreeSync displays present frames without fixed-refresh pacing.",
+      "choices": [
+        {
+          "label": "Automatic",
+          "set": {
+            "video/vrr": "\"auto\""
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "video/vrr": "\"on\""
+          }
+        },
+        {
+          "label": "Off",
+          "set": {
+            "video/vrr": "\"off\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/vrr": "\"auto\""
+      },
+      "group": "Performance"
+    },
+    {
+      "id": "vsync",
+      "label": "V-Sync",
+      "help": "Waits for the display to finish a refresh; usually leave this off when variable refresh is active.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "video/vsync": "false"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "video/vsync": "true"
+          }
+        }
+      ],
+      "defaults": {
+        "video/vsync": "false"
+      },
+      "group": "Performance"
+    },
+    {
+      "id": "upscaling",
+      "label": "Upscaling",
+      "help": "FSR renders at a lower internal size and spatially reconstructs the image on output.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "video/upscaler": "\"off\""
+          }
+        },
+        {
+          "label": "FSR 1",
+          "set": {
+            "video/upscaler": "\"fsr1\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/upscaler": "\"off\""
+      },
+      "group": "Graphics"
+    },
+    {
+      "id": "graphics_api",
+      "label": "Graphics API",
+      "help": "Automatic uses the available backend; choose an API only when troubleshooting.",
+      "choices": [
+        {
+          "label": "Automatic",
+          "set": {
+            "video/graphics_api": "\"auto\""
+          }
+        },
+        {
+          "label": "Direct3D 12",
+          "set": {
+            "video/graphics_api": "\"d3d12\""
+          }
+        },
+        {
+          "label": "Vulkan",
+          "set": {
+            "video/graphics_api": "\"vulkan\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/graphics_api": "\"auto\""
+      },
+      "group": "Advanced",
+      "advanced": true
+    },
+    {
+      "id": "fps",
+      "label": "Show FPS",
+      "help": "Shows the frame rate while playing.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "video/show_fps": "false"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "video/show_fps": "true"
+          }
+        }
+      ],
+      "defaults": {
+        "video/show_fps": "false"
+      },
+      "group": "Advanced",
+      "advanced": true
+    },
+    {
+      "id": "volume",
+      "label": "Master volume",
+      "help": "Sets the overall game volume.",
+      "slider": {
+        "key": "audio/volume",
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "format": "%.2f"
+      },
+      "defaults": {
+        "audio/volume": "1.0"
+      },
+      "group": "Audio"
+    }
+  ],
+  "groups": [
+    {
+      "id": "Advanced",
+      "advanced": true
+    }
+  ],
+  "saves": [
+    "{data}/NAND",
+    "{data}/Config.toml"
+  ],
+  "folders": {
+    "saves": [
+      {
+        "path": "{data}/NAND"
+      }
+    ],
+    "settings": [
+      {
+        "path": "{data}/Config.toml"
+      }
+    ],
+    "cache": [
+      {
+        "path": "{data}/cache"
+      }
+    ],
+    "logs": [
+      {
+        "path": "{data}/Logs"
+      }
+    ],
+    "game": [
+      {
+        "path": "{data}/Game"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "saves",
+      "label": "Saves",
+      "help": "Your Wii save data.",
+      "open": "saves"
+    },
+    {
+      "id": "settings",
+      "label": "Settings file",
+      "help": "The readable TOML settings file.",
+      "open": "settings"
+    },
+    {
+      "id": "cache",
+      "label": "Clear shader cache",
+      "help": "Remove generated shaders and pipeline cache files after graphics problems or a driver update.",
+      "clear": "cache"
+    }
+  ],
+  "exit_codes": {
+    "0": "ok"
+  },
+  "looks": {
+    "graphics_key": "video/graphics_api",
+    "in": "main",
+    "lines": 480
+  },
+  "system": {
+    "windows": {
+      "version": "10",
+      "graphics": {
+        "d3d12": "12_0",
+        "vulkan": "1.3"
+      }
+    }
+  },
+  "requires": [
+    "start",
+    "setup",
+    "exit_codes",
+    "files.folder",
+    "files.flag",
+    "files.accepts",
+    "files.contains",
+    "settings.toml",
+    "settings.choices",
+    "settings.slider",
+    "settings.groups"
+  ],
+  "min": "0.90.0-beta.27"
+}

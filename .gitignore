@@ -26,6 +26,7 @@ __pycache__/
 *.pyc
 
 ready/
+dist/
 
 # NVIDIA Streamline / DLSS SDK staged locally (docs/DLSS-NOTES.md)
 third_party/nvidia/

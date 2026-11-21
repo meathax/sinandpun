@@ -36,6 +36,7 @@ Get-ChildItem $src -File -Filter "*.dll" | ForEach-Object {
     Copy-Item $_.FullName $dst -Force
 }
 Copy-Item (Join-Path $root "LICENSE") $dst -Force
+Copy-Item (Join-Path $root "recomplauncher.json") $dst -Force
 
 $dlssDir = Join-Path $root "third_party\nvidia\streamline"
 if ($FetchDlss -and -not (Test-Path (Join-Path $dlssDir "bin\x64\sl.interposer.dll"))) {
@@ -96,7 +97,7 @@ Set-Content (Join-Path $dst "portable.txt") "portable"
 $ud = Join-Path $dst "UserData"
 New-Item -ItemType Directory -Force $ud | Out-Null
 $cacheSrc = Join-Path $src "UserData\Cache"
-$cacheDst = Join-Path $ud "Cache"
+$cacheDst = Join-Path $ud "cache"
 if ((Test-Path $cacheSrc) -and -not (Test-Path $cacheDst)) {
     # warmed shader/pipeline caches (this machine's GPU/driver) so the first run in ready\ does not hitch
     Copy-Item $cacheSrc $cacheDst -Recurse

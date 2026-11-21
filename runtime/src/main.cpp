@@ -80,6 +80,7 @@
 #include "runtime_log.h"
 #include "runtime_product.h"
 #include "recomp_mod_loader.h"
+#include "launcher_args.h"
 #include <aurora/aurora.h>
 #include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_video.h>
@@ -1352,6 +1353,160 @@ static void TerminateHandler() {
 }
 
 // Runtime entry point: loads the configuration, brings up aurora and runs the game.
+namespace {
+
+constexpr const char* kPreparedMarkerFile = "prepared.txt";
+
+std::filesystem::path ManagedGameDirectory() {
+    return RuntimeConfigFile::ApplicationDataDirectory() / "Game";
+}
+
+bool ValidateExtractedGameFolder(const std::filesystem::path& root, std::string& error) {
+    if (!DiscImport::IsGameDirectoryComplete(root)) {
+        error = "The selected folder is not an extracted R2VE01 game: expected files/ and "
+                "sys/{boot.bin,fst.bin,main.dol}.";
+        return false;
+    }
+    std::array<char, 6> gameId{};
+    if (std::ifstream boot(root / "sys" / "boot.bin", std::ios::binary);
+        !boot.read(gameId.data(), static_cast<std::streamsize>(gameId.size())) ||
+        std::string(gameId.data(), gameId.size()) != DiscImport::kGameId) {
+        error = "The selected extracted folder is not Sin & Punishment: Star Successor, "
+                "NTSC-U (R2VE01).";
+        return false;
+    }
+    return true;
+}
+
+bool WritePreparedConfiguration(const std::filesystem::path& dvdRoot, std::string& error) {
+    RuntimeConfigFile::EnsureConfigFile();
+    const std::string literal =
+        RuntimeConfigFile::FormatString(RuntimeConfigFile::PathToUtf8(dvdRoot));
+    if (!RuntimeConfigFile::WriteSetting("paths", "dvd_root", literal)) {
+        error = "Could not write " + RuntimeConfigFile::PathToUtf8(RuntimeConfigFile::ResolveConfigPath());
+        return false;
+    }
+    RuntimeConfigFile::Mutable().dvdRoot = RuntimeConfigFile::PathToUtf8(dvdRoot);
+
+    const auto marker = RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile;
+    std::ofstream output(marker, std::ios::trunc);
+    output << "R2VE01\n" << RuntimeConfigFile::PathToUtf8(dvdRoot) << '\n';
+    if (!output) {
+        error = "Could not write the setup marker " + RuntimeConfigFile::PathToUtf8(marker);
+        return false;
+    }
+    return true;
+}
+
+bool ConfigureGamePathForLaunch(const std::filesystem::path& gamePath) {
+    std::error_code ec;
+    const auto absoluteGamePath = std::filesystem::absolute(gamePath, ec);
+    if (ec) {
+        throw std::runtime_error("Could not resolve --game path: " + ec.message());
+    }
+    if (std::filesystem::is_directory(absoluteGamePath, ec)) {
+        std::string error;
+        if (!ValidateExtractedGameFolder(absoluteGamePath, error)) {
+            throw std::invalid_argument(error);
+        }
+        RuntimeConfigFile::Mutable().dvdRoot =
+            RuntimeConfigFile::PathToUtf8(absoluteGamePath.lexically_normal());
+        return true;
+    }
+    if (!std::filesystem::is_regular_file(absoluteGamePath, ec)) {
+        throw std::invalid_argument("The --game path does not exist: " +
+                                    RuntimeConfigFile::PathToUtf8(absoluteGamePath));
+    }
+    const auto preparedGame = ManagedGameDirectory();
+    if (!DiscImport::IsGameDirectoryComplete(preparedGame)) {
+        throw std::runtime_error(
+            "This disc has not been prepared yet. Run WiiCompiled.exe --prepare "
+            "--data=<data folder> --game=<disc image> first.");
+    }
+    RuntimeConfigFile::Mutable().dvdRoot = RuntimeConfigFile::PathToUtf8(preparedGame);
+    return true;
+}
+
+int PrepareForRecompLauncher(const std::filesystem::path& gamePath) {
+    std::error_code ec;
+    const auto absoluteGamePath = std::filesystem::absolute(gamePath, ec);
+    if (ec) {
+        std::cerr << "[prepare] Could not resolve the game path: " << ec.message() << '\n';
+        return EXIT_FAILURE;
+    }
+    std::filesystem::create_directories(RuntimeConfigFile::ApplicationDataDirectory(), ec);
+    if (ec) {
+        std::cerr << "[prepare] Could not create the data folder: " << ec.message() << '\n';
+        return EXIT_FAILURE;
+    }
+
+    std::string error;
+    if (std::filesystem::is_directory(absoluteGamePath, ec)) {
+        if (!ValidateExtractedGameFolder(absoluteGamePath, error)) {
+            std::cerr << "[prepare] " << error << '\n';
+            return EXIT_FAILURE;
+        }
+        std::cout << "progress 0.8 Checking extracted game\n";
+        if (!WritePreparedConfiguration(absoluteGamePath.lexically_normal(), error)) {
+            std::cerr << "[prepare] " << error << '\n';
+            return EXIT_FAILURE;
+        }
+        std::cout << "progress 1 Extracted game is ready\n";
+        return EXIT_SUCCESS;
+    }
+
+    if (!std::filesystem::is_regular_file(absoluteGamePath, ec) ||
+        !DiscImport::IsSupportedDiscExtension(absoluteGamePath)) {
+        std::cerr << "[prepare] Select a supported R2VE01 .iso, .wbfs, .gcm, .bin or .cue disc, "
+                     "or an extracted folder containing sys/ and files/.\n";
+        return EXIT_FAILURE;
+    }
+
+    DiscImport::Progress progress;
+    DiscImport::Summary summary;
+    DiscImport::Result result = DiscImport::Result::Failed;
+    std::atomic<int> state{0};
+    std::thread importer([&] {
+        result = DiscImport::ImportDisc(absoluteGamePath, ManagedGameDirectory(),
+                                        progress, summary, error);
+        state.store(1, std::memory_order_release);
+    });
+
+    std::string lastStage;
+    int lastProgressBucket = -1;
+    while (state.load(std::memory_order_acquire) == 0) {
+        std::string stage, detail;
+        progress.Get(stage, detail);
+        const auto total = std::max<uint64_t>(1, progress.total.load());
+        const double fraction =
+            std::min(0.95, static_cast<double>(progress.done.load()) /
+                               static_cast<double>(total));
+        const int progressBucket = static_cast<int>(fraction * 20.0);
+        if (stage != lastStage || progressBucket != lastProgressBucket) {
+            std::cout << "progress " << fraction << ' ' << stage;
+            if (!detail.empty()) std::cout << ": " << detail;
+            std::cout << '\n';
+            lastStage = std::move(stage);
+            lastProgressBucket = progressBucket;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    importer.join();
+    if (result != DiscImport::Result::Ok) {
+        std::cerr << "[prepare] " << error << '\n';
+        return EXIT_FAILURE;
+    }
+    if (!WritePreparedConfiguration(ManagedGameDirectory(), error)) {
+        std::cerr << "[prepare] " << error << '\n';
+        return EXIT_FAILURE;
+    }
+    std::cout << "progress 1 Prepared R2VE01 (" << summary.files << " files, "
+              << summary.modules << " stage modules)\n";
+    return EXIT_SUCCESS;
+}
+
+}  // namespace
+
 int RuntimeMain(int argc, char** argv) {
     // Must run before the transcript duplicates stdout/stderr: it decides what
     // those descriptors are mirrored to now that the products are GUI-subsystem.
@@ -1365,6 +1520,24 @@ int RuntimeMain(int argc, char** argv) {
 #else
     InstallPosixMemoryFaultHandler();
 #endif
+    RecompLauncher::Arguments launcherArgs;
+    std::string argumentError;
+    const bool argumentsValid = RecompLauncher::ParseArguments(argc, argv, launcherArgs, argumentError);
+    if (launcherArgs.dataDirectory) {
+        RuntimeConfigFile::SetApplicationDataDirectory(*launcherArgs.dataDirectory);
+    }
+    if (launcherArgs.help) {
+        std::fputs(RecompLauncher::Usage(), stdout);
+        return argumentsValid ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (!argumentsValid) {
+        std::cerr << "[runtime] " << argumentError << '\n' << RecompLauncher::Usage();
+        return EXIT_FAILURE;
+    }
+    if (launcherArgs.prepare) {
+        return PrepareForRecompLauncher(*launcherArgs.gamePath);
+    }
+
     InitializeProcessTranscript(argc, argv);
     if (const char* wd = std::getenv("SIN_WATCHDOG_SECS"); wd && *wd) {
         // Debug aid: snapshot the guest state of a spinning/stuck run without killing it.
@@ -1431,16 +1604,11 @@ int RuntimeMain(int argc, char** argv) {
     
     std::string currentEntryLabel;
 
-    // `--headless`: run without a window, sound or dialogs.
-    g_headless = std::any_of(argv + 1, argv + argc,
-                             [](const char* arg) { return std::string_view(arg) == "--headless"; });
+    g_headless = launcherArgs.headless;
 
     try {
-        for (int i = 1; i < argc; ++i) {
-            if (std::string_view(argv[i]) != "--headless") {
-                throw std::invalid_argument(std::string("Unknown command-line option '") + argv[i] +
-                                            "'; the runtime only accepts --headless, use Config.toml for everything else.");
-            }
+        if (launcherArgs.gamePath) {
+            ConfigureGamePathForLaunch(*launcherArgs.gamePath);
         }
         if (g_headless) {
             AudioBackend::Instance().SetSilenced(true);
@@ -1455,7 +1623,7 @@ int RuntimeMain(int argc, char** argv) {
         AuroraConfig auroraConfig = {};
         auroraConfig.appName = RuntimeProduct::Active().displayName.data();
         const auto applicationDataDirectory = RuntimeConfigFile::ApplicationDataDirectory();
-        const auto rendererCacheDirectory = applicationDataDirectory / "Cache";
+        const auto rendererCacheDirectory = applicationDataDirectory / "cache";
         std::error_code rendererPathError;
         std::filesystem::create_directories(rendererCacheDirectory, rendererPathError);
         if (rendererPathError) {
@@ -1478,7 +1646,8 @@ int RuntimeMain(int argc, char** argv) {
         auroraConfig.windowHeight = RuntimeConfigFile::WindowHeight(auroraConfig.windowHeight);
         auroraConfig.hasWindowPosition = RuntimeConfigFile::WindowPosition(
             auroraConfig.windowPosX, auroraConfig.windowPosY);
-        auroraConfig.allowJoystickBackgroundEvents = !g_headless;
+        auroraConfig.allowJoystickBackgroundEvents =
+            !g_headless && std::getenv("RECOMPLAUNCHER") == nullptr;
         auroraConfig.startHidden = g_headless;
         auroraConfig.disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
         // Dolphin-style custom textures. Aurora indexes <userPath>/texture_replacements

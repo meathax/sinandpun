@@ -26,6 +26,7 @@
 #endif
 #include <windows.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #else
 #include <cstdlib>
 #include <unistd.h>
@@ -125,11 +126,57 @@ inline std::filesystem::path PathFromUtf8(std::string_view text) {
     return std::filesystem::path(std::u8string(text.begin(), text.end()));
 }
 
+inline std::optional<std::filesystem::path>& ApplicationDataDirectoryOverride() {
+    static std::optional<std::filesystem::path> override;
+    return override;
+}
+
+inline void SetApplicationDataDirectory(std::filesystem::path path) {
+    std::error_code ec;
+    if (path.is_relative()) {
+        path = std::filesystem::absolute(path, ec);
+    }
+    ApplicationDataDirectoryOverride() = path.lexically_normal();
+}
+
+// Runtime globals load settings before main() runs. Inspect --data directly from the process
+// command line so a caller that uses the CLI override gets the same early path as
+// RECOMPLAUNCHER_DATA. The in-main parser still owns validation and friendly diagnostics.
+inline std::optional<std::filesystem::path> ProcessArgumentDataDirectory() {
+#ifdef _WIN32
+    static const std::optional<std::filesystem::path> result = []() {
+        int argc = 0;
+        LPWSTR* arguments = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
+        if (!arguments) {
+            return std::optional<std::filesystem::path>{};
+        }
+        std::optional<std::filesystem::path> found;
+        for (int index = 1; index < argc; ++index) {
+            const std::wstring_view argument(arguments[index]);
+            if (argument.starts_with(L"--data=") && argument.size() > 7) {
+                found = std::filesystem::path(argument.substr(7));
+                break;
+            }
+            if (argument == L"--data" && index + 1 < argc &&
+                !std::wstring_view(arguments[index + 1]).starts_with(L"--")) {
+                found = std::filesystem::path(arguments[index + 1]);
+                break;
+            }
+        }
+        ::LocalFree(arguments);
+        return found;
+    }();
+    return result;
+#else
+    return std::nullopt;
+#endif
+}
+
 inline constexpr const char* kConfigFileName = "Config.toml";
 inline constexpr const char* kApplicationDirectoryName = "WiiCompiled";
 
 // Portable layout. A directory holding kPortableMarkerFileName is a portable root; every piece of
-// runtime user state (Config.toml, NAND, Cache, Logs) lives in <root>/UserData instead of
+// runtime user state (Config.toml, NAND, cache, Logs) lives in <root>/UserData instead of
 // %LOCALAPPDATA%. The marker is searched for from the executable's directory upwards, which is what
 // makes an installation survive being moved or carried on removable media.
 inline constexpr const char* kPortableMarkerFileName = "portable.txt";
@@ -399,6 +446,20 @@ inline const std::optional<std::filesystem::path>& PortableRootDirectory() {
 }
 
 inline std::filesystem::path ApplicationDataDirectory() {
+    if (const auto& override = ApplicationDataDirectoryOverride()) {
+        return *override;
+    }
+    if (const auto processOverride = ProcessArgumentDataDirectory()) {
+        return processOverride->is_relative()
+            ? std::filesystem::absolute(*processOverride).lexically_normal()
+            : processOverride->lexically_normal();
+    }
+    // RecompLauncher supplies this for both Play and its setup step. A command-line --data
+    // override is installed before the first path lookup and therefore takes precedence.
+    if (const char* launcherData = std::getenv("RECOMPLAUNCHER_DATA");
+        launcherData && *launcherData) {
+        return PathFromUtf8(launcherData).lexically_normal();
+    }
     if (const auto& portableRoot = PortableRootDirectory()) {
         return *portableRoot / kPortableUserDataDirectoryName;
     }
@@ -480,7 +541,7 @@ inline void EnsureConfigFile() {
               "# texture_replacements/ next to this file at startup and substitutes\n"
               "# any tex1_<W>x<H>_<hash>[_<tlut hash>]_<format>.dds or .png it finds\n"
               "# there for the matching game texture. texture_dumps writes every\n"
-              "# unmatched texture to Cache/texture_dumps under the name a\n"
+              "# unmatched texture to cache/texture_dumps under the name a\n"
               "# replacement would need. Both are read once, at startup.\n"
               "texture_replacements = false\n"
               "texture_dumps = false\n\n"

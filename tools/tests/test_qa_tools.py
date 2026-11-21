@@ -111,6 +111,8 @@ class ReleaseAuditTests(unittest.TestCase):
         (self.package / "wii_bootstrap").mkdir()
         (self.package / "wii_bootstrap" / "boot.bin").write_bytes(b"boot")
         (self.package / "LICENSE").write_bytes((ROOT / "LICENSE").read_bytes())
+        (self.package / "recomplauncher.json").write_bytes(
+            (ROOT / "recomplauncher.json").read_bytes())
         for index in range(8):
             name = f"stg0{index}.bin"
             (self.modules / name).write_bytes(index.to_bytes(1, "little"))
@@ -132,6 +134,12 @@ class ReleaseAuditTests(unittest.TestCase):
         report = release_audit.audit(self.source, self.package, self.modules)
         self.assertTrue(any("executable" in error.lower() for error in report["errors"]))
         self.assertTrue(any("game data" in error.lower() for error in report["errors"]))
+
+    def test_launcher_package_rejects_mutable_state(self):
+        (self.package / "UserData").mkdir()
+        report = release_audit.audit(
+            self.source, self.package, self.modules, require_launcher_clean=True)
+        self.assertTrue(any("mutable" in error.lower() for error in report["errors"]))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 #include "runtime_config.h"
+#include "launcher_args.h"
 
 #include <iostream>
 #include <optional>
@@ -34,6 +35,49 @@ bool SetsOffset(const std::string& original, const char* message) {
 } // namespace
 
 int main() {
+    {
+        const char* argv[] = {"WiiCompiled.exe", "--headless", nullptr};
+        RecompLauncher::Arguments arguments;
+        std::string error;
+        if (!Require(RecompLauncher::ParseArguments(2, const_cast<char**>(argv), arguments, error) &&
+                         arguments.headless && !arguments.prepare && !arguments.gamePath,
+                     "headless arguments were not parsed")) return 1;
+    }
+    {
+        const char* argv[] = {"WiiCompiled.exe", "--prepare", "--data=C:/Launcher Data",
+                              "--game", "D:/Dumps/R2VE01.iso", nullptr};
+        RecompLauncher::Arguments arguments;
+        std::string error;
+        if (!Require(RecompLauncher::ParseArguments(5, const_cast<char**>(argv), arguments, error) &&
+                         arguments.headless && arguments.prepare &&
+                         arguments.dataDirectory == std::filesystem::path("C:/Launcher Data") &&
+                         arguments.gamePath == std::filesystem::path("D:/Dumps/R2VE01.iso"),
+                     "launcher setup arguments were not parsed")) return 1;
+    }
+    {
+        const char* argv[] = {"WiiCompiled.exe", "--prepare", "--data", "C:/Data", nullptr};
+        RecompLauncher::Arguments arguments;
+        std::string error;
+        if (!Require(!RecompLauncher::ParseArguments(4, const_cast<char**>(argv), arguments, error) &&
+                         error.find("--game") != std::string::npos,
+                     "prepare without a game was accepted")) return 1;
+    }
+    {
+        const char* argv[] = {"WiiCompiled.exe", "--unknown", nullptr};
+        RecompLauncher::Arguments arguments;
+        std::string error;
+        if (!Require(!RecompLauncher::ParseArguments(2, const_cast<char**>(argv), arguments, error) &&
+                         error.find("--unknown") != std::string::npos,
+                     "unknown launcher arguments were accepted")) return 1;
+    }
+    {
+        const char* argv[] = {"WiiCompiled.exe", "--data=first", "--data", "second", nullptr};
+        RecompLauncher::Arguments arguments;
+        std::string error;
+        if (!Require(!RecompLauncher::ParseArguments(4, const_cast<char**>(argv), arguments, error) &&
+                         error.find("only be specified once") != std::string::npos,
+                     "duplicate data paths were accepted")) return 1;
+    }
     {
         std::istringstream input("[video]\nmetalfx_spatial_upscaling = true\n");
         const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "enabled.toml");

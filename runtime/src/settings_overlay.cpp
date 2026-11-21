@@ -2009,6 +2009,10 @@ void InitializeRuntimeSettings() noexcept {
     ApplyUpscaler();
     ApplyFrameRate(g_frameInterpolationMode);
     ApplyVrr();
+    if (const char* launcherMode = std::getenv("RECOMPLAUNCHER_MODE");
+        launcherMode && std::string_view(launcherMode) == "bigpicture") {
+        g_displayMode = static_cast<int>(AURORA_DISPLAY_MODE_BORDERLESS);
+    }
     aurora_set_display_mode(static_cast<AuroraDisplayMode>(g_displayMode));
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);

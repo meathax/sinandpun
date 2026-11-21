@@ -7,6 +7,10 @@
   <img alt="Status: testing" src="https://img.shields.io/badge/status-testing-8B5CF6">
 </p>
 
+<p align="center">
+  <a href="https://recomplauncher.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+</p>
+
 A native PC port of *Sin & Punishment: Star Successor* for Wii, made with static recompilation.
 
 The PowerPC code from the game is translated to C++ ahead of time. The Wii OS, GX graphics, audio, input, DVD and NAND
@@ -15,6 +19,13 @@ interfaces are provided by a host runtime. There is no emulator, interpreter, JI
 > [!IMPORTANT]
 > This repository contains no Nintendo code, no game data, no extracted assets, and no compiled game binary. You must
 > provide your own legally dumped copy of **Sin & Punishment: Star Successor**, NTSC-U (`R2VE01`).
+
+## How to play
+
+Install the latest Windows x64 release with RecompLauncher, add your legally dumped NTSC-U `R2VE01` disc as an
+ISO/WBFS image or extracted `sys/` and `files/` folder, then select **Play**. RecompLauncher prepares the game once
+and keeps settings, saves, caches and logs in its managed data folder. Manual players can still use the in-game
+disc picker or pass the copy with `--game`, as described below.
 
 <p align="center">
   <img src="docs/screenshots/title.png" alt="Recomp title screen" width="900">
@@ -89,7 +100,7 @@ The one intentional gameplay change is modern controller support:
 
 ## Running
 
-The final executable expects an extracted disc folder in `UserData/Config.toml`:
+Without RecompLauncher, the executable can use an extracted disc folder configured in `UserData/Config.toml`:
 
 ```toml
 [paths]
@@ -97,6 +108,17 @@ dvd_root = 'D:/path/to/R2VE01'
 ```
 
 Run `WiiCompiled.exe`. On first launch, the runtime creates its local NAND save tree under `UserData/NAND`.
+
+The launcher's `--data` option moves all mutable state to one directory. A selected extracted folder or disc image
+can be passed directly with `--game`:
+
+```powershell
+WiiCompiled.exe --prepare --data C:\Games\SinRecompData --game D:\Dumps\Sin-R2VE01.iso
+WiiCompiled.exe --data C:\Games\SinRecompData --game D:\Dumps\Sin-R2VE01.iso
+```
+
+`--prepare` is windowless, prints RecompLauncher progress lines, and accepts the same extracted folder or
+`.iso`/`.wbfs` disc used by the interactive first-run importer.
 
 ## Building
 
@@ -125,6 +147,21 @@ powershell -File tools\clean_build.ps1 -Keep
 
 The eight stage modules are pre-linked and translated separately. The exact commands and expected evidence are documented
 in [`docs/STATUS.md`](docs/STATUS.md).
+
+## RecompLauncher release package
+
+After building the translated runtime and refreshing `ready\`, create the Windows release archive with:
+
+```powershell
+powershell -File tools\update_ready.ps1 -NoDlss
+powershell -File tools\package_recomplauncher.ps1 -Version 1.0.0
+```
+
+The package script removes standalone mutable state, verifies the executable, runtime files, stage modules and
+`recomplauncher.json`, then writes
+`dist\SinAndPunishmentRecomp-1.0.0-Windows-x64.zip`. No `UserData`, `recompdata`, disc image, or extracted game
+files are included. Tag the GitHub release and attach that ZIP; GitHub source archives should be named with
+`-source` if they are uploaded separately.
 
 ## Controls
 

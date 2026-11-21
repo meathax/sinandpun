@@ -6,7 +6,7 @@ param(
     [switch]$UseLock = $true                          # take build\agent.lock around every run (shared build tree)
 )
 # Warms the pipeline cache: runs the game through every requested stage with the standard scripted pointer run, so that
-# aurora records every GX pipeline config it needs into <Source>\UserData\Cache\pipeline_cache.db, then exports the merged
+# aurora records every GX pipeline config it needs into <Source>\UserData\cache\pipeline_cache.db, then exports the merged
 # table to <Source>\initial_pipeline_cache.db (shipped next to the exe by tools\update_ready.ps1; aurora seeds the user's
 # cache from it at start and compiles the whole list on background workers while the game boots).
 # The cache stores only pipeline *configs* (not compiled blobs), so it is portable across GPUs/drivers.
@@ -24,7 +24,7 @@ function Take-Lock($who) {
 function Release-Lock { Remove-Item -Recurse -Force $lockDir -ErrorAction SilentlyContinue }
 
 $script = '32|0.3:A|10|0.21::-1/0|0.5|0.3:A|5|0.15::-1/0|0.3|0.19::0/-1|0.5|0.3:A|1.5|0.056::1/0|0.3|0.23::0/1|0.5|0.3:A|4|0.3:PLUS|4|0.3:A|4|0.3:A|4|0.04::-1/0|0.2|0.095::0/-1|0.5|0.3:A|4|0.3:A|4|0.3:A|4|0.3:A|120'
-$db = Join-Path $root "$Source\UserData\Cache\pipeline_cache.db"
+$db = Join-Path $root "$Source\UserData\cache\pipeline_cache.db"
 function Row-Count {
     if (-not (Test-Path $db)) { return 0 }
     [int](python -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from pipeline_cache').fetchone()[0])" $db)

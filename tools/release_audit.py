@@ -26,7 +26,7 @@ def same_file(left, right):
     return left.stat().st_size == right.stat().st_size and sha256(left) == sha256(right)
 
 
-def audit(source, package, modules):
+def audit(source, package, modules, require_launcher_clean=False):
     source, package, modules = Path(source), Path(package), Path(modules)
     errors = []
     warnings = []
@@ -85,6 +85,27 @@ def audit(source, package, modules):
     if not same_file(ROOT / "LICENSE", package / "LICENSE"):
         errors.append("LICENSE is missing or differs from the source tree")
 
+    manifest = package / "recomplauncher.json"
+    if not same_file(ROOT / "recomplauncher.json", manifest):
+        errors.append("recomplauncher.json is missing, stale, or differs from the source tree")
+    elif manifest.is_file():
+        try:
+            profile = json.loads(manifest.read_text(encoding="utf-8"))
+            checks["launcher_format"] = profile.get("format")
+            if profile.get("format") != 1:
+                errors.append("recomplauncher.json has an unsupported format")
+            if profile.get("repo") != "meathax/sinandpun":
+                errors.append("recomplauncher.json names the wrong repository")
+        except json.JSONDecodeError as error:
+            errors.append(f"recomplauncher.json is invalid JSON: {error}")
+
+    if require_launcher_clean:
+        mutable = [name for name in ("UserData", "recompdata", "portable.txt")
+                   if (package / name).exists()]
+        if mutable:
+            errors.append("launcher release contains mutable or standalone-only state: " +
+                          ", ".join(mutable))
+
     build_info = package / "BUILD-INFO.txt"
     if package_exe.is_file() and build_info.is_file():
         executable_hash = sha256(package_exe)
@@ -122,9 +143,11 @@ def main():
     parser.add_argument("--package", default="ready")
     parser.add_argument("--modules", default="build/modules")
     parser.add_argument("--json-out")
+    parser.add_argument("--require-launcher-clean", action="store_true")
     args = parser.parse_args()
 
-    report = audit(ROOT / args.source, ROOT / args.package, ROOT / args.modules)
+    report = audit(ROOT / args.source, ROOT / args.package, ROOT / args.modules,
+                   args.require_launcher_clean)
     if args.json_out:
         output = ROOT / args.json_out
         output.parent.mkdir(parents=True, exist_ok=True)
