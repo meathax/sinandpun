@@ -115,6 +115,7 @@ dvd_root = '$dvdPath'
 
 [video]
 display_mode = "windowed"
+vrr = "off"
 window_width = 1920
 window_height = 1080
 force_aspect = true
