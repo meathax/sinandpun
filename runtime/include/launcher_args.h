@@ -110,8 +110,8 @@ inline bool ParseArguments(int argc, char** argv, Arguments& parsed, std::string
 }
 
 inline const char* Usage() {
-    return "Usage: WiiCompiled.exe [--data <path>] [--game <path>] [--headless]\n"
-           "       WiiCompiled.exe --prepare --data <path> --game <path> [--keys <file>] [--dolphin-tool <exe>]\n";
+    return "Usage: SinAndPunishmentRecomp.exe [--data <path>] [--game <path>] [--headless]\n"
+           "       SinAndPunishmentRecomp.exe --prepare --data <path> --game <path> [--keys <file>] [--dolphin-tool <exe>]\n";
 }
 
 }  // namespace RecompLauncher

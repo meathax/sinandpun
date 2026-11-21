@@ -107,7 +107,6 @@ constexpr std::string_view kBootstrapFiles[] = {
     "shared2/wc24/nwc24fls.bin",
     "shared2/wc24/nwc24msg.cbk",
     "shared2/wc24/nwc24msg.cfg",
-    "shared2/wc24/mbox/Readme.txt",
     "shared2/wc24/mbox/wc24recv.ctl",
     "shared2/wc24/mbox/wc24recv.mbx",
     "shared2/wc24/mbox/wc24send.ctl",
