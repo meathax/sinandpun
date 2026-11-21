@@ -1492,7 +1492,7 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
     std::atomic<int> state{0};
     std::thread importer([&] {
         result = DiscImport::ImportDisc(absoluteGamePath, ManagedGameDirectory(),
-                                        progress, summary, error, args.keyFile, args.dolphinTool);
+                                        progress, summary, error, args.keyFile);
         state.store(1, std::memory_order_release);
     });
 

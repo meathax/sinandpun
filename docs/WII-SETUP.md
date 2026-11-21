@@ -7,10 +7,12 @@ the temporary key buffers after initializing decryption. It stores the imported
 game and stage modules in its data folder. An already prepared game plays
 without the key.
 
-RVZ and GCZ use an installed DolphinTool executable selected in the setup
-screen or specified by `--dolphin-tool` or `SIN_DOLPHIN_TOOL`. Conversion
-temporarily needs space for a full ISO. The game deletes its conversion scratch
-directory on completion, failure or normal cancellation.
+RVZ and GCZ images are read directly during import. Setup only needs the disc image
+and your key file, with no intermediate ISO.
+
+Windows source builds link the x64 UCRT static zlib, bzip2, XZ and Zstandard
+libraries. Install their MSYS2 UCRT64 development packages on the build machine
+or configure CMake with `-DSIN_CODEC_PREFIX=<installation prefix>`.
 
 For windowless setup, use `--prepare --game <image> --data <folder> --keys <file>`.
 For RecompLauncher, set `SIN_WII_KEY_FILE` before starting the launcher.
@@ -19,7 +21,7 @@ extracted folder can be prepared without a key. Launcher picker support for
 the compressed formats is separate from the game's importer.
 
 Never commit, embed, package, upload or log Wii disc keys. Packages also exclude
-DolphinTool, which players install independently. Use synthetic keys for import
+external disc conversion tools. Use synthetic keys for import
 fixtures. Keep older artifacts that embedded keys out of release staging.
 The packaging allowlist and archive audit cover loose key files. Before release,
 check the rebuilt binary and ZIP against former embedded key signatures without

@@ -37,6 +37,8 @@ Get-ChildItem $src -File -Filter "*.dll" | ForEach-Object {
 }
 Copy-Item (Join-Path $root "LICENSE") $dst -Force
 Copy-Item (Join-Path $root "recomplauncher.json") $dst -Force
+$codecNotices = New-Item -ItemType Directory -Force (Join-Path $dst "disc_codec_licenses")
+Copy-Item (Join-Path $root "third_party\disc_codecs\*.txt") $codecNotices -Force
 
 $dlssDir = Join-Path $root "third_party\nvidia\streamline"
 if ($FetchDlss -and -not (Test-Path (Join-Path $dlssDir "bin\x64\sl.interposer.dll"))) {

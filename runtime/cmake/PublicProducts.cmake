@@ -76,6 +76,17 @@ function(mkw_configure_translated_target target)
     mkw_bound_translated_compiles(${target})
 endfunction()
 
+if(MKW_PLATFORM_WINDOWS)
+    # Apply the codec headers to the importer only. Keep the project's CRT and
+    # toolchain headers ahead of the optional dependency prefix.
+    set(SIN_CODEC_PREFIX "C:/msys64/ucrt64" CACHE PATH "Prefix with static x64 zlib, bzip2, liblzma and zstd")
+    foreach(codec z bz2 lzma zstd)
+        find_file(SIN_CODEC_${codec} "lib${codec}.a" HINTS "${SIN_CODEC_PREFIX}/lib" REQUIRED)
+        list(APPEND SIN_DISC_LIBRARIES "${SIN_CODEC_${codec}}")
+    endforeach()
+    set_property(SOURCE "${MKW_RUNTIME_SOURCE_DIR}/src/disc_import.cpp" APPEND PROPERTY
+        COMPILE_OPTIONS "-idirafter" "${SIN_CODEC_PREFIX}/include" "-DLZMA_API_STATIC")
+endif()
 mkw_select_runtime_provider()
 if(MKW_RUNTIME_USE_PREBUILT)
     mkw_import_prebuilt_runtime(mkw_runtime_prebuilt "${MKW_NP_RUNTIME_ARCHIVE_PATH}")
@@ -304,6 +315,9 @@ endfunction()
 
 add_executable(WiiCompiled "${MKW_BASE_PRODUCT_SOURCE}")
 mkw_configure_product(WiiCompiled)
+if(MKW_PLATFORM_WINDOWS)
+    target_link_libraries(WiiCompiled PRIVATE ${SIN_DISC_LIBRARIES})
+endif()
 mkw_add_product_icon(WiiCompiled)
 target_sources(WiiCompiled PRIVATE $<TARGET_OBJECTS:mkw_base_registration>)
 if(TARGET mkw_stage_modules)

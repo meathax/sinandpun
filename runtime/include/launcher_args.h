@@ -12,7 +12,7 @@ namespace RecompLauncher {
 
 struct Arguments {
     std::filesystem::path keyFile;
-    std::filesystem::path dolphinTool;
+    std::filesystem::path legacyDolphinTool; // Accept paths from older launcher configurations.
     bool headless = false;
     bool prepare = false;
     bool help = false;
@@ -59,7 +59,7 @@ inline bool ParseArguments(int argc, char** argv, Arguments& parsed, std::string
             auto value = LongOptionValue(argument, option);
             if (!value && argument == option && index + 1 < argc &&
                 !std::string_view(argv[index + 1]).starts_with("--")) value = argv[++index];
-            auto& path = IsLongOption(argument, "--keys") ? parsed.keyFile : parsed.dolphinTool;
+            auto& path = IsLongOption(argument, "--keys") ? parsed.keyFile : parsed.legacyDolphinTool;
             if (!value || value->empty() || !path.empty()) {
                 error = std::string(option) + " requires one non-empty path";
                 return false;
@@ -111,7 +111,7 @@ inline bool ParseArguments(int argc, char** argv, Arguments& parsed, std::string
 
 inline const char* Usage() {
     return "Usage: SinAndPunishmentRecomp.exe [--data <path>] [--game <path>] [--headless]\n"
-           "       SinAndPunishmentRecomp.exe --prepare --data <path> --game <path> [--keys <file>] [--dolphin-tool <exe>]\n";
+           "       SinAndPunishmentRecomp.exe --prepare --data <path> --game <path> [--keys <file>]\n";
 }
 
 }  // namespace RecompLauncher

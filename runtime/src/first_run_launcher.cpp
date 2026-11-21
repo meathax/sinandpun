@@ -79,7 +79,7 @@ struct Launcher {
     std::thread dialogThread;
     std::atomic<int> dialogState{0};  // 0 idle, 1 open, 2 finished
     std::mutex lock;
-    fs::path picked, pickedKeys, pickedTool;
+    fs::path picked, pickedKeys;
 
     // import thread
     std::thread importThread;
@@ -140,22 +140,13 @@ void PickImportInputs(Launcher& launcher, HWND owner, fs::path image) {
             image = PickFile(owner, L"1 of 2: Select your Wii disc image",
                              L"Wii disc images", L"*.iso;*.wbfs;*.rvz;*.gcz;*.cue;*.bin;*.gcm");
         }
-        fs::path keys, tool;
+        fs::path keys;
         if (!image.empty()) {
             keys = PickFile(owner, L"2 of 2: Select your Wii common key file",
                             L"Binary key files", L"*.bin;*.key");
         }
-        auto ext = image.extension().wstring();
-        for (auto& c : ext) {
-            if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
-        }
-        if (!keys.empty() && (ext == L".rvz" || ext == L".gcz") && !_wgetenv(L"SIN_DOLPHIN_TOOL")) {
-            tool = PickFile(owner, L"Select your installed DolphinTool.exe", L"DolphinTool", L"DolphinTool.exe");
-            if (tool.empty()) keys.clear();
-        }
         launcher.picked = std::move(image);
         launcher.pickedKeys = std::move(keys);
-        launcher.pickedTool = std::move(tool);
         launcher.dialogState = 2;
     });
 }
@@ -164,7 +155,7 @@ void JoinFinished(std::thread& t) {
     if (t.joinable()) t.join();
 }
 
-void StartImport(Launcher& l, const fs::path& image, const fs::path& keys, const fs::path& tool) {
+void StartImport(Launcher& l, const fs::path& image, const fs::path& keys) {
     JoinFinished(l.importThread);
     l.progress.cancel = false;
     l.progress.done = 0;
@@ -177,9 +168,9 @@ void StartImport(Launcher& l, const fs::path& image, const fs::path& keys, const
     l.phase = Phase::Importing;
     l.focus = 0;
     game_ui::Suppress(0.5f);
-    l.importThread = std::thread([&l, image, keys, tool] {
+    l.importThread = std::thread([&l, image, keys] {
         std::string error;
-        const auto result = DiscImport::ImportDisc(image, ManagedGameDirectory(), l.progress, l.summary, error, keys, tool);
+        const auto result = DiscImport::ImportDisc(image, ManagedGameDirectory(), l.progress, l.summary, error, keys);
         {
             std::lock_guard<std::mutex> guard(l.lock);
             l.error = error;
@@ -305,11 +296,10 @@ bool Run() {
             l.dialogState = 0;
             if (!l.picked.empty() && !l.pickedKeys.empty() &&
                 l.phase != Phase::Importing && l.phase != Phase::Done) {
-                StartImport(l, l.picked, l.pickedKeys, l.pickedTool);
+                StartImport(l, l.picked, l.pickedKeys);
             }
             l.picked.clear();
             l.pickedKeys.clear();
-            l.pickedTool.clear();
         }
         if (!l.dropped.empty()) {
             auto file = std::move(l.dropped);
@@ -371,7 +361,7 @@ bool Run() {
                                      "Welcome! To get started, select your own disc image of Sin & Punishment: Star Successor (North America).",
                                      game_ui::Outline::Thin, 1.0f, true);
                 game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(105.0f)), bodyW, game_ui::kTextDim,
-                                     "Select your NTSC-U disc image, then your 16-byte Wii key file. RVZ and GCZ also need DolphinTool. Setup uses the key once and does not keep it.",
+                                     "Select your NTSC-U disc image, then your 16-byte Wii key file. Setup uses the key once and does not keep it.",
                                      game_ui::Outline::Thin, 1.0f, true);
             }
             // A dialog may finish during this frame. Consume its result and

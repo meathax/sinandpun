@@ -47,6 +47,7 @@ if (Test-Path -LiteralPath $achievementNotices) {
 }
 
 Copy-Item (Join-Path $root "recomplauncher.json") (Join-Path $stagePath "recomplauncher.json") -Force
+Copy-Item (Join-Path $root "third_party\disc_codecs") (Join-Path $stagePath "disc_codec_licenses") -Recurse
 
 $exePath = Join-Path $stagePath "WiiCompiled.exe"
 $hash = (Get-FileHash $exePath -Algorithm SHA256).Hash

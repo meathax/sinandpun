@@ -5,7 +5,7 @@
   "repo": "meathax/sinandpun",
   "game": {
     "kind": "iso_or_folder",
-    "label": "NTSC-U R2VE01 disc image or extracted game folder. For disc images, configure SIN_WII_KEY_FILE first. RVZ/GCZ also require SIN_DOLPHIN_TOOL.",
+    "label": "NTSC-U R2VE01 disc image or extracted game folder. For disc images, configure SIN_WII_KEY_FILE first.",
     "check": {
       "file": "sys/main.dol",
       "ids": [

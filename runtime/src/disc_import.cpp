@@ -21,6 +21,10 @@
 #endif
 #include <windows.h>
 #include <bcrypt.h>
+#include <bzlib.h>
+#include <lzma.h>
+#include <zlib.h>
+#include <zstd.h>
 
 #include <algorithm>
 #include <array>
@@ -184,6 +188,9 @@ public:
     // Fills `dst` with `size` bytes at logical disc offset `off`. Returns false when the range is beyond the image.
     virtual bool Read(uint64_t off, void* dst, size_t size) = 0;
     virtual uint64_t Size() const = 0;
+    // RVZ can store the logical partition payload directly.
+    virtual bool SelectPartition(uint64_t, uint64_t, const uint8_t*) { return false; }
+    virtual void ReadPartition(uint64_t, void*, size_t) { throw ImportError("Missing RVZ partition."); }
 };
 
 class FileStream {
@@ -311,9 +318,13 @@ fs::path BinFromCue(const fs::path& cue) {
     return {};
 }
 
+#include "compressed_disc.inc"
+
 std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
     const std::string ext = ExtensionOf(chosen);
-    if (ext == ".rvz" || ext == ".wia" || ext == ".ciso" || ext == ".gcz" || ext == ".nfs" || ext == ".wad") {
+    if (ext == ".rvz") return std::make_unique<RvzImage>(chosen);
+    if (ext == ".gcz") return std::make_unique<GczImage>(chosen);
+    if (ext == ".wia" || ext == ".ciso" || ext == ".nfs" || ext == ".wad") {
         throw ImportError("Compressed or container formats (" + ext + ") are not supported. Convert the disc to a plain .iso (Dolphin: right-click the game, Convert) and select that instead.");
     }
     fs::path image = chosen;
@@ -366,60 +377,6 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
 
 // ---- Wii partition ----------------------------------------------------------------------------------------
 
-// DolphinTool is selected by the player and runs locally. Neither it nor its data ships here.
-struct DiscConversion {
-    fs::path directory;
-
-    ~DiscConversion() {
-        if (!directory.empty()) {
-            std::error_code ignored;
-            fs::remove_all(directory, ignored);
-        }
-    }
-
-    fs::path Convert(const fs::path& input, const fs::path& parent, fs::path tool, Progress& progress) {
-        if (tool.empty()) {
-            if (const wchar_t* configured = _wgetenv(L"SIN_DOLPHIN_TOOL")) tool = configured;
-        }
-        if (!tool.is_absolute() || !fs::is_regular_file(tool)) {
-            throw ImportError("RVZ and GCZ need DolphinTool.exe. Select it in first-run setup or set SIN_DOLPHIN_TOOL to its full path.");
-        }
-        fs::create_directories(parent);
-        const auto scratch = parent / (L".disc-conversion-" + std::to_wstring(GetCurrentProcessId()) +
-                                       L"-" + std::to_wstring(GetTickCount64()));
-        if (!fs::create_directory(scratch)) throw ImportError("Could not create a disc conversion folder.");
-        directory = scratch;
-        const auto output = directory / "disc.iso";
-        const auto quote = [](const fs::path& path) { return L"\"" + path.wstring() + L"\""; };
-        auto command = quote(tool) + L" convert -i " + quote(input) + L" -o " + quote(output) +
-                       L" -f iso -u " + quote(directory / "dolphin-user");
-        STARTUPINFOW startup{};
-        startup.cb = sizeof startup;
-        PROCESS_INFORMATION process{};
-        progress.SetStage("Converting compressed disc with DolphinTool");
-        if (!CreateProcessW(tool.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                            nullptr, directory.c_str(), &startup, &process)) {
-            throw ImportError("Could not start DolphinTool.");
-        }
-        CloseHandle(process.hThread);
-        while (WaitForSingleObject(process.hProcess, 100) == WAIT_TIMEOUT) {
-            if (progress.cancel.load()) {
-                TerminateProcess(process.hProcess, 1);
-                WaitForSingleObject(process.hProcess, INFINITE);
-                CloseHandle(process.hProcess);
-                throw ImportCancelled{};
-            }
-        }
-        DWORD code = 1;
-        const bool finished = GetExitCodeProcess(process.hProcess, &code) && code == 0;
-        CloseHandle(process.hProcess);
-        if (!finished || !fs::is_regular_file(output)) {
-            throw ImportError("DolphinTool could not convert the disc. Check the image and available disk space.");
-        }
-        return output;
-    }
-};
-
 class WiiPartition {
 public:
     WiiPartition(RawImage& raw, uint64_t partitionOffset, const Sha1& sha, std::atomic<bool>& cancel,
@@ -444,11 +401,12 @@ public:
         uint8_t iv[16] = {};
         std::memcpy(iv, ticket + 0x1DC, 8);
         AesCbcDecryptor(commonKey.bytes).Decrypt(iv, ticket + 0x1BF, titleKey.bytes, 16);
-        m_aes = std::make_unique<AesCbcDecryptor>(titleKey.bytes);
         m_dataStart = partitionOffset + (static_cast<uint64_t>(Be32(ticket + 0x2B8)) << 2);
         const uint64_t encryptedSize = static_cast<uint64_t>(Be32(ticket + 0x2BC)) << 2;
         m_clusters = encryptedSize / kClusterSize;
         if (m_clusters == 0) throw ImportError("The disc image has an empty data partition.");
+        m_plainPartition = raw.SelectPartition(m_dataStart, m_clusters, titleKey.bytes);
+        if (!m_plainPartition) m_aes = std::make_unique<AesCbcDecryptor>(titleKey.bytes);
         m_raw_buf.resize(size_t(kChunkClusters) * kClusterSize);
         m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
     }
@@ -480,6 +438,12 @@ private:
         if (m_cancel.load(std::memory_order_relaxed)) throw ImportCancelled{};
         const uint64_t first = chunk * kChunkClusters;
         const uint32_t count = static_cast<uint32_t>(std::min<uint64_t>(kChunkClusters, m_clusters - first));
+        if (m_plainPartition) {
+            m_cachedBytes = uint64_t(count) * kClusterDataBytes;
+            m_raw.ReadPartition(first * kClusterDataBytes, m_plain.data(), m_cachedBytes);
+            m_cachedChunk = chunk;
+            return;
+        }
         if (!m_raw.Read(m_dataStart + first * kClusterSize, m_raw_buf.data(), size_t(count) * kClusterSize)) {
             throw ImportError("The disc image is truncated or unreadable (it ends before all game data).");
         }
@@ -507,6 +471,7 @@ private:
         m_cachedBytes = uint64_t(count) * kClusterDataBytes;
     }
 
+    bool m_plainPartition = false;
     RawImage& m_raw;
     const Sha1& m_sha;
     std::atomic<bool>& m_cancel;
@@ -613,7 +578,7 @@ bool IsGameDirectoryComplete(const fs::path& gameDir) {
 }
 
 Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& progress, Summary& summary, std::string& error,
-                  const fs::path& requestedKeyFile, const fs::path& dolphinTool) {
+                  const fs::path& requestedKeyFile) {
     const auto started = std::chrono::steady_clock::now();
     const fs::path staging = fs::path(gameDir).concat(".importing");
     auto cleanup = [&] {
@@ -635,13 +600,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         if (fs::file_size(keyFile, keyError) != 16 || keyError) {
             throw ImportError("The Wii common key file must contain exactly 16 binary bytes.");
         }
-        DiscConversion conversion;
-        const auto ext = ExtensionOf(image);
-        const auto source = (ext == ".rvz" || ext == ".gcz")
-            ? conversion.Convert(fs::absolute(image), fs::absolute(gameDir).parent_path(), dolphinTool, progress)
-            : image;
-        auto raw = OpenDiscImage(source);
-
+        auto raw = OpenDiscImage(image);
         uint8_t header[0x60];
         if (!raw->Read(0, header, sizeof header)) throw ImportError("The disc image is truncated.");
         const uint32_t wiiMagic = Be32(header + 0x18), gcMagic = Be32(header + 0x1C);
@@ -1061,7 +1020,7 @@ namespace DiscImport {
 void Progress::SetStage(std::string, std::string) {}
 void Progress::Get(std::string&, std::string&) const {}
 Result ImportDisc(const std::filesystem::path&, const std::filesystem::path&, Progress&, Summary&, std::string& error,
-                  const std::filesystem::path&, const std::filesystem::path&) {
+                  const std::filesystem::path&) {
     error = "Disc import is only available on Windows.";
     return Result::Failed;
 }

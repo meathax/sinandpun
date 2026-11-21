@@ -28,13 +28,13 @@ Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required f
 
 1. See [GitHub Releases](https://github.com/meathax/sinandpun/releases) for published builds, or [build it from source](#building-from-source).
 2. Extract the entire package and run the executable included with it. Standalone test packages use `SinAndPunishmentRecomp.exe`; the current RecompLauncher package uses `WiiCompiled.exe`.
-3. Select your `R2VE01` Wii disc image. ISO and WBFS imports need your own raw 16-byte Wii common key file. RVZ and GCZ also need an installed [DolphinTool](https://github.com/dolphin-emu/dolphin#dolphintool-usage). An extracted folder with `sys/` and `files/` can be prepared without a key.
+3. Select your `R2VE01` Wii disc image. Disc image imports need your own raw 16-byte Wii common key file. RVZ and GCZ are read directly. An extracted folder with `sys/` and `files/` can be prepared without a key.
 
 The importer prepares the stage modules on first setup and leaves the key out of the game data folder. See [Wii setup](docs/WII-SETUP.md) for supported inputs and command-line examples.
 
 ### RecompLauncher
 
-The repository includes a [RecompLauncher manifest](recomplauncher.json). For launcher-managed disc-image import, set `SIN_WII_KEY_FILE` to your key file path before opening [RecompLauncher](https://recomplauncher.com/). Set `SIN_DOLPHIN_TOOL` for RVZ/GCZ where the launcher exposes those formats. The [launcher integration notes](docs/RECOMPLAUNCHER-AUDIT.md) explain packaging and validation.
+The repository includes a [RecompLauncher manifest](recomplauncher.json). For launcher-managed disc-image import, set `SIN_WII_KEY_FILE` to your key file path before opening [RecompLauncher](https://recomplauncher.com/). The [launcher integration notes](docs/RECOMPLAUNCHER-AUDIT.md) explain packaging and validation.
 
 ## Controls
 
