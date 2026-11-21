@@ -28,6 +28,7 @@ add_library(aurora_gx STATIC
         ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/attr_fmt.cpp
         ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/command_processor.cpp
         ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/frame_interpolation.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/native_scene.cpp
         ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/regs.cpp
         ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/dl.cpp
         ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/fifo.cpp
@@ -76,5 +77,6 @@ endif ()
 # Frame interpolation's NaN/Inf guards are load-bearing; never let finite-math assumptions fold them.
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../lib/gx/frame_interpolation.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/../lib/gx/native_scene.cpp
       PROPERTIES COMPILE_OPTIONS "-fno-finite-math-only")
 endif ()

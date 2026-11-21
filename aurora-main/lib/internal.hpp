@@ -306,6 +306,12 @@ public:
     m_length += size;
   }
 
+  // Caller must initialize the entire appended range before exposing it.
+  void append_uninitialized(size_t size) {
+    resize(m_length + size, false);
+    m_length += size;
+  }
+
   void release() {
     if (m_data != nullptr && m_owned) {
       free(m_data);

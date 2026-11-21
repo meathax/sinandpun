@@ -1439,16 +1439,6 @@ void OpenUserDataFolder() {
 
 void BuildSystemPage(ListView& v) {
     SystemSettings::Values sys = SystemSettings::Get();
-    v.Section("Startup");
-    static constexpr const char* kCoverLabels[] = {"Automatic", "Skip", "Wait for a button"};
-    int cover = static_cast<int>(sys.startupCover);
-    if (v.Choice("Startup screen", &cover, kCoverLabels, 3, 0,
-                 "The black cover hides the first seconds while shaders build. It always waits for shaders.",
-                 game_ui::kRowNextLaunch) & kChanged) {
-        sys.startupCover = static_cast<SystemSettings::StartupCover>(cover);
-        SystemSettings::Set(sys);
-        SystemSettings::Save();
-    }
 
     v.Section("Files");
     v.Info("Config", RuntimeConfigFile::PathToUtf8(RuntimeConfigFile::ResolveConfigPath()), game_ui::kTextNormal, true);
@@ -2236,9 +2226,8 @@ void Draw() noexcept {
 }
 
 bool StartupScreenVisible() noexcept {
-    return !g_strapInputAccepted.load(std::memory_order_acquire) ||
-           !g_bootShadersReady.load(std::memory_order_acquire) ||
-           g_presentedFrame < g_startupDismissFrame.load(std::memory_order_relaxed);
+    // Show the game's output immediately; no host splash or startup input gate.
+    return false;
 }
 
 void NotifyStrapInputAccepted() noexcept {

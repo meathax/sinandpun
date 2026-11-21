@@ -572,6 +572,7 @@ void enqueue_op(FramePacket& frame, uint32_t opIndex) {
         op.readbackTask == nullptr) {
       return;
     }
+    if (op.encoderTask || op.readbackTask) render_worker::clear_idle_render();
     encode_op(packet->encoder, *packet, op);
   });
 }
@@ -647,6 +648,7 @@ RecordedFrame end_recording() {
 }
 
 void shutdown_recording() {
+  clear_scene_texture_pool();
   for (auto& pool : g_passSnapshotPools) {
     pool = {};
   }
@@ -1383,6 +1385,19 @@ const uint8_t* uniform_data(const Range& range) noexcept {
 }
 
 const uint8_t* vertex_data(const Range& range) noexcept { return current_frame_packet().verts.data() + range.offset; }
+
+Range reserve_scene_storage(size_t length) {
+  if (!g_recorder.active()) return {};
+  auto& storage = current_frame_packet().storage;
+  if (!storage.owned() && storage.size() + length + 256 > storage.capacity()) return {};
+  const size_t aligned = AURORA_ALIGN(storage.size(), 256);
+  storage.append_zeroes(aligned-storage.size());
+  storage.append_uninitialized(length);
+  return {static_cast<uint32_t>(aligned), static_cast<uint32_t>(length)};
+}
+uint8_t* scene_storage_data(Range range) {
+  return current_frame_packet().storage.data() + range.offset;
+}
 
 Range push_storage(const uint8_t* data, size_t length) {
   ZoneScoped;

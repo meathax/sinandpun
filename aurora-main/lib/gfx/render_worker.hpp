@@ -75,6 +75,10 @@ private:
   std::vector<bool> m_freeSlots;
 };
 
+// Worker-owned scene renderer. Retired before GPU submission changes its resources.
+void set_idle_render(WorkCallback render, WorkCallback release);
+void clear_idle_render();
+void request_idle_retire();
 void initialize();
 void shutdown();
 

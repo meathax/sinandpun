@@ -1,5 +1,6 @@
 #include "pipeline.hpp"
 #include "frame_interpolation.hpp"
+#include "native_scene.hpp"
 
 #include "../gfx/encoding.hpp"
 #include "../gfx/recording.hpp"
@@ -65,7 +66,12 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
     return;
   }
   const auto& resources = gfx::detail::resources();
-  pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData));
+  auto immediates = data.immediateData;
+  if (g_nativeSceneWeight >= 0.f && data.scene && data.scene->base != 0) {
+    immediates._pad = data.scene->base;
+    immediates.currentPnMtx |= static_cast<uint32_t>(std::clamp(g_nativeSceneWeight, 0.f, 1.f) * 16777215.f) << 8;
+  }
+  pass.SetImmediates(0, &immediates, sizeof(immediates));
   uint32_t uniformOffset = data.uniformRange.offset;
   if (const int slot = g_interpolationEncodeSlot; slot >= 0 && data.interpUniformBase != UINT32_MAX) {
     uniformOffset = data.interpUniformBase + static_cast<uint32_t>(slot) * gfx::align_uniform(data.uniformRange.size);

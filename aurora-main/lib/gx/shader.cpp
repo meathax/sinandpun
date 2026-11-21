@@ -617,7 +617,7 @@ std::string vtx_attr(const ShaderConfig& config, GXAttr attr) {
 
   if (type == GX_NONE) {
     if (attr == GX_VA_PNMTXIDX) {
-      return "imm.current_pnmtx";
+      return "(imm.current_pnmtx & 255u)";
     }
 
     if (attr == GX_VA_NRM) {
@@ -1101,7 +1101,8 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
           "\n    let in_vidx = iidx;"
           "\n    let in_pos = {};"
           "\n    let in_pnmtxidx = {};"
-          "\n    let mv_pos = vec4f(in_pos, 1.0) * ubuf.postex_mtx[in_pnmtxidx];",
+          "\n    var mv_pos = vec4f(in_pos, 1.0) * ubuf.postex_mtx[in_pnmtxidx];"
+          "\n    if (imm._pad != 0u) {{ mv_pos = scene_vec3(in_vidx, 8u); }}",
           attr_load(config, GX_VA_POS, "in_vidx"sv), attr_load(config, GX_VA_PNMTXIDX, "in_vidx"sv));
     } else {
       // GX_LINES / GX_LINESTRIP: each instance = two vertices, expand to quad
@@ -1118,7 +1119,8 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
           "\n    let in_pnmtxidx = select(pnmtxidx_a, pnmtxidx_b, use_b);"
           "\n    let mv_pos_a = vec4f(pos_a, 1.0) * ubuf.postex_mtx[pnmtxidx_a];"
           "\n    let mv_pos_b = vec4f(pos_b, 1.0) * ubuf.postex_mtx[pnmtxidx_b];"
-          "\n    let mv_pos = select(mv_pos_a, mv_pos_b, use_b);",
+          "\n    var mv_pos = select(mv_pos_a, mv_pos_b, use_b);"
+          "\n    if (imm._pad != 0u) {{ mv_pos = scene_vec3(in_vidx, 8u); }}",
           config.lineMode == 1 ? 2 : 1, attr_load(config, GX_VA_POS, "vidx_a"sv),
           attr_load(config, GX_VA_POS, "vidx_b"sv), attr_load(config, GX_VA_PNMTXIDX, "vidx_a"sv),
           attr_load(config, GX_VA_PNMTXIDX, "vidx_b"sv));
@@ -1126,7 +1128,7 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
 
     vidxAttr = "in_vidx"sv;
   } else if (config.attrs[GX_VA_PNMTXIDX].attrType == GX_NONE) {
-    vtxXfrAttrsPre += "\n    let in_pnmtxidx = imm.current_pnmtx;";
+    vtxXfrAttrsPre += "\n    let in_pnmtxidx = imm.current_pnmtx & 255u;";
   }
 
   // Load vertex attributes
@@ -1168,13 +1170,15 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
 
   if (config.lineMode == 0) {
     vtxXfrAttrsPre += fmt::format(
-        "\n    let mv_pos = vec4f({}, 1.0) * ubuf.postex_mtx[in_pnmtxidx];"
-        "\n    out.pos = vec4f(mv_pos, 1.0) * ubuf.proj;",
+        "\n    var mv_pos = vec4f({}, 1.0) * ubuf.postex_mtx[in_pnmtxidx];"
+        "\n    out.pos = vec4f(mv_pos, 1.0) * ubuf.proj;"
+        "\n    if (imm._pad != 0u) {{ mv_pos = scene_vec3(vidx, 8u); out.pos = scene_clip(vidx); }}",
         vtx_attr(config, GX_VA_POS));
   } else if (config.lineMode == 3) {
     // GX_POINTS: expand single vertex to axis-aligned screen-space square
     vtxXfrAttrsPre +=
-        "\n    let clip = vec4f(mv_pos, 1.0) * ubuf.proj;"
+        "\n    var clip = vec4f(mv_pos, 1.0) * ubuf.proj;"
+        "\n    if (imm._pad != 0u) { clip = scene_clip(in_vidx); }"
         "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
         "\n    let point_size = ubuf.line_width * min(viewport_scale.x, viewport_scale.y);"
         "\n    let x_sign = select(-1.0, 1.0, (vidx & 1u) != 0u);"
@@ -1185,8 +1189,9 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
   } else {
     // GX_LINES / GX_LINESTRIP: expand line segment perpendicular to direction
     vtxXfrAttrsPre +=
-        "\n    let clip_a = vec4f(mv_pos_a, 1.0) * ubuf.proj;"
-        "\n    let clip_b = vec4f(mv_pos_b, 1.0) * ubuf.proj;"
+        "\n    var clip_a = vec4f(mv_pos_a, 1.0) * ubuf.proj;"
+        "\n    var clip_b = vec4f(mv_pos_b, 1.0) * ubuf.proj;"
+        "\n    if (imm._pad != 0u) { clip_a = scene_clip(vidx_a); clip_b = scene_clip(vidx_b); }"
         "\n    let ndc_a = clip_a.xy / clip_a.w;"
         "\n    let ndc_b = clip_b.xy / clip_b.w;"
         "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
@@ -1201,9 +1206,10 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
   }
 
   vtxXfrAttrsPre += fmt::format(
-      "\n    let nrm_tmp = vec4f({}, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
+      "\n    var nrm_tmp = vec4f({0}, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
+      "\n    if (imm._pad != 0u) {{ nrm_tmp = scene_vec3({1}, 14u); }}"
       "\n    let mv_nrm = select(nrm_tmp, normalize(nrm_tmp), dot(nrm_tmp, nrm_tmp) > 1e-10);",
-      vtx_attr(config, GX_VA_NRM));
+      vtx_attr(config, GX_VA_NRM), vidxAttr);
   const bool useNormalTarget = normalAttachment != UINT32_MAX && config.attrs[GX_VA_NRM].attrType != GX_NONE;
   if ((useNormalTarget && !info.lightingEnabled) || EnableNormalVisualization) {
     vtxOutAttrs += fmt::format("\n    @location({}) mv_nrm: vec3f,", vtxOutIdx++);
@@ -2288,6 +2294,20 @@ var<storage, read> vbuf: array<u32>;
 var<storage, read> abuf: array<u32>;
 @group(1) @binding(0)
 var<uniform> ubuf: Uniform;{1}
+
+fn scene_mix(vidx: u32, component: u32, width: u32) -> f32 {{
+    let base = abuf[imm._pad - 1u + vidx] + component;
+    let a = bitcast<f32>(abuf[base]);
+    let b = bitcast<f32>(abuf[base + width]);
+    let t = f32(imm.current_pnmtx >> 8u) / 16777215.0;
+    return a + (b - a) * t;
+}}
+fn scene_vec3(vidx: u32, component: u32) -> vec3f {{
+    return vec3f(scene_mix(vidx, component, 3u), scene_mix(vidx, component+1u, 3u), scene_mix(vidx, component+2u, 3u));
+}}
+fn scene_clip(vidx: u32) -> vec4f {{
+    return vec4f(scene_mix(vidx, 0u, 4u), scene_mix(vidx, 1u, 4u), scene_mix(vidx, 2u, 4u), scene_mix(vidx, 3u, 4u));
+}}
 
 struct VertexOutput {{
     @builtin(position) pos: vec4f,{2}

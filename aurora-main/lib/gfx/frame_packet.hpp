@@ -200,7 +200,14 @@ struct FrameOp {
 
 using RenderPassList = std::deque<RenderPass>;
 
+struct SceneTextureState {
+  wgpu::Texture texture, before, after;
+};
+
 struct FramePacket {
+  std::vector<SceneTextureState> sceneTextures;
+  bool sceneTexturesReady = true;
+  bool sceneAfterCaptured = false;
   RenderPassList renderPasses;
   std::deque<TextureCopy> textureCopies;
   std::deque<EncoderTask> encoderTasks;

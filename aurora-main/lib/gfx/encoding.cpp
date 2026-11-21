@@ -10,6 +10,7 @@
 #include "tex_palette_conv.hpp"
 #include "../gx/gx.hpp"
 #include "../gx/pipeline.hpp"
+#include "../gx/native_scene.hpp"
 #ifdef AURORA_ENABLE_RMLUI
 #include "../rmlui/pipeline.hpp"
 #endif
@@ -24,6 +25,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 
 #include <tracy/Tracy.hpp>
 
@@ -199,7 +201,7 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
 #endif
 }
 
-void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo, uint32_t passIndex) {
+void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo, uint32_t passIndex, bool renderOnly = false) {
   ZoneScoped;
   if (!passInfo.sealed) {
     return;
@@ -263,7 +265,7 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
   render_pass(pass, frame, passInfo);
   pass.End();
 
-  if (passInfo.captureDepthSnapshot) {
+  if (passInfo.captureDepthSnapshot && !renderOnly) {
     depth_peek::encode_frame_snapshot(cmd, passInfo.copySourceDepthView,
         passInfo.colorAttachments[SceneColorAttachmentIndex].size, passInfo.msaaSamples);
   }
@@ -425,6 +427,54 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
 } // namespace
 
 namespace detail {
+namespace {
+std::unordered_map<size_t, std::vector<SceneTextureState>> sceneTexturePools;
+void copy_scene_texture(wgpu::CommandEncoder& cmd, const wgpu::Texture& srcTexture, const wgpu::Texture& dstTexture) {
+  for (uint32_t mip=0; mip<srcTexture.GetMipLevelCount(); ++mip) {
+    const wgpu::TexelCopyTextureInfo src{.texture=srcTexture,.mipLevel=mip};
+    const wgpu::TexelCopyTextureInfo dst{.texture=dstTexture,.mipLevel=mip};
+    const wgpu::Extent3D extent{std::max(1u,srcTexture.GetWidth()>>mip),std::max(1u,srcTexture.GetHeight()>>mip),srcTexture.GetDepthOrArrayLayers()};
+    cmd.CopyTextureToTexture(&src,&dst,&extent);
+  }
+}
+void capture_scene_texture_before(wgpu::CommandEncoder& cmd, FramePacket& frame, const wgpu::Texture& texture) {
+  if (!texture || !gx::native_scene_enabled()) return;
+  for (const auto& state : frame.sceneTextures) if (state.texture.Get()==texture.Get()) return;
+  const wgpu::TextureUsage required=wgpu::TextureUsage::CopySrc|wgpu::TextureUsage::CopyDst;
+  if (!static_cast<bool>(texture.GetUsage()&wgpu::TextureUsage::CopySrc) || !static_cast<bool>(texture.GetUsage()&wgpu::TextureUsage::CopyDst) || texture.GetSampleCount()!=1 || texture.GetDimension()!=wgpu::TextureDimension::e2D) {
+    static unsigned warnings=0;
+    if(warnings++<8) std::fprintf(stderr,"[scene-texture] unsupported snapshot %ux%u usage=%u samples=%u dimension=%u format=%u\n",texture.GetWidth(),texture.GetHeight(),unsigned(texture.GetUsage()),texture.GetSampleCount(),unsigned(texture.GetDimension()),unsigned(texture.GetFormat()));
+    frame.sceneTexturesReady=false;
+    return;
+  }
+  auto& pool=sceneTexturePools[frame.stagingBuffer];
+  const size_t index=frame.sceneTextures.size();
+  if (pool.size()<=index) pool.resize(index+1);
+  auto& cached=pool[index];
+  if (!cached.before || cached.before.GetWidth()!=texture.GetWidth() || cached.before.GetHeight()!=texture.GetHeight() ||
+      cached.before.GetFormat()!=texture.GetFormat() || cached.before.GetMipLevelCount()!=texture.GetMipLevelCount() ||
+      cached.before.GetDepthOrArrayLayers()!=texture.GetDepthOrArrayLayers()) {
+    const wgpu::TextureDescriptor desc{
+      .label="Immutable scene texture state", .usage=required, .dimension=wgpu::TextureDimension::e2D,
+      .size={texture.GetWidth(),texture.GetHeight(),texture.GetDepthOrArrayLayers()}, .format=texture.GetFormat(),
+      .mipLevelCount=texture.GetMipLevelCount(), .sampleCount=1,
+    };
+    cached.before=g_device.CreateTexture(&desc); cached.after=g_device.CreateTexture(&desc);
+  }
+  cached.texture=texture;
+  frame.sceneTextures.push_back(cached);
+  copy_scene_texture(cmd,texture,cached.before);
+}
+}
+void clear_scene_texture_pool() { sceneTexturePools.clear(); }
+void capture_scene_texture_after(wgpu::CommandEncoder& cmd, FramePacket& frame) {
+  for (const auto& state : frame.sceneTextures) copy_scene_texture(cmd,state.texture,state.after);
+  frame.sceneAfterCaptured=true;
+}
+void restore_scene_textures(wgpu::CommandEncoder& cmd, FramePacket& frame, bool after) {
+  if (after && !frame.sceneAfterCaptured) return;
+  for (const auto& state : frame.sceneTextures) copy_scene_texture(cmd,after?state.after:state.before,state.texture);
+}
 // Copies everything the frame staged into the device buffers, independent of what the
 // incrementally encoded native frame has copied so far.
 void encode_full_staging_copy(wgpu::CommandEncoder& cmd, FramePacket& frame) {
@@ -456,7 +506,7 @@ void encode_replay_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const Frame
   switch (op.type) {
   case FrameOpType::RenderPass:
     if (op.renderPass != nullptr) {
-      render(cmd, frame, *op.renderPass, op.index);
+      render(cmd, frame, *op.renderPass, op.index, true);
     }
     break;
   case FrameOpType::TextureCopy:
@@ -471,6 +521,9 @@ void encode_replay_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const Frame
 
 void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op) {
   copy_staging_to_high_water(cmd, frame, op);
+  if (op.renderPass && op.renderPass->resolveTarget)
+    capture_scene_texture_before(cmd,frame,op.renderPass->resolveTarget->texture);
+  if (op.textureCopy) capture_scene_texture_before(cmd,frame,op.textureCopy->dst.texture);
   switch (op.type) {
   case FrameOpType::RenderPass:
     if (op.renderPass != nullptr) {

@@ -1,4 +1,5 @@
 #include "render_worker.hpp"
+#include "presentation.hpp"
 
 #include "../thread.hpp"
 
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <utility>
 
 #include <tracy/Tracy.hpp>
 
@@ -17,6 +19,8 @@ constexpr size_t QueueCapacity = 256;
 constexpr auto IdlePumpInterval = std::chrono::milliseconds{1};
 
 BoundedQueue g_queue{QueueCapacity};
+WorkCallback g_idleRender, g_idleRelease;
+std::atomic_bool g_retireIdle=false;
 thread::Thread g_thread;
 std::atomic_bool g_running = false;
 std::atomic_size_t g_pendingItems = 0;
@@ -83,15 +87,27 @@ void worker_main(std::stop_token token) {
   g_workerThreadId = std::this_thread::get_id();
 
   while (true) {
+    if(g_retireIdle.exchange(false,std::memory_order_acq_rel)) clear_idle_render();
     bool closed = false;
-    auto item = g_queue.pop_for(IdlePumpInterval, closed);
+    const bool sceneReady = g_idleRender && presentation::native_surface_ready();
+    auto item = g_queue.pop_for(sceneReady ? std::chrono::milliseconds{0} : IdlePumpInterval, closed);
     if (!item) {
       if (closed || token.stop_requested()) {
         break;
       }
+      if (g_idleRender && presentation::native_surface_ready()) {
+        const auto start = std::chrono::steady_clock::now();
+        g_idleRender();
+        if (g_profile) profile_item(ItemType::Shutdown, std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count());
+      }
       continue;
     }
 
+    // Encoding records commands; it does not change GPU resources. Keep the
+    // last complete scene renderable while the producer records the next one.
+    // Retire it before submission or an explicitly synchronous GPU operation.
+    if (item->type == ItemType::EndFrame ||
+        item->type == ItemType::Shutdown || (item->type == ItemType::Sync && item->work)) clear_idle_render();
     if (item->work) {
       ZoneScopedN("QueueItem work");
       if (g_profile) {
@@ -109,6 +125,7 @@ void worker_main(std::stop_token token) {
     }
   }
 
+  clear_idle_render();
   g_workerThreadId = {};
 }
 
@@ -242,6 +259,18 @@ void FrameSlotPool::reset() {
 size_t FrameSlotPool::free_count() const {
   std::lock_guard lock{m_mutex};
   return static_cast<size_t>(std::ranges::count(m_freeSlots, true));
+}
+
+void clear_idle_render() {
+  g_idleRender = {};
+  auto release = std::exchange(g_idleRelease, {});
+  if (release) release();
+}
+void request_idle_retire() { g_retireIdle.store(true,std::memory_order_release); }
+void set_idle_render(WorkCallback render, WorkCallback release) {
+  clear_idle_render();
+  g_idleRelease = std::move(release);
+  g_idleRender = std::move(render);
 }
 
 void initialize() {

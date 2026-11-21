@@ -1441,6 +1441,7 @@ void shutdown() {
 }
 
 void release_surface() noexcept {
+  const gfx::presentation::SurfaceAcquirePause pause;
   gfx::gpu_synchronize();
   bool released = false;
   {
@@ -1493,6 +1494,7 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t 
 }
 
 bool refresh_surface(bool recreate) {
+  const gfx::presentation::SurfaceAcquirePause pause;
   gfx::gpu_synchronize();
   if (!g_instance || !g_device) {
     return false;
@@ -1529,6 +1531,7 @@ bool refresh_surface(bool recreate) {
 }
 
 void resize_swapchain(uint32_t width, uint32_t height, uint32_t nativeWidth, uint32_t nativeHeight, bool force) {
+  const gfx::presentation::SurfaceAcquirePause pause;
   gfx::gpu_synchronize();
   resize_swapchain_internal(width, height, nativeWidth, nativeHeight, force);
 }

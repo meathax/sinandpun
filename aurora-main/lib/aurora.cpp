@@ -647,7 +647,10 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
                      const gfx::InterpolationReplay& replay) {
     const auto presentMode = webgpu::g_graphicsConfig.surfaceConfiguration.presentMode;
     const bool blockingPresent = presentMode == wgpu::PresentMode::Fifo || presentMode == wgpu::PresentMode::FifoRelaxed;
+    if (replay.nativeUncapped) gfx::presentation::request_native_surface();
     const auto present = [&](wgpu::CommandEncoder& encoder, bool finalPresent, bool show) {
+      const uint64_t phaseStart = gfx::presentation::now_nanos();
+      uint64_t acquireNanos=0, submitNanos=0, presentNanos=0;
       if (show && blockingPresent) {
         const wgpu::CommandBufferDescriptor sceneDescriptor{.label = "Scene command buffer"};
         const auto sceneCommands = encoder.Finish(&sceneDescriptor);
@@ -659,22 +662,37 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
 
       wgpu::Texture currentTexture;
       wgpu::TextureView currentView;
+      wgpu::Surface presentSurface;
+      bool acquiredAsync=false;
       auto surfaceStatus = wgpu::SurfaceGetCurrentTextureStatus::Error;
       uint64_t surfaceWaitNanos = 0;
       if (show) {
-        window::SurfaceLock surfaceLock;
-
-        if (window::is_presentable() && g_surface) {
+        auto acquired=gfx::presentation::take_native_surface(!replay.nativeUncapped);
+        if (acquired) {
+          acquiredAsync=true;
+          presentSurface=std::move(acquired->surface);
+          surfaceWaitNanos=acquireNanos=acquired->waitedNanos;
+          surfaceStatus=acquired->texture.status;
+          if(surfaceStatus==wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal && acquired->texture.texture) {
+            currentTexture=std::move(acquired->texture.texture);
+            currentView=currentTexture.CreateView();
+          }
+        } else if (!replay.nativeUncapped) {
+          window::SurfaceLock surfaceLock;
+          if (window::is_presentable() && g_surface) {
           ZoneScopedN("Acquire texture");
           wgpu::SurfaceTexture surfaceTexture;
           const uint64_t acquireStart = gfx::presentation::now_nanos();
+          presentSurface=g_surface;
           g_surface.GetCurrentTexture(&surfaceTexture);
           surfaceWaitNanos = gfx::presentation::now_nanos() - acquireStart;
+          acquireNanos=surfaceWaitNanos;
           surfaceStatus = surfaceTexture.status;
 
           if (surfaceStatus == wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal) {
             currentTexture = std::move(surfaceTexture.texture);
             currentView = currentTexture.CreateView();
+          }
           }
         }
       }
@@ -706,6 +724,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
           if (!presentBindGroup) {
             const auto& resampledSource = webgpu::resample_present_source(encoder, viewport, presentSource);
             presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
+            gameImage = &resampledSource;
             gameImage = &resampledSource;
           }
           if (gameImage != nullptr && pixelPerfectGui.scene.view && pixelPerfectGui.baseline.view) {
@@ -796,7 +815,9 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
       const auto buffer = encoder.Finish(&cmdBufDescriptor);
       {
         ZoneScopedN("Queue Submit");
+        const uint64_t start=gfx::presentation::now_nanos();
         g_queue.Submit(1, &buffer);
+        submitNanos=gfx::presentation::now_nanos()-start;
       }
       webgpu::upscale::capture_after_submit();
 
@@ -816,8 +837,9 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
 
           if (window::is_presentable()) {
             const uint64_t presentStart = gfx::presentation::now_nanos();
-            status = g_surface.Present();
-            surfaceWaitNanos += gfx::presentation::now_nanos() - presentStart;
+            status = presentSurface.Present();
+            presentNanos=gfx::presentation::now_nanos()-presentStart;
+            surfaceWaitNanos += presentNanos;
           }
         }
         if (blockingPresent) {
@@ -859,6 +881,17 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
           break;
         }
       }
+      if(acquiredAsync) gfx::presentation::finish_native_surface(replay.nativeUncapped);
+      static const bool profile = std::getenv("SIN_RENDER_PROF") != nullptr;
+      if (profile && canPresent) {
+        static uint64_t count=0, acquire=0, submit=0, display=0, total=0;
+        acquire+=acquireNanos; submit+=submitNanos; display+=presentNanos;
+        total+=gfx::presentation::now_nanos()-phaseStart;
+        if (++count==120) {
+          std::fprintf(stderr,"[present-phase] acquire=%.3fms submit=%.3fms present=%.3fms total=%.3fms\n",acquire/120000000.0,submit/120000000.0,display/120000000.0,total/120000000.0);
+          count=acquire=submit=display=total=0;
+        }
+      }
     };
 
     // Interpolated slots replay the frame with blended transforms and present between frames. The
@@ -869,7 +902,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
     const auto& plan = replay.plan;
     const uint32_t slots =
         gfx::presentation::display_shows_interpolation(schedule.intervalNanos) ? std::min(replay.slots, plan.slots) : 0;
-    const bool nativeShown = plan.nativeShown || slots == 0;
+    const bool nativeShown = replay.scenePresentOnly || (!replay.nativeUncapped && (plan.nativeShown || slots == 0));
     const auto deadline = [&](float weight) -> uint64_t {
       if (slots == 0 || schedule.baseNanos == 0 || schedule.intervalNanos == 0) {
         return 0;
@@ -897,7 +930,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
       auto slotEncoder = g_device.CreateCommandEncoder(&slotDescriptor);
       replay.encode(slotEncoder, slot);
       const uint64_t encodeNanos = gfx::presentation::now_nanos() - encodeStart;
-      gfx::presentation::pace_present(due);
+      if (!replay.nativeUncapped) gfx::presentation::pace_present(due);
       const uint64_t presentStart = gfx::presentation::now_nanos();
       present(slotEncoder, false, true);
       gx::report_present_cost(encodeNanos + (gfx::presentation::now_nanos() - presentStart));
@@ -906,12 +939,13 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
     webgpu::dlss::restore_native_jitter();
     if (nativeShown) {
       const uint64_t due = deadline(1.f);
-      gfx::presentation::pace_present(due);
-      present(encoder, true, admit(due));
+      if (!replay.nativeUncapped) gfx::presentation::pace_present(due);
+      present(encoder, !replay.scenePresentOnly, admit(due));
     } else {
       present(encoder, true, false);
     }
 
+    if (replay.scenePresentOnly) return;
     for (auto& callback : afterSubmitCallbacks) {
       if (callback) {
         callback();

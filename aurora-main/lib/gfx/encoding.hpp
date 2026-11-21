@@ -11,6 +11,9 @@ namespace detail {
 void encode_op(wgpu::CommandEncoder& encoder, FramePacket& frame, const FrameOp& op);
 void encode_full_staging_copy(wgpu::CommandEncoder& cmd, FramePacket& frame);
 void encode_replay_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op);
+void capture_scene_texture_after(wgpu::CommandEncoder& cmd, FramePacket& frame);
+void restore_scene_textures(wgpu::CommandEncoder& cmd, FramePacket& frame, bool after);
+void clear_scene_texture_pool();
 }
 
 } // namespace aurora::gfx

@@ -1,4 +1,5 @@
 #include "frame_interpolation.hpp"
+#include "native_scene.hpp"
 
 #include "../internal.hpp"
 #include "aurora/gfx.h"
@@ -373,6 +374,7 @@ double effective_target_fps(uint32_t sampleBudget) noexcept {
 // Lays the next guest frame's present points on a continuous grid of period 60/fps guest frames, so
 // the presented cadence is exactly `fps` whether or not it is a multiple of 60.
 void plan_frame(uint32_t sampleBudget) noexcept {
+  if (native_scene_enabled()) { s_plan = {}; s_plan.nativeShown = true; return; }
   const double fps = effective_target_fps(sampleBudget);
   const double step = 60.0 / fps;
   if (s_gridReset.exchange(false, std::memory_order_acq_rel)) {
@@ -950,6 +952,7 @@ void report_producer_paced(bool paced) noexcept {
 }
 
 void begin_frame_interpolation() noexcept {
+  begin_native_scene();
   const uint32_t targetFps = frame_interpolation_fps();
   if (targetFps != s_previousInterpolationFps) {
     recycle_transform_entries(s_previousFrameTransforms);
@@ -1567,6 +1570,7 @@ uint32_t interpolated_frame_count() noexcept {
 }
 
 void drop_pending_frame_interpolation_uniforms() noexcept {
+  discard_native_scene();
   // Pending tasks hold raw pointers into the mapped uniform staging range, so anything
   // that unmaps or rotates that buffer first has to drop the tasks.
   s_pendingUniformInterpolations.clear();

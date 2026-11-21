@@ -1,5 +1,8 @@
 #include <condition_variable>
 #include "../gx/frame_interpolation.hpp"
+#include "../gx/native_scene.hpp"
+#include "../gx/scene_pose.hpp"
+#include "presentation.hpp"
 #include "encoding.hpp"
 #include "frame.hpp"
 
@@ -20,6 +23,7 @@
 #include "../webgpu/dlss.hpp"
 #include "../webgpu/gpu.hpp"
 #include "../webgpu/gpu_prof.hpp"
+#include "../webgpu/upscale.hpp"
 
 #include <array>
 #include <atomic>
@@ -227,6 +231,8 @@ void wait_for_gpu_progress(std::chrono::nanoseconds sleepDuration) {
 
 void pace_frame_start() {
   ZoneScopedN("Frame start pacing");
+  // Presentation frequency is not the simulation clock in uncapped mode.
+  if (gx::native_scene_enabled()) return;
 
   if (g_frameSlots.free_count() == FrameSlotCount) {
     return;
@@ -611,6 +617,7 @@ void initialize() {
 void shutdown() {
   render_worker::synchronize();
   render_worker::shutdown();
+  presentation::shutdown_native_surface();
   g_processEventsQueued.store(false, std::memory_order_release);
   g_lastPresentNs.store(0, std::memory_order_release);
   g_presentPeriodNs.store(0, std::memory_order_release);
@@ -776,6 +783,8 @@ void end_frame(EndFrameCallback callback) {
     TracyPlot("aurora: cpuFrameTimeMs", cpuFrameTimeMs);
   }
 
+  const bool nativeScene = gx::seal_native_scene();
+  auto sceneOwners = gx::retain_native_scene();
   const auto recorded = end_recording();
   auto& frame = *recorded.packet;
   const size_t frameSlot = recorded.frameSlot;
@@ -794,7 +803,7 @@ void end_frame(EndFrameCallback callback) {
     // Replay is unavailable for this frame: show the native frame alone.
     interpolationPlan.nativeShown = true;
   }
-  render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, interpolationSlots, interpolationPlan,
+  render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, interpolationSlots, interpolationPlan, nativeScene, sceneOwners = std::move(sceneOwners),
                                              callback = std::move(callback)]() mutable {
     auto& packet = g_framePackets[frameSlot];
     g_stagingBuffers[stagingSlot].Unmap();
@@ -804,7 +813,9 @@ void end_frame(EndFrameCallback callback) {
     auto afterSubmitCallbacks = std::move(packet.afterSubmitCallbacks);
     // Slots may be skipped, so the first one actually encoded uploads the staging data.
     bool stagingCopied = false;
+    const bool nativeSceneReady = nativeScene && packet.sceneTexturesReady;
     const InterpolationReplay replay{
+        .nativeUncapped = nativeSceneReady,
         .slots = interpolationSlots,
         .plan = interpolationPlan,
         .encode =
@@ -832,13 +843,63 @@ void end_frame(EndFrameCallback callback) {
     if (callback) {
       callback(encoder, std::move(afterSubmitCallbacks), replay);
     }
-    packet = {};
-
-    g_frameSlots.release(frameSlot);
-    notify_gpu_progress();
-    expire_cached_bind_groups();
-    map_staging_buffer(stagingSlot, true);
-    process_events();
+    const auto releasePacket = [frameSlot, stagingSlot] {
+      auto& retiring=g_framePackets[frameSlot];
+      if (retiring.sceneAfterCaptured && !retiring.sceneTextures.empty()) {
+        auto restore=g_device.CreateCommandEncoder();
+        detail::restore_scene_textures(restore,retiring,true);
+        auto commands=restore.Finish(); g_queue.Submit(1,&commands);
+      }
+      g_framePackets[frameSlot] = {};
+      g_frameSlots.release(frameSlot);
+      notify_gpu_progress();
+      expire_cached_bind_groups();
+      map_staging_buffer(stagingSlot, true);
+      process_events();
+    };
+    if (nativeSceneReady && callback) {
+      // Upload the newly sealed endpoint storage. Native encoding predates seal.
+      const wgpu::CommandEncoderDescriptor uploadDesc{.label="Scene endpoint upload"};
+      auto upload=g_device.CreateCommandEncoder(&uploadDesc);
+      detail::encode_full_staging_copy(upload, packet);
+      detail::capture_scene_texture_after(upload,packet);
+      auto commands=upload.Finish(); g_queue.Submit(1,&commands);
+      const uint64_t anchor = presentation::now_nanos();
+      auto renderScene = [frameSlot, anchor, callback=std::move(callback), sceneOwners=std::move(sceneOwners)]() mutable {
+        const auto sample = [&](float weight, const std::string& capture = {}) {
+          if (!capture.empty()) {
+            presentation::request_native_surface();
+            if (!presentation::wait_native_surface()) return;
+          }
+          const wgpu::CommandEncoderDescriptor desc{.label="Native uncapped scene"};
+          auto cmd=g_device.CreateCommandEncoder(&desc);
+          gx::g_nativeSceneWeight=weight;
+          auto& retained=g_framePackets[frameSlot];
+          detail::restore_scene_textures(cmd,retained,false);
+          for(const auto& op:retained.ops) detail::encode_replay_op(cmd,retained,op);
+          gx::g_nativeSceneWeight=-1.f;
+          if (!capture.empty()) webgpu::upscale::request_capture(capture);
+          InterpolationReplay replay; replay.nativeUncapped=true; replay.scenePresentOnly=true;
+          callback(cmd,{},replay);
+        };
+        // Explicit diagnostic: freeze one retained scene and capture identical
+        // samples twice to detect feedback/state leakage independently of motion.
+        static const char* audit = std::getenv("SIN_SCENE_AUDIT");
+        static const uint64_t auditStart = presentation::now_nanos();
+        static bool audited = false;
+        if (audit && *audit && !audited && presentation::now_nanos()-auditStart > 45000000000ull) {
+          audited = true;
+          sample(-1.f, std::string(audit)+"-native.png");
+          sample(1.f, std::string(audit)+"-end-a.png");
+          sample(1.f, std::string(audit)+"-end-b.png");
+          sample(.5f, std::string(audit)+"-mid-a.png");
+          sample(.5f, std::string(audit)+"-mid-b.png");
+        } else sample(gx::scene_weight(presentation::now_nanos(), anchor, 16666667));
+      };
+      render_worker::set_idle_render(std::move(renderScene), releasePacket);
+    } else {
+      releasePacket();
+    }
   });
 }
 

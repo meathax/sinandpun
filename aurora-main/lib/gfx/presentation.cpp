@@ -20,6 +20,7 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <condition_variable>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -28,6 +29,105 @@
 #endif
 
 namespace aurora::gfx::presentation {
+namespace {
+struct SurfaceAcquirer {
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::thread worker;
+  SurfaceAcquisition result;
+  unsigned paused = 0;
+  bool requested = false, acquiring = false, ready = false, inUse = false, stopping = false;
+  ~SurfaceAcquirer() {
+    { std::lock_guard lock{mutex}; stopping=true; cv.notify_all(); }
+    if(worker.joinable()) worker.join();
+  }
+} surfaceAcquirer;
+
+void acquire_surface_main() {
+  auto& state=surfaceAcquirer;
+  std::unique_lock lock{state.mutex};
+  for (;;) {
+    state.cv.wait(lock,[&]{return state.stopping || state.requested;});
+    if(state.stopping) return;
+    state.requested=false; state.acquiring=true;
+    lock.unlock();
+    SurfaceAcquisition result;
+    result.texture.status=wgpu::SurfaceGetCurrentTextureStatus::Error;
+    const auto start=now_nanos();
+    {
+      window::SurfaceLock surfaceLock;
+      if(window::is_presentable() && webgpu::g_surface) {
+        result.surface=webgpu::g_surface;
+        result.surface.GetCurrentTexture(&result.texture);
+      }
+    }
+    result.waitedNanos=now_nanos()-start;
+    lock.lock();
+    state.result=std::move(result);
+    state.acquiring=false; state.ready=true;
+    state.cv.notify_all();
+  }
+}
+void request_surface_locked(SurfaceAcquirer& state) {
+  if(state.paused || state.stopping || state.requested || state.acquiring || state.ready || state.inUse || !window::is_presentable()) return;
+  if(!state.worker.joinable()) state.worker=std::thread(acquire_surface_main);
+  state.requested=true; state.cv.notify_all();
+}
+}
+void request_native_surface() {
+  auto& state=surfaceAcquirer;
+  std::lock_guard lock{state.mutex};
+  request_surface_locked(state);
+}
+bool native_surface_ready() {
+  auto& state=surfaceAcquirer;
+  std::lock_guard lock{state.mutex};
+  request_surface_locked(state);
+  return !state.paused && state.ready;
+}
+std::optional<SurfaceAcquisition> take_native_surface(bool wait) {
+  auto& state=surfaceAcquirer;
+  std::unique_lock lock{state.mutex};
+  if(wait && (state.requested || state.acquiring))
+    state.cv.wait(lock,[&]{return state.ready || state.paused || state.stopping;});
+  if(!state.ready || state.paused) return {};
+  state.ready=false; state.inUse=true;
+  return std::exchange(state.result,{});
+}
+bool wait_native_surface() {
+  auto& state=surfaceAcquirer;
+  std::unique_lock lock{state.mutex};
+  state.cv.wait(lock,[&]{return state.ready || state.paused || state.stopping;});
+  return state.ready && !state.paused && !state.stopping;
+}
+void finish_native_surface(bool requestNext) {
+  auto& state=surfaceAcquirer;
+  std::lock_guard lock{state.mutex};
+  state.inUse=false;
+  if(requestNext) request_surface_locked(state);
+  state.cv.notify_all();
+}
+SurfaceAcquirePause::SurfaceAcquirePause() {
+  render_worker::request_idle_retire();
+  auto& state=surfaceAcquirer;
+  std::unique_lock lock{state.mutex};
+  ++state.paused; state.requested=false; state.cv.notify_all();
+  state.cv.wait(lock,[&]{return !state.acquiring && (!state.inUse || render_worker::is_worker_thread());});
+  state.result={}; state.ready=false;
+}
+SurfaceAcquirePause::~SurfaceAcquirePause() {
+  auto& state=surfaceAcquirer;
+  std::lock_guard lock{state.mutex};
+  --state.paused; state.cv.notify_all();
+}
+void shutdown_native_surface() {
+  auto& state=surfaceAcquirer;
+  { std::lock_guard lock{state.mutex}; state.stopping=true; state.requested=false; state.cv.notify_all(); }
+  if(state.worker.joinable()) state.worker.join();
+  std::lock_guard lock{state.mutex};
+  state.result={}; state.ready=false; state.inUse=false;
+  state.stopping=false;
+}
 namespace {
 using PresentClock = std::chrono::steady_clock;
 

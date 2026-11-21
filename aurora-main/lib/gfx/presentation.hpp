@@ -4,8 +4,30 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <webgpu/webgpu_cpp.h>
 
 namespace aurora::gfx::presentation {
+struct SurfaceAcquisition {
+  wgpu::Surface surface;
+  wgpu::SurfaceTexture texture;
+  uint64_t waitedNanos = 0;
+};
+// Acquire on a dedicated thread; a display-buffer wait must not block guest GPU
+// completion on the render worker. There is at most one outstanding acquisition.
+void request_native_surface();
+bool native_surface_ready();
+bool wait_native_surface();
+std::optional<SurfaceAcquisition> take_native_surface(bool wait);
+void finish_native_surface(bool requestNext);
+void shutdown_native_surface();
+class SurfaceAcquirePause {
+public:
+  SurfaceAcquirePause();
+  ~SurfaceAcquirePause();
+  SurfaceAcquirePause(const SurfaceAcquirePause&) = delete;
+  SurfaceAcquirePause& operator=(const SurfaceAcquirePause&) = delete;
+};
 // Records a successful surface present. `duplicated` marks a present that repeated the previous
 // image instead of showing new motion.
 void record_present(bool duplicated) noexcept;

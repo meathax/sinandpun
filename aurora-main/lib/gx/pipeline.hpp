@@ -2,6 +2,7 @@
 
 #include "../gfx/pipeline_cache.hpp"
 #include "gx.hpp"
+#include "native_scene.hpp"
 
 namespace aurora::gx {
 struct DrawData {
@@ -12,6 +13,7 @@ struct DrawData {
   gfx::Range uniformRange;
   // First interpolated copy of the uniform block; slot k follows at k aligned block sizes.
   uint32_t interpUniformBase = UINT32_MAX;
+  NativeSceneDraw* scene = nullptr;
   DrawImmediateData immediateData;
   uint32_t vtxCount;
   uint32_t indexCount;
@@ -19,7 +21,7 @@ struct DrawData {
   uint32_t dstAlpha;
 };
 
-constexpr uint32_t GXPipelineConfigVersion = 14;
+constexpr uint32_t GXPipelineConfigVersion = 17;
 struct PipelineConfig {
   uint32_t version = GXPipelineConfigVersion;
   uint32_t msaaSamples = 1; // deprecated

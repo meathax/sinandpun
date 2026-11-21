@@ -5,6 +5,7 @@
 #include "dolphin/gd/GDGeometry.h"
 #include "dolphin/gx/GXAurora.h"
 #include "frame_interpolation.hpp"
+#include "native_scene.hpp"
 #include "gx.hpp"
 #include "pipeline.hpp"
 #include "readback.hpp"
@@ -484,7 +485,7 @@ static u32 calc_vtx_size(GXVtxFmt fmt) noexcept {
 }
 
 static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange, gfx::Range idxRange,
-                         u32 numIndices) noexcept {
+                         u32 numIndices, const uint8_t* sourceVertices) noexcept {
   auto& state = g_gxState;
   auto& cache = sDrawCache;
   const bool pixelPerfectTextures = state.projType == GX_ORTHOGRAPHIC;
@@ -538,7 +539,8 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     }
   }
 
-  const bool interpolate = frame_interpolation_active() && state.projType == GX_PERSPECTIVE;
+  const bool nativeScene = native_scene_enabled() && state.projType == GX_PERSPECTIVE;
+  const bool interpolate = !nativeScene && frame_interpolation_active() && state.projType == GX_PERSPECTIVE;
   const bool indexedMatrices = state.vtxDesc[GX_VA_PNMTXIDX] != GX_NONE;
   bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0;
   // A block holds one interpolated live matrix, so each live matrix gets its own block.
@@ -619,6 +621,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   } else if (prim == GX_POINTS) {
     instanceCount = vtxCount;
   }
+  NativeSceneDraw* scene = nullptr;
+  if (nativeScene) {
+    const size_t projOffset = 16 + (cache.shaderInfo.lineMode != 0 ? 16 : 0);
+    Mat4x4<float> projection;
+    std::memcpy(&projection, gfx::uniform_data(cache.uniformRange) + projOffset, sizeof(projection));
+    const HashType material = xxh3_hash_s(&cache.bindGroups.textureBindGroup, sizeof(cache.bindGroups.textureBindGroup), cache.pipelineRef);
+    scene = record_native_scene(cache.config.shaderConfig, prim, sourceVertices, vtxCount, projection, material);
+  }
   cache.lastDrawFmt = fmt;
   gfx::push_draw_command(DrawData{
       .pipeline = cache.pipelineRef,
@@ -627,6 +637,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
       .idxRange = idxRange,
       .uniformRange = cache.uniformRange,
       .interpUniformBase = cache.interpUniformBase,
+      .scene = scene,
       .immediateData = immediates,
       .vtxCount = vtxCount,
       .indexCount = numIndices,
@@ -635,7 +646,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   });
 }
 
-static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange) noexcept {
+static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange, const uint8_t* sourceVertices) noexcept {
   ZoneScoped;
   u32 numIndices = 0;
   gfx::Range idxRange;
@@ -648,7 +659,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
     idxBuf.clear();
   }
 
-  push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices);
+  push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices, sourceVertices);
 }
 
 static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& reader) noexcept {
@@ -721,6 +732,9 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& 
     } else {
       lastDraw->idxRange.size += idxRange.size;
     }
+    if (lastDraw->scene) {
+      append_native_scene(sDrawCache.config.shaderConfig, vertexData.data(), vtxCount);
+    }
     lastDraw->vtxCount += vtxCount;
     lastDraw->indexCount += numIndices;
     if (sDrawCache.interpRecorded && frame_interpolation_active() && vtxCount != 0) {
@@ -730,7 +744,7 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& 
     return;
   }
 
-  handle_draw_unmerged(prim, fmt, vtxCount, vertRange);
+  handle_draw_unmerged(prim, fmt, vtxCount, vertRange, vertexData.data());
 }
 
 static void handle_draw(u8 cmd, ByteReader& reader) noexcept {
@@ -972,7 +986,7 @@ void handle_aurora(ByteReader& reader) noexcept {
     const auto vertexData = reader.take(totalVtxBytes);
     const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
     if (indexCount != 0) {
-      push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, indexCount);
+      push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, indexCount, vertexData.data());
     }
   } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
     auto label = reader.read_string();

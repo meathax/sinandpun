@@ -52,6 +52,8 @@ struct InterpolationPlan {
 };
 // Re-encodes the frame for interpolated presentation slot `slot` into `cmd`.
 struct InterpolationReplay {
+    bool nativeUncapped = false;
+    bool scenePresentOnly = false;
   uint32_t slots = 0;
   InterpolationPlan plan;
   std::function<void(wgpu::CommandEncoder& cmd, uint32_t slot)> encode;
