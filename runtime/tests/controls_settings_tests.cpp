@@ -135,11 +135,17 @@ int main() {
     CHECK(custom.bindings.pad[1]==AimSettings::LegacyBindings().bindings.pad[1]);
     CHECK(custom.bindings.kbm==AimSettings::DefaultBindings().bindings.kbm);
     auto stored=AimSettings::DefaultBindings();
+    stored.gyro.enabled = true; stored.gyro.activation = 2; stored.gyro.space = 2;
+    stored.gyro.sensitivityX = 17.5f; stored.gyro.sensitivityY = 8.5f;
+    stored.gyro.invertX = true; stored.gyro.invertY = true;
     stored.bindings.pad[0]={InputMap::PadButton(2),InputMap::PadAxis(5,1),InputMap::PadButton(10)};
     stored.bindings.kbm[0]={InputMap::Key(41),InputMap::MouseButton(5),InputMap::MouseButton(InputMap::kMouseWheelUp)};
     stored.bindings.pad[1]={};stored.bindings.kbm[1]={};
     AimSettings::Set(stored);CHECK(AimSettings::Save());
     const auto remapped=Load();
+    CHECK(remapped.gyro.enabled && remapped.gyro.activation == 2 && remapped.gyro.space == 2);
+    CHECK(remapped.gyro.sensitivityX == 17.5f && remapped.gyro.sensitivityY == 8.5f);
+    CHECK(remapped.gyro.invertX && remapped.gyro.invertY);
     CHECK(remapped.bindings.pad==stored.bindings.pad);
     CHECK(remapped.bindings.kbm==stored.bindings.kbm);
     std::filesystem::remove(RuntimeConfigFile::ResolveConfigPath());

@@ -1,6 +1,7 @@
 // Unit tests for the pure controls logic: dual_analog.h and input_map.h (no SDL, no aim_settings.h).
 // Standalone: clang++ -std=c++20 -I runtime/include runtime/tests/controls_tests.cpp -o controls_tests && ./controls_tests
 
+#include "gyro_aim.h"
 #include "dual_analog.h"
 #include "input_map.h"
 
@@ -554,6 +555,25 @@ static void TestDefaultBindings() {
 }
 
 int main() {
+    {
+        GyroAim::Config c; c.space = 1; c.sensitivityX = c.sensitivityY = 1.f;
+        GyroAim::Motion motion;
+        motion.fusion.SetCalibrationMode(GamepadMotionHelpers::CalibrationMode::Manual);
+        motion.Sample(1000000000, 0, 1, 0, c, true);
+        motion.Sample(1010000000, 0, 1, 0, c, true);
+        float x, y; motion.Consume(x, y);
+        CHECK(std::fabs(x + 0.5729578f) < 0.001f && y == 0);
+        motion.Consume(x, y); CHECK(x == 0 && y == 0);
+        motion.Sample(2010000000, 0, 1, 0, c, true);
+        motion.Consume(x, y); CHECK(x == 0 && y == 0);
+        motion.Sample(2020000000, 0, 1, 0, c, false);
+        motion.Consume(x, y); CHECK(x == 0 && y == 0);
+        c.invertX = true;
+        motion.Sample(2030000000, 0, 1, 0, c, true);
+        motion.Consume(x, y); CHECK(std::fabs(x - 0.5729578f) < 0.001f);
+        motion.Clear(); motion.Consume(x, y); CHECK(x == 0 && y == 0);
+    }
+
     TestSchemeModeParsing();
     TestSense();
     TestSchemeArbitration();

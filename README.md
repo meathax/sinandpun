@@ -68,6 +68,7 @@ The one intentional gameplay change is modern controller support:
 
 - left stick: Nunchuk movement;
 - right stick: Wii Remote pointer aiming;
+- optional calibrated controller gyro aiming with player-space axes, sensitivity, inversion and hold-to-aim/pause ([setup](docs/GYRO-AIMING.md));
 - normal gamepad triggers, bumpers and face buttons;
 - absolute or relative mouse aiming;
 - keyboard/mouse bindings;

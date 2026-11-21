@@ -28,6 +28,11 @@ constexpr Uint64 kWheelPulseMs = 120;
 
 struct State {
     std::mutex mutex;
+    GyroAim::Motion gyro;
+    GyroAim::Config gyroConfig;
+    SDL_JoystickID gyroPad = 0;
+    bool gyroReady = false, gyroBlocked = true, gyroActive = false;
+    Uint64 gyroReceived = 0;
     bool focused = true;
     bool relative = false;
     std::bitset<512> keys;
@@ -110,6 +115,7 @@ float AxisValue(SDL_Gamepad* pad, int axis) {
 }
 
 void ClearInputLocked(State& g) {
+    g.gyro.Clear();
     g.keys.reset();
     g.mouseButtons = 0;
     g.mouse.valid = false;
@@ -143,6 +149,22 @@ void HandleSdlEvent(const SDL_Event& event) {
     State& g = G();
     std::lock_guard<std::mutex> lock(g.mutex);
     switch (event.type) {
+    case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+        if (g.gyroReady && event.gsensor.which == g.gyroPad && g.focused) {
+            const auto& s = event.gsensor;
+            if (s.sensor == SDL_SENSOR_ACCEL) g.gyro.Accel(s.data[0], s.data[1], s.data[2]);
+            if (s.sensor == SDL_SENSOR_GYRO) {
+                g.gyroReceived = SDL_GetTicks();
+                g.gyro.Sample(s.sensor_timestamp, s.data[0], s.data[1], s.data[2], g.gyroConfig,
+                              !g.gyroBlocked && !g.capturing && g.gyroActive);
+            }
+        }
+        break;
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        if (event.gdevice.which == g.gyroPad) {
+            g.gyroPad = 0; g.gyroReady = false; g.gyro.Reset();
+        }
+        break;
     case SDL_EVENT_KEY_DOWN: {
         const int code = static_cast<int>(event.key.scancode);
         if (code > 0 && code < 512) {
@@ -273,6 +295,29 @@ void ConsumeMouseDelta(float& dx, float& dy) {
     g.dx = g.dy = 0.f;
 }
 
+void ConsumeGyroDelta(float& dx, float& dy) {
+    State& g = G();
+    std::lock_guard<std::mutex> lock(g.mutex);
+    if (!g.focused || g.gyroBlocked || g.capturing || !g.gyroReady ||
+        SDL_GetTicks() - g.gyroReceived > 100) g.gyro.Clear();
+    g.gyro.Consume(dx, dy);
+}
+
+void CalibrateGyro() {
+    State& g = G();
+    std::lock_guard<std::mutex> lock(g.mutex);
+    g.gyro.Reset();
+}
+
+const char* GyroStatus() {
+    State& g = G();
+    std::lock_guard<std::mutex> lock(g.mutex);
+    if (!g.gyroConfig.enabled) return "Off";
+    if (!g.gyroReady) return "No supported gyro controller";
+    if (!g.gyroReceived || SDL_GetTicks() - g.gyroReceived > 1000) return "Waiting for motion sensor data";
+    return "Sensors active - rest controller to calibrate";
+}
+
 namespace {
 
 void PublishScheme(const AimSettings::Settings& settings, InputMap::Scheme scheme, const char* why, bool log) {
@@ -294,7 +339,7 @@ void TickScheme() {
     static const bool scripted = std::getenv("SIN_VREMOTE_SCRIPT") != nullptr;
     // A scripted run drives the remote itself: Automatic must not swap the extension under it.
     const InputMap::SchemeMode mode =
-        (scripted && settings.schemeMode == InputMap::SchemeMode::Auto) ? InputMap::SchemeMode::Pointer : settings.schemeMode;
+        (settings.gyro.enabled || (scripted && settings.schemeMode == InputMap::SchemeMode::Auto)) ? InputMap::SchemeMode::Pointer : settings.schemeMode;
     Published& pub = Pub();
     const Uint64 now = SDL_GetTicks();
 
@@ -375,7 +420,40 @@ SchemeNotice LatestSwitch() {
 void UpdateWindowState(bool inputBlocked) {
     VirtualMouse::Tick();
     State& g = G();
-    const AimSettings::MouseConfig mouse = AimSettings::Get().mouse;
+    const auto settings = AimSettings::Get();
+    const AimSettings::MouseConfig mouse = settings.mouse;
+    const auto raw = Sample();
+    const bool precision = AimSettings::ActionValue(settings, AimSettings::Action::Precision, raw) > 0.5f;
+    SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
+    const SDL_JoystickID id = pad ? SDL_GetGamepadID(pad) : 0;
+    {
+        std::lock_guard<std::mutex> lock(g.mutex);
+        if (id != g.gyroPad || settings.gyro.enabled != g.gyroConfig.enabled) {
+            // Borrow Aurora's controller; never open/close a competing handle.
+            if (g.gyroPad) {
+                if (auto* previous = SDL_GetGamepadFromID(g.gyroPad)) {
+                    SDL_SetGamepadSensorEnabled(previous, SDL_SENSOR_GYRO, false);
+                    SDL_SetGamepadSensorEnabled(previous, SDL_SENSOR_ACCEL, false);
+                }
+            }
+            g.gyro.Reset(); g.gyroReceived = 0; g.gyroReady = false; g.gyroPad = id;
+            if (pad && settings.gyro.enabled && SDL_GamepadHasSensor(pad, SDL_SENSOR_GYRO) &&
+                SDL_GamepadHasSensor(pad, SDL_SENSOR_ACCEL)) {
+                const bool accel = SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_ACCEL, true);
+                const bool gyro = SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_GYRO, true);
+                g.gyroReady = accel && gyro;
+                if (!g.gyroReady) {
+                    SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_ACCEL, false);
+                    SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_GYRO, false);
+                }
+            }
+        }
+        g.gyroConfig = settings.gyro;
+        g.gyroBlocked = inputBlocked || !g.focused;
+        g.gyroActive = settings.gyro.activation == 0 ||
+            (settings.gyro.activation == 1 ? precision : !precision);
+        if (g.gyroBlocked || !g.gyroActive || g.capturing) g.gyro.Clear();
+    }
     SDL_Window* window = aurora_get_window();
     {
         std::lock_guard<std::mutex> lock(g.mutex);
@@ -392,6 +470,7 @@ void UpdateWindowState(bool inputBlocked) {
 void BeginCapture(InputMap::Profile profile) {
     State& g = G();
     std::lock_guard<std::mutex> lock(g.mutex);
+    g.gyro.Clear();
     g.capturing = true;
     g.captureProfile = profile;
     g.captureResult = {CaptureState::Pending, {}};

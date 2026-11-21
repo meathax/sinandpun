@@ -726,6 +726,8 @@ private:
         classicX = classicY = 0.f;
         float mdx = 0.f, mdy = 0.f;
         AimInput::ConsumeMouseDelta(mdx, mdy);
+        float gdx = 0.f, gdy = 0.f;
+        AimInput::ConsumeGyroDelta(gdx, gdy);
         if (in.blocked) {
             m_arbiter.prevStick = m_arbiter.prevMouse = false;
             m_classicFilter = DualAnalog::StickFilter{};
@@ -748,13 +750,16 @@ private:
             DualAnalog::ClassicStick(m_config, m_classicFilter, sx, sy, dt, in.precision, classicX, classicY);
             return;
         }
-        if (in.recenter && !m_prevRecenter) DualAnalog::Recenter(m_pointer, m_config);
+        if (in.recenter && !m_prevRecenter) {
+            DualAnalog::Recenter(m_pointer, m_config);
+            gdx = gdy = 0.f;
+        }
         m_prevRecenter = in.recenter;
         if (byMouse && mouse.raw) {
             if (mouseMoving) DualAnalog::MouseRelativeStep(m_pointer, m_config, mdx, mdy, mouse.sensitivity);
         } else if (byMouse) {
             const AimInput::MouseSample ms = AimInput::MouseNow();
-            if (ms.valid) {
+            if (ms.valid && (mouseMoving || !m_settings.gyro.enabled)) {
                 const DualAnalog::Rect rect = AimInput::PictureRect(ms);
                 float u = 0.5f, v = 0.5f, tx = m_pointer.x, ty = m_pointer.y;
                 DualAnalog::WindowToNormalized(rect, ms.x, ms.y, u, v);
@@ -764,8 +769,15 @@ private:
             }
         } else {
             // Stick right moves the pointer right, which moves the sensor bar left in the camera.
-            DualAnalog::Advance(m_pointer, m_config, -in.rx, in.ry, dt, in.precision);
+            auto config = m_config;
+            if (m_settings.gyro.enabled) {
+                config.absoluteMode = false;
+                config.recenterOnRelease = false;
+            }
+            DualAnalog::Advance(m_pointer, config, -in.rx, in.ry, dt, in.precision);
         }
+        if (m_settings.gyro.enabled && !in.scripted)
+            DualAnalog::MouseRelativeStep(m_pointer, m_config, gdx, gdy, 1.f);
     }
 
     void PublishDebug(const Input& in, float classicX, float classicY) {

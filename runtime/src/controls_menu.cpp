@@ -321,6 +321,23 @@ void BuildStickShaping(ListView& v, AimSettings::Settings& s, Edit& e) {
 }
 
 void BuildPointerAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
+    v.Section("Gyro aiming");
+    e.Take(v.Toggle("Enable gyro", &s.gyro.enabled, false,
+        "Uses Wii pointer aiming with the right stick. Requires an SDL gyro + accelerometer controller."));
+    static const char* const activation[] = {"Always on", "Hold Precision to aim", "Hold Precision to pause"};
+    static const char* const spaces[] = {"Player space", "Local yaw", "Local roll"};
+    e.Take(v.Choice("Gyro activation", &s.gyro.activation, activation, 3, 0,
+        "Precision is remappable under bindings (default R3)."));
+    e.Take(v.Choice("Gyro axes", &s.gyro.space, spaces, 3, 0,
+        "Player space compensates for how you tilt the controller."));
+    e.Take(v.Slider("Gyro sensitivity X", &s.gyro.sensitivityX, 1.f, 50.f, 0.5f, "%.1f", 12.f,
+        "Pointer pixels per degree of controller rotation."));
+    e.Take(v.Slider("Gyro sensitivity Y", &s.gyro.sensitivityY, 1.f, 50.f, 0.5f, "%.1f", 12.f,
+        "Vertical pointer pixels per degree."));
+    e.Take(v.Toggle("Invert gyro X", &s.gyro.invertX, false, "Reverse horizontal motion."));
+    e.Take(v.Toggle("Invert gyro Y", &s.gyro.invertY, false, "Reverse vertical motion."));
+    if (v.Action("Calibrate gyro", "Calibrate", AimInput::GyroStatus())) AimInput::CalibrateGyro();
+
     DualAnalog::Config& c = s.aim;
     const DualAnalog::Config d{};
     v.Section("Stick pointer (Wii Remote scheme)");

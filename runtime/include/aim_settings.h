@@ -13,6 +13,7 @@
 // Generation().
 
 #include "dual_analog.h"
+#include "gyro_aim.h"
 #include "input_map.h"
 #include "runtime_config.h"
 
@@ -133,6 +134,7 @@ struct Settings {
     bool playStationPrompts = false;  // Xbox One by default; independent of the input scheme
     DualAnalog::Config aim;
     MouseConfig mouse;
+    GyroAim::Config gyro;
     InputMap::Table<kActionCount> bindings;
 };
 
@@ -174,6 +176,11 @@ inline bool KeyBound(const Settings& s, int code) {
 inline void Sanitize(Settings& s) {
     if (s.schemeMode == SchemeMode::Classic) s.scheme = Scheme::Classic;
     else if (s.schemeMode == SchemeMode::Pointer) s.scheme = Scheme::Pointer;
+    if (s.gyro.enabled) s.scheme = Scheme::Pointer;
+    s.gyro.activation = std::clamp(s.gyro.activation, 0, 2);
+    s.gyro.space = std::clamp(s.gyro.space, 0, 2);
+    for (float* value : {&s.gyro.sensitivityX, &s.gyro.sensitivityY})
+        *value = std::isfinite(*value) ? std::clamp(*value, 1.f, 50.f) : 12.f;
     DualAnalog::Sanitize(s.aim);
     MouseConfig& m = s.mouse;
     auto fin = [](float v, float d) { return std::isfinite(v) ? v : d; };
@@ -332,6 +339,13 @@ inline void LoadFromConfig(Settings& s) {
 
     ApplyTestOverrides(s);
 
+    flag("gyro", "enabled", s.gyro.enabled);
+    flag("gyro", "invert_x", s.gyro.invertX);
+    flag("gyro", "invert_y", s.gyro.invertY);
+    if (const auto v = FindValue<int>(d, "gyro", "activation")) s.gyro.activation = *v;
+    if (const auto v = FindValue<int>(d, "gyro", "space")) s.gyro.space = *v;
+    if (const auto v = FindNumber(d, "gyro", "sensitivity_x")) s.gyro.sensitivityX = *v;
+    if (const auto v = FindNumber(d, "gyro", "sensitivity_y")) s.gyro.sensitivityY = *v;
     MouseConfig& m = s.mouse;
     flag("mouse", "enabled", m.enabled);
     flag("mouse", "raw", m.raw);
@@ -409,6 +423,7 @@ inline void ResetAimToDefaults() {
     Settings s = Get();
     s.aim = DualAnalog::Config{};
     s.mouse = MouseConfig{};
+    s.gyro = GyroAim::Config{};
     Set(s);
 }
 
@@ -466,6 +481,13 @@ inline bool Save() {
     put("aim", "left_saturation", Float(c.leftSaturation));
     put("aim", "invert_move_y", boolean(c.invertMoveY));
     put("aim", "trigger_threshold", Float(c.triggerThreshold));
+    put("gyro", "enabled", boolean(s.gyro.enabled));
+    put("gyro", "activation", std::to_string(s.gyro.activation));
+    put("gyro", "space", std::to_string(s.gyro.space));
+    put("gyro", "sensitivity_x", Float(s.gyro.sensitivityX));
+    put("gyro", "sensitivity_y", Float(s.gyro.sensitivityY));
+    put("gyro", "invert_x", boolean(s.gyro.invertX));
+    put("gyro", "invert_y", boolean(s.gyro.invertY));
     put("mouse", "enabled", boolean(m.enabled));
     put("mouse", "raw", boolean(m.raw));
     put("mouse", "sensitivity", Float(m.sensitivity));

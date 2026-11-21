@@ -37,6 +37,9 @@ MouseSample MouseNow();
 DualAnalog::Rect PictureRect(const MouseSample& ms);
 // Accumulated motion since the last call.
 void ConsumeMouseDelta(float& dx, float& dy);
+void ConsumeGyroDelta(float& dx, float& dy);
+void CalibrateGyro();
+const char* GyroStatus();
 
 // Main thread, once per frame: relative mouse mode follows the settings while the game is unblocked and focused.
 // Also runs the control-scheme service: watches gamepad / mouse / keyboard activity, decides the scheme in effect

@@ -1,4 +1,5 @@
 #include "aim_input.h"
+#include "aim_settings.h"
 
 #include <aurora/aurora.h>
 #include <dolphin/pad.h>
@@ -100,10 +101,46 @@ int main() {
     desc.type=SDL_JOYSTICK_TYPE_GAMEPAD;desc.naxes=SDL_GAMEPAD_AXIS_COUNT;desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
     desc.button_mask=(1u<<(SDL_GAMEPAD_BUTTON_DPAD_RIGHT+1))-1;
     desc.axis_mask=(1u<<SDL_GAMEPAD_AXIS_COUNT)-1;desc.name="Sin isolated remap test";
+    const SDL_VirtualJoystickSensorDesc sensors[] = {{SDL_SENSOR_GYRO, 100.f}, {SDL_SENSOR_ACCEL, 100.f}};
+    desc.nsensors = 2; desc.sensors = sensors;
+    desc.SetSensorsEnabled = [](void*, bool) { return true; };
     const auto id=SDL_AttachVirtualJoystick(&desc);
     CHECK(id!=0);
     testPad=SDL_OpenGamepad(id);CHECK(testPad!=nullptr);
     if (testPad) {
+        auto settings = AimSettings::DefaultBindings();
+        settings.gyro.enabled = true; settings.gyro.space = 1;
+        AimSettings::Set(settings);
+        AimInput::UpdateWindowState(false);
+        CHECK(AimInput::EffectiveScheme() == InputMap::Scheme::Pointer);
+        CHECK(SDL_GamepadSensorEnabled(testPad, SDL_SENSOR_GYRO));
+        SDL_Event sensor{}; sensor.type = SDL_EVENT_GAMEPAD_SENSOR_UPDATE;
+        sensor.gsensor.which = id; sensor.gsensor.sensor = SDL_SENSOR_GYRO;
+        sensor.gsensor.data[1] = 1.f;
+        auto sample = [&](Uint64 time) { sensor.gsensor.sensor_timestamp = time; AimInput::HandleSdlEvent(sensor); };
+        float gx, gy;
+        sample(1000000000); sample(1010000000);
+        AimInput::ConsumeGyroDelta(gx, gy); CHECK(gx < -1.f && gy == 0.f);
+        AimInput::ConsumeGyroDelta(gx, gy); CHECK(gx == 0.f && gy == 0.f);
+        sensor.gsensor.which = id + 100;
+        sample(1020000000); AimInput::ConsumeGyroDelta(gx, gy); CHECK(gx == 0.f);
+        sensor.gsensor.which = id;
+        sample(1020000000); Send(SDL_EVENT_WINDOW_FOCUS_LOST);
+        AimInput::ConsumeGyroDelta(gx, gy); CHECK(gx == 0.f && gy == 0.f);
+        Send(SDL_EVENT_WINDOW_FOCUS_GAINED);
+        AimInput::UpdateWindowState(true);
+        sample(1030000000); sample(1040000000);
+        AimInput::ConsumeGyroDelta(gx, gy); CHECK(gx == 0.f && gy == 0.f);
+        AimInput::UpdateWindowState(false);
+        sample(1050000000); sample(1060000000);
+        AimInput::ConsumeGyroDelta(gx, gy); CHECK(gx < -1.f);
+        settings.gyro.activation = 1; AimSettings::Set(settings);
+        AimInput::UpdateWindowState(false);
+        sample(1070000000); sample(1080000000);
+        AimInput::ConsumeGyroDelta(gx, gy); CHECK(gx == 0.f);
+        settings.gyro.enabled = false; AimSettings::Set(settings);
+        AimInput::UpdateWindowState(false);
+        CHECK(!SDL_GamepadSensorEnabled(testPad, SDL_SENSOR_GYRO));
         auto* joystick=SDL_GetGamepadJoystick(testPad);
         SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_SOUTH,true);SDL_UpdateJoysticks();
         AimInput::BeginCapture(InputMap::Profile::Gamepad);
