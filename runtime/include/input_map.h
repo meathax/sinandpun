@@ -86,7 +86,8 @@ inline KeyNameHooks& KeyHooks() {
 }
 
 // Fallback names (SDL3 scancodes) so defaults and tests work before/without the SDL hooks.
-inline constexpr std::array<NamedBinding, 10> kBuiltinKeys = {{
+inline constexpr std::array<NamedBinding, 11> kBuiltinKeys = {{
+    {"Escape", 41, 0},
     {"Return", 40, 0}, {"Backspace", 42, 0}, {"Tab", 43, 0}, {"Space", 44, 0}, {"Home", 74, 0},
     {"Right", 79, 0}, {"Left", 80, 0}, {"Down", 81, 0}, {"Up", 82, 0}, {"Left Ctrl", 224, 0},
 }};

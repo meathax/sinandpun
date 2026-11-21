@@ -1,5 +1,6 @@
 #include "game_ui.h"
 #include "game_ui_font.h"
+#include "aim_settings.h"
 
 #include <SDL3/SDL_gamepad.h>
 #include <aurora/aurora.h>
@@ -305,7 +306,8 @@ Frame& PollInput() {
     const bool kbNext = ImGui::IsKeyPressed(ImGuiKey_E, false) || (!shift && ImGui::IsKeyPressed(ImGuiKey_Tab, false));
     f.accept = padEdge(SDL_GAMEPAD_BUTTON_SOUTH) || kbAccept;
     f.back = padEdge(SDL_GAMEPAD_BUTTON_EAST) || kbBack;
-    f.resetRow = padEdge(SDL_GAMEPAD_BUTTON_WEST) || (kbReset && !ctrl);
+    f.apply = padEdge(SDL_GAMEPAD_BUTTON_WEST);
+    f.resetRow = padEdge(SDL_GAMEPAD_BUTTON_LEFT_STICK) || (kbReset && !ctrl);
     f.resetPage = padEdge(SDL_GAMEPAD_BUTTON_NORTH) || (kbReset && ctrl);
     f.tabPrev = padEdge(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) || kbPrev;
     f.tabNext = padEdge(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) || kbNext;
@@ -333,14 +335,14 @@ Frame& PollInput() {
     if (kbAny) g_device = Device::Keyboard;
     if (mouseAny && !padAny && !kbAny) g_device = Device::Mouse;
     f.device = g_device;
-    f.anyNav = f.up || f.down || f.left || f.right || f.accept || f.back;
+    f.anyNav = f.up || f.down || f.left || f.right || f.accept || f.back || f.apply;
 
     g_prevButtons = pad.buttons;
     g_prevLt = pad.lt;
     g_prevRt = pad.rt;
 
     if (Clock::now() < g_suppressUntil) {
-        f.accept = f.back = f.resetRow = f.resetPage = f.tabPrev = f.tabNext = false;
+        f.accept = f.back = f.apply = f.resetRow = f.resetPage = f.tabPrev = f.tabNext = false;
         f.mouseClicked = f.rightClicked = false;
     }
     g_frame = f;
@@ -351,7 +353,7 @@ void Suppress(float seconds) {
     const auto until = Clock::now() + std::chrono::milliseconds(static_cast<int>(seconds * 1000.0f));
     if (until > g_suppressUntil) g_suppressUntil = until;
     // Also drop whatever this frame already collected.
-    g_frame.accept = g_frame.back = g_frame.resetRow = g_frame.resetPage = g_frame.tabPrev = g_frame.tabNext = false;
+    g_frame.accept = g_frame.back = g_frame.apply = g_frame.resetRow = g_frame.resetPage = g_frame.tabPrev = g_frame.tabNext = false;
     g_frame.mouseClicked = g_frame.rightClicked = false;
 }
 
@@ -440,10 +442,18 @@ float DrawBadge(ImDrawList* dl, ImVec2 pos, const char* text, Badge kind, float 
 
 float GlyphWidth(const char* text, bool round) {
     if (round) return Px(34.0f);
+    if (LastDevice() == Device::Gamepad && AimSettings::Get().playStationPrompts && std::strcmp(text,"LB/RB")==0)
+        text = "L1/R1";
     return std::max(Px(40.0f), TextSize(20.0f, text).x + Px(22.0f));
 }
 
 float DrawGlyph(ImDrawList* dl, ImVec2 lc, const char* text, float alpha, bool round) {
+    const bool ps = LastDevice() == Device::Gamepad && AimSettings::Get().playStationPrompts;
+    if (ps && !round) {
+        if (std::strcmp(text,"LB")==0) text="L1";
+        else if (std::strcmp(text,"RB")==0) text="R1";
+        else if (std::strcmp(text,"LB/RB")==0) text="L1/R1";
+    }
     const float h = Px(34.0f);
     const float w = GlyphWidth(text, round);
     if (round) {
@@ -451,7 +461,18 @@ float DrawGlyph(ImDrawList* dl, ImVec2 lc, const char* text, float alpha, bool r
         dl->AddCircleFilled(c, h * 0.5f + 1.0f, Fade(IM_COL32(20, 50, 90, 200), alpha), 28);
         dl->AddCircleFilled(c, h * 0.5f - 1.0f, Fade(IM_COL32(238, 245, 251, 255), alpha), 28);
         dl->AddCircleFilled(ImVec2(c.x, c.y - h * 0.12f), h * 0.36f, Fade(IM_COL32(255, 255, 255, 130), alpha), 20);
-        TextCentered(dl, 22.0f, c, IM_COL32(26, 62, 110, 255), text, Outline::None, alpha);
+        const float r=Px(8.0f), weight=Px(2.0f);
+        const ImU32 ink=Fade(IM_COL32(26,62,110,255),alpha);
+        if (ps && std::strcmp(text,"A")==0) {
+            dl->AddLine(ImVec2(c.x-r,c.y-r),ImVec2(c.x+r,c.y+r),ink,weight);
+            dl->AddLine(ImVec2(c.x+r,c.y-r),ImVec2(c.x-r,c.y+r),ink,weight);
+        } else if (ps && std::strcmp(text,"B")==0) {
+            dl->AddCircle(c,r,ink,24,weight);
+        } else if (ps && std::strcmp(text,"X")==0) {
+            dl->AddRect(ImVec2(c.x-r,c.y-r),ImVec2(c.x+r,c.y+r),ink,0,0,weight);
+        } else if (ps && std::strcmp(text,"Y")==0) {
+            dl->AddTriangle(ImVec2(c.x,c.y-r),ImVec2(c.x+r,c.y+r),ImVec2(c.x-r,c.y+r),ink,weight);
+        } else TextCentered(dl, 22.0f, c, IM_COL32(26, 62, 110, 255), text, Outline::None, alpha);
     } else {
         const ImVec2 mn(lc.x, lc.y - h * 0.5f);
         const ImVec2 mx(lc.x + w, lc.y + h * 0.5f);

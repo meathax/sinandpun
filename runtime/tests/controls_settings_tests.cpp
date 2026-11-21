@@ -37,6 +37,7 @@ static void TestDefaults() {
     const Settings s = DefaultBindings();
     CHECK(s.schemeMode == SchemeMode::Auto);
     CHECK(s.switchToast);
+    CHECK(!s.playStationPrompts);
     for (size_t i = 0; i < kActionCount; ++i) {
         // Every action has a gamepad default; keyboard defaults may be empty only for the d-pad actions.
         CHECK(s.bindings.pad[i][0].Valid());
@@ -48,10 +49,11 @@ static void TestDefaults() {
     CHECK(InputMap::CountConflicts(s.bindings.kbm) == 0);
     // Game-facing actions sit where the manual says (Classic R/ZR/L/ZL, Nunchuk C/Z).
     auto pad = [&](Action a) { return InputMap::FormatList(s.bindings.pad[static_cast<size_t>(a)]); };
-    CHECK(pad(Action::Fire) == "pad:right_shoulder");
-    CHECK(pad(Action::LockOn) == "pad:right_trigger");
+    CHECK(pad(Action::Fire) == "pad:right_trigger");
+    CHECK(pad(Action::LockOn) == "pad:left_trigger");
     CHECK(pad(Action::Jump) == "pad:left_shoulder");
-    CHECK(pad(Action::Evade) == "pad:left_trigger");
+    CHECK(pad(Action::Evade) == "pad:right_shoulder");
+    CHECK(pad(Action::Confirm) == "pad:south" && pad(Action::Cancel) == "pad:east");
     CHECK(pad(Action::Pause) == "pad:start" && pad(Action::Minus) == "pad:back" && pad(Action::Home) == "pad:guide");
     auto kbm = [&](Action a) { return InputMap::FormatList(s.bindings.kbm[static_cast<size_t>(a)]); };
     CHECK(kbm(Action::Fire).find("mouse:left") != std::string::npos);
@@ -65,6 +67,7 @@ static void TestRoundTrip() {
     Settings s = DefaultBindings();
     s.schemeMode = SchemeMode::Auto;
     s.switchToast = false;
+    s.playStationPrompts = true;
     s.aim.leftDeadzone = 0.2f;
     s.aim.leftSaturation = 0.8f;
     s.aim.invertMoveY = true;
@@ -78,6 +81,7 @@ static void TestRoundTrip() {
     const Settings r = Load();
     CHECK(r.schemeMode == SchemeMode::Auto);
     CHECK(!r.switchToast);
+    CHECK(r.playStationPrompts);
     CHECK(std::fabs(r.aim.leftDeadzone - 0.2f) < 1e-3f && std::fabs(r.aim.leftSaturation - 0.8f) < 1e-3f);
     CHECK(r.aim.invertMoveY && std::fabs(r.aim.triggerThreshold - 0.3f) < 1e-3f);
     CHECK(r.mouse.raw && std::fabs(r.mouse.sensitivity - 1.25f) < 1e-3f);
@@ -99,10 +103,14 @@ static void TestLegacyAndTolerance() {
     CHECK(Load().schemeMode == SchemeMode::Auto);  // old default migrates
     WriteConfig("[input]\nversion = 1\nscheme = \"classic\"\n");
     CHECK(Load().schemeMode == SchemeMode::Classic);
-    WriteConfig("[input]\nversion = 2\nscheme = \"pointer\"\n");
+    WriteConfig("[input]\nversion = 3\nscheme = \"pointer\"\n");
     CHECK(Load().schemeMode == SchemeMode::Pointer);
     WriteConfig("[input]\nversion = 2\nscheme = \"auto\"\n");
     CHECK(Load().schemeMode == SchemeMode::Auto);
+    WriteConfig("[input]\nbutton_prompts = \"unknown\"\n");
+    CHECK(!Load().playStationPrompts);
+    WriteConfig("[input]\nbutton_prompts = \"xbox_one\"\n");
+    CHECK(!Load().playStationPrompts);
     WriteConfig("[input]\nscheme = 7\n[aim]\nleft_saturation = 40\ntrigger_threshold = -2\n");
     const Settings s = Load();
     CHECK(s.schemeMode == SchemeMode::Auto);
@@ -115,6 +123,25 @@ int main() {
     TestDefaults();
     TestRoundTrip();
     TestLegacyAndTolerance();
+    WriteConfig("[input]\nversion = 2\nscheme = \"pointer\"\n");
+    const auto upgraded=Load();
+    CHECK(upgraded.schemeMode==AimSettings::SchemeMode::Auto);
+    CHECK(upgraded.bindings.pad==AimSettings::DefaultBindings().bindings.pad);
+    CHECK(upgraded.bindings.kbm==AimSettings::DefaultBindings().bindings.kbm);
+    WriteConfig("[input]\nversion = 2\nscheme = \"pointer\"\n[input.gamepad]\nfire = \"pad:north\"\n");
+    const auto custom=Load();
+    CHECK(custom.schemeMode==AimSettings::SchemeMode::Pointer);
+    CHECK(InputMap::FormatList(custom.bindings.pad[0])=="pad:north");
+    CHECK(custom.bindings.pad[1]==AimSettings::LegacyBindings().bindings.pad[1]);
+    CHECK(custom.bindings.kbm==AimSettings::DefaultBindings().bindings.kbm);
+    auto stored=AimSettings::DefaultBindings();
+    stored.bindings.pad[0]={InputMap::PadButton(2),InputMap::PadAxis(5,1),InputMap::PadButton(10)};
+    stored.bindings.kbm[0]={InputMap::Key(41),InputMap::MouseButton(5),InputMap::MouseButton(InputMap::kMouseWheelUp)};
+    stored.bindings.pad[1]={};stored.bindings.kbm[1]={};
+    AimSettings::Set(stored);CHECK(AimSettings::Save());
+    const auto remapped=Load();
+    CHECK(remapped.bindings.pad==stored.bindings.pad);
+    CHECK(remapped.bindings.kbm==stored.bindings.kbm);
     std::filesystem::remove(RuntimeConfigFile::ResolveConfigPath());
     if (g_failures == 0) std::puts("controls_settings_tests: all passed");
     return g_failures == 0 ? 0 : 1;

@@ -48,14 +48,9 @@ struct Preview {
     float rawX = 0.f, rawY = 0.f;
 } g_preview;
 
-float ActionValue(const AimSettings::Settings& s, Action a, const InputMap::RawSample& raw) {
-    const size_t i = static_cast<size_t>(a);
-    return std::max(InputMap::SlotsValue(s.bindings.pad[i], raw), InputMap::SlotsValue(s.bindings.kbm[i], raw));
-}
-
 void AimVector(const AimSettings::Settings& s, const InputMap::RawSample& raw, float& x, float& y) {
-    x = ActionValue(s, Action::AimRight, raw) - ActionValue(s, Action::AimLeft, raw);
-    y = ActionValue(s, Action::AimDown, raw) - ActionValue(s, Action::AimUp, raw);
+    x = AimSettings::ActionValue(s, Action::AimRight, raw) - AimSettings::ActionValue(s, Action::AimLeft, raw);
+    y = AimSettings::ActionValue(s, Action::AimDown, raw) - AimSettings::ActionValue(s, Action::AimUp, raw);
     const float m = std::sqrt(x * x + y * y);
     if (m > 1.f) {
         x /= m;
@@ -381,7 +376,7 @@ std::string FriendlyName(const InputMap::Binding& b) {
     if (rest.empty()) return "-";
     if (kind == "pad") {
         static const std::pair<const char*, const char*> kPadNames[] = {
-            {"south", "Bottom face"}, {"east", "Right face"}, {"west", "Left face"}, {"north", "Top face"},
+            {"south", "A / Cross"}, {"east", "B / Circle"}, {"west", "X / Square"}, {"north", "Y / Triangle"},
             {"left_shoulder", "LB / L1"}, {"right_shoulder", "RB / R1"}, {"left_trigger", "LT / L2"},
             {"right_trigger", "RT / R2"}, {"start", "Start"}, {"back", "Back"}, {"guide", "Guide"},
             {"left_stick", "L3 (click)"}, {"right_stick", "R3 (click)"}, {"dpad_up", "D-pad up"},
@@ -419,8 +414,7 @@ void ApplyCapture(const InputMap::Binding& binding) {
 void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Profile profile) {
     const bool pad = profile == InputMap::Profile::Gamepad;
     v.Section(pad ? "Gamepad buttons" : "Keyboard and mouse bindings");
-    v.Note(pad ? "Up to three bindings per action. A or click rebinds the selected slot, X or right-click clears it. A binding used elsewhere is swapped."
-               : "Up to three keys / mouse buttons per action. Click or A rebinds the selected slot, X or right-click clears it. A binding used elsewhere is swapped.");
+    v.Note("Up to three bindings per action. Confirm or click rebinds the selected slot. Click the left stick, press Delete or right-click to clear. Conflicting bindings are swapped. X applies the page.");
     auto& table = s.bindings.For(profile);
     if (const size_t conflicts = InputMap::CountConflicts(table)) {
         v.Info("Conflicts", std::to_string(conflicts) + " duplicate binding(s) in this profile", game_ui::kWarn);
@@ -437,7 +431,7 @@ void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Pro
         std::array<std::string, 3> names;
         for (size_t slot = 0; slot < InputMap::kSlots; ++slot) names[slot] = FriendlyName(table[a][slot]);
         int cleared = -1;
-        const int fired = v.Bindings(info.label, names, info.detail[0] != '\0' ? info.detail : "A rebinds the selected slot, X clears it.", &cleared);
+        const int fired = v.Bindings(info.label, names, info.detail[0] != '\0' ? info.detail : "Confirm rebinds the slot; left-stick click clears it.", &cleared);
         if (fired >= 0) {
             g_capture.open = true;
             g_capture.action = a;
@@ -468,6 +462,14 @@ void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Pro
 }
 
 void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
+    v.Section("Button prompts");
+    int prompts = s.playStationPrompts ? 1 : 0;
+    static const char* const styles[] = {"Xbox One", "PlayStation"};
+    if (auto r = v.Choice("Button prompts", &prompts, styles, 2, 0,
+                          "Changes in-game button icons and menu hints immediately. Uses your gamepad bindings.")) {
+        s.playStationPrompts = prompts == 1;
+        e.Take(r);
+    }
     v.Section("Control scheme");
     int mode = static_cast<int>(s.schemeMode);
     if (auto r = v.Choice("Control scheme", &mode, InputMap::kSchemeModeLabels.data(),
@@ -480,7 +482,17 @@ void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
     DrawActiveDevice(v, s);
     e.Take(v.Toggle("Show a note when the scheme switches", &s.switchToast, true,
                     "Brief on-screen message when Automatic changes between gamepad and mouse/keyboard."));
-    v.Note("Gamepad: left stick moves, right stick aims, LB/RB/LT/RT = L/R/ZL/ZR.\n"
+    if (v.Action("Modern Xbox layout", "Use recommended layout",
+                 "RT shoots, LT locks/charges, LB jumps, RB evades. A confirms and B goes back. Restores gamepad bindings and selects Automatic.")) {
+        game_ui::RequestConfirm("Modern Xbox layout", "Replace gamepad bindings with the recommended layout? Keyboard and mouse bindings are kept.", "Use layout", [] {
+            auto cur = AimSettings::Get();
+            cur.bindings.pad = AimSettings::DefaultBindings().bindings.pad;
+            cur.schemeMode = AimSettings::SchemeMode::Auto;
+            AimSettings::Set(cur);
+            AimSettings::Save();
+        });
+    }
+    v.Note("Recommended gamepad: RT shoots, LT locks/charges, LB jumps, RB evades. Left stick moves; right stick aims. A confirms, B goes back.\n"
            "Mouse and keyboard: WASD moves, the mouse aims, left click = shoot (B), right click = lock-on (A), Space = jump (C), Shift = evade (Z).");
     v.Section("Live input");
     DrawDeviceMonitor(v);
@@ -600,7 +612,7 @@ void DrawModals(game_ui::Frame& input) {
     game_ui::ModalSpec spec;
     spec.title = std::string("Bind: ") + info.label;
     spec.lines = {pad ? "Press a gamepad button, pull a trigger or push a stick." : "Press a key, click a mouse button or scroll the wheel.",
-                  pad ? "Release everything first." : "Esc cancels, Delete clears."};
+                  pad ? "Release everything first. Use the dialog buttons to clear or cancel." : "Escape and Delete can be bound. F10 is reserved. Use Clear / Cancel below or wait for the timeout."};
     spec.buttons = {"Clear binding", "Cancel"};
     spec.progress = std::clamp(remaining / 8.0f, 0.0f, 1.0f);
     spec.mouseOnly = true;
@@ -626,7 +638,10 @@ void DrawModals(game_ui::Frame& input) {
             g_capture.open = false;
         }
     }
-    if (!g_capture.open) g_capture.modal = game_ui::ModalState{};
+    if (!g_capture.open) {
+        g_capture.modal = game_ui::ModalState{};
+        game_ui::Suppress(0.2f);
+    }
 }
 
 // The scheme now switches live, so no control option needs a restart any more.
@@ -653,6 +668,7 @@ void ResetPage(int page) {
     case 0:
         s.schemeMode = InputMap::SchemeMode::Auto;
         s.switchToast = true;
+        s.playStationPrompts = false;
         break;
     case 1:
         s.aim = fresh;

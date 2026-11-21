@@ -12,6 +12,10 @@
 
 namespace VirtualRemote {
 
+// The modern action map owns host input unless a real Wii Remote is attached
+// or SIN_VIRTUAL_REMOTE=0 explicitly requests the legacy input path.
+bool UsesVirtualInput();
+
 // Live extension hot-swap: Classic Controller <-> Nunchuk (pointer scheme). Thread-safe, lock-free and cheap; a
 // no-op when `scheme` is already the requested one. The remote unplugs the current extension (status report with
 // the extension flag cleared), waits for the guest to notice, then plugs the other one (status report with the

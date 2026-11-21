@@ -2,7 +2,7 @@
 
 // Controls state shared between the F10 settings menu and the virtual Wii Remote: aiming tunables, the
 // controller scheme, mouse options and the per-profile action bindings. Persisted to Config.toml:
-//   [input]                version = 2, scheme = "auto" | "classic" | "pointer", switch_toast = true
+//   [input]                version = 3, scheme = "auto" | "classic" | "pointer", switch_toast = true
 //                          (auto: the device used last picks the scheme live; files written before version 2
 //                          with scheme = "pointer" - the old default - are read as "auto")
 //   [input.gamepad]        <action> = "pad:south | pad:right_trigger"        (up to 3 bindings)
@@ -28,7 +28,7 @@
 
 namespace AimSettings {
 
-inline constexpr int kSchemaVersion = InputMap::kSchemeSchemaVersion;
+inline constexpr int kSchemaVersion = 3;
 
 // Action names follow Sin & Punishment: Star Successor (manual + StrategyWiki control tables). The Classic
 // Controller / Wii Remote+Nunchuk wire mapping is in virtual_remote.cpp.
@@ -74,21 +74,21 @@ struct ActionInfo {
 
 inline constexpr std::array<ActionInfo, kActionCount> kActions = {{
     {"fire", "Shoot / Sword", "Combat", "Hold to shoot, tap to slash. Classic R / Wii Remote B.",
-     "pad:right_shoulder", "key:J | mouse:left"},
+     "pad:right_trigger", "mouse:left | key:J"},
     {"lock_on", "Lock-on / Charge shot", "Combat",
      "Tap to lock on; hold, then release for the charge shot. Classic ZR / Wii Remote A.",
-     "pad:right_trigger", "key:K | mouse:right"},
+     "pad:left_trigger", "mouse:right | key:K"},
     {"jump", "Jump", "Combat", "Classic L / Nunchuk C.", "pad:left_shoulder",
-     "key:Space | mouse:x1 | mouse:wheel_up"},
-    {"evade", "Evade", "Combat", "Classic ZL / Nunchuk Z.", "pad:left_trigger",
-     "key:Left Shift | mouse:x2 | mouse:wheel_down"},
-    {"confirm", "Menu: confirm", "Menus", "Classic A.", "pad:east", "key:Return"},
-    {"cancel", "Menu: cancel", "Menus", "Classic B.", "pad:south", "key:Backspace"},
-    {"pause", "Pause / skip cut scene (+)", "Menus", "+ button.", "pad:start", "key:P"},
-    {"minus", "- button", "Menus", "No in-game action known.", "pad:back", "key:Tab"},
+     "key:Space | mouse:x1"},
+    {"evade", "Evade", "Combat", "Classic ZL / Nunchuk Z.", "pad:right_shoulder",
+     "key:Left Shift | mouse:x2"},
+    {"confirm", "Menu: confirm", "Menus", "Confirm in game menus. Options UI keeps A / Enter as recovery controls.", "pad:south", "key:Return"},
+    {"cancel", "Menu: cancel", "Menus", "Back in game menus. Options UI keeps B / Escape as recovery controls.", "pad:east", "key:Backspace"},
+    {"pause", "Pause / skip cut scene (+)", "Menus", "+ button.", "pad:start", "key:Escape | key:P"},
+    {"minus", "Switch character (-)", "Menus", "Switch characters once unlocked.", "pad:back", "key:Tab"},
     {"home", "HOME button", "Menus", "Opens the Wii HOME menu.", "pad:guide", "key:Home"},
-    {"button_x", "X button", "Menus", "Classic X / Wii Remote 1. No in-game action known.", "pad:north", "key:Q"},
-    {"button_y", "Y button", "Menus", "Classic Y / Wii Remote 2. No in-game action known.", "pad:west", "key:E"},
+    {"button_x", "Extra button 1", "Menus", "Classic X / Wii Remote 1.", "pad:west", "key:Q"},
+    {"button_y", "Extra button 2", "Menus", "Classic Y / Wii Remote 2.", "pad:north", "key:E"},
     {"dpad_up", "Control Pad up", "Menus", "Menu navigation.", "pad:dpad_up", ""},
     {"dpad_down", "Control Pad down", "Menus", "Menu navigation.", "pad:dpad_down", ""},
     {"dpad_left", "Control Pad left", "Menus", "Menu navigation.", "pad:dpad_left", ""},
@@ -130,6 +130,7 @@ struct Settings {
     // starts right; live changes go through VirtualRemote::SetScheme.
     Scheme scheme = Scheme::Pointer;
     bool switchToast = true;          // brief on-screen note when the scheme switches automatically
+    bool playStationPrompts = false;  // Xbox One by default; independent of the input scheme
     DualAnalog::Config aim;
     MouseConfig mouse;
     InputMap::Table<kActionCount> bindings;
@@ -141,6 +142,33 @@ inline Settings DefaultBindings(Settings s = {}) {
         s.bindings.kbm[i] = InputMap::ParseList(kActions[i].kbmDefault, InputMap::Profile::KeyboardMouse);
     }
     return s;
+}
+
+inline Settings LegacyBindings() {
+    Settings s = DefaultBindings();
+    const std::pair<Action,const char*> pad[] = {
+        {Action::Fire,"pad:right_shoulder"},{Action::LockOn,"pad:right_trigger"},
+        {Action::Evade,"pad:left_trigger"},{Action::Confirm,"pad:east"},{Action::Cancel,"pad:south"},
+        {Action::ButtonX,"pad:north"},{Action::ButtonY,"pad:west"}};
+    for (const auto& [a,v] : pad) s.bindings.pad[static_cast<size_t>(a)] = InputMap::ParseList(v,InputMap::Profile::Gamepad);
+    const std::pair<Action,const char*> kbm[] = {
+        {Action::Fire,"key:J | mouse:left"},{Action::LockOn,"key:K | mouse:right"},
+        {Action::Jump,"key:Space | mouse:x1 | mouse:wheel_up"},
+        {Action::Evade,"key:Left Shift | mouse:x2 | mouse:wheel_down"},{Action::Pause,"key:P"}};
+    for (const auto& [a,v] : kbm) s.bindings.kbm[static_cast<size_t>(a)] = InputMap::ParseList(v,InputMap::Profile::KeyboardMouse);
+    return s;
+}
+
+inline float ActionValue(const Settings& s, Action a, const InputMap::RawSample& raw) {
+    const size_t i = static_cast<size_t>(a);
+    return std::max(InputMap::SlotsValue(s.bindings.pad[i],raw),InputMap::SlotsValue(s.bindings.kbm[i],raw));
+}
+
+inline bool KeyBound(const Settings& s, int code) {
+    for (const auto& slots : s.bindings.kbm)
+        for (const auto& b : slots)
+            if (b.device == InputMap::Device::Key && b.code == code) return true;
+    return false;
 }
 
 inline void Sanitize(Settings& s) {
@@ -263,10 +291,14 @@ inline void LoadFromConfig(Settings& s) {
     };
     int schemaVersion = 1;
     if (const auto v = FindValue<int64_t>(d, "input", "version")) schemaVersion = static_cast<int>(*v);
+    if (schemaVersion < 3) s.bindings = LegacyBindings().bindings;
     if (const auto v = FindValue<std::string>(d, "input", "scheme")) {
         s.schemeMode = InputMap::ParseSchemeMode(*v, schemaVersion, s.schemeMode);
     }
     flag("input", "switch_toast", s.switchToast);
+    if (const auto v = FindValue<std::string>(d, "input", "button_prompts")) {
+        s.playStationPrompts = *v == "playstation";
+    }
     if (const auto v = FindValue<std::string>(d, "aim", "deadzone_mode")) {
         c.deadzoneMode = static_cast<DualAnalog::DeadzoneMode>(
             KeyIndex(DualAnalog::kDeadzoneModeKeys, *v, static_cast<size_t>(c.deadzoneMode)));
@@ -317,6 +349,17 @@ inline void LoadFromConfig(Settings& s) {
         if (const auto v = FindValue<std::string>(d, "input", "keyboard_mouse", kActions[i].key)) {
             s.bindings.kbm[i] = InputMap::ParseList(*v, InputMap::Profile::KeyboardMouse);
         }
+    }
+    if (schemaVersion < 3) {
+        const auto legacy = LegacyBindings();
+        const auto modern = DefaultBindings();
+        // Upgrade only an untouched profile as a unit. Individual substitutions
+        // could collide with a custom binding elsewhere in that profile.
+        if (s.bindings.pad == legacy.bindings.pad) {
+            s.bindings.pad = modern.bindings.pad;
+            if (s.schemeMode == SchemeMode::Pointer) s.schemeMode = SchemeMode::Auto;
+        }
+        if (s.bindings.kbm == legacy.bindings.kbm) s.bindings.kbm = modern.bindings.kbm;
     }
 }
 
@@ -398,6 +441,7 @@ inline bool Save() {
     put("input", "version", std::to_string(kSchemaVersion));
     put("input", "scheme", str(InputMap::kSchemeModeKeys[static_cast<size_t>(s.schemeMode)]));
     put("input", "switch_toast", boolean(s.switchToast));
+    put("input", "button_prompts", str(s.playStationPrompts ? "playstation" : "xbox_one"));
     put("aim", "deadzone_mode", str(DualAnalog::kDeadzoneModeKeys[static_cast<size_t>(c.deadzoneMode)]));
     put("aim", "right_deadzone", Float(c.radialDeadzone));
     put("aim", "right_saturation", Float(c.outerSaturation));
@@ -449,6 +493,28 @@ inline bool Save() {
     }
     output << text;
     return static_cast<bool>(output);
+}
+
+// One-time, backed-up upgrade. Customized profiles remain intact; untouched
+// legacy profiles adopt the modern defaults. Never overwrite an earlier backup.
+inline bool UpgradeLayoutConfig() {
+    Get();
+    const auto path=RuntimeConfigFile::ResolveConfigPath();
+    std::ifstream input(path,std::ios::binary);
+    if (input) {
+        try {
+            const auto d=toml::parse(input,"Config.toml");
+            if (const auto v=detail::FindValue<int64_t>(d,"input","version"); v && *v>=kSchemaVersion) return true;
+        } catch (...) { return false; }
+        input.close();
+        auto backup=path;backup += ".input-v2.bak";
+        std::error_code ec;
+        if (!std::filesystem::exists(backup,ec)) {
+            std::filesystem::copy_file(path,backup,std::filesystem::copy_options::none,ec);
+            if (ec) return false;
+        }
+    }
+    return Save();
 }
 
 } // namespace AimSettings

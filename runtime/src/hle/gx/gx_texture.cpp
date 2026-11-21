@@ -1,6 +1,7 @@
 ﻿// gx_texture.cpp - Texture Object and TLUT Functions
 #include "gx_internal.h"
 #include "runtime_log.h"
+#include "button_prompts.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -502,6 +503,10 @@ static void LoadTexObjImpl(uint32_t oa, uint32_t tid) {
     static uint32_t s_unknownFormatLogCount = 0;
     static uint32_t s_invalidDataLogCount = 0;
     std::lock_guard<std::mutex> guard(g_texObjMutex);
+
+    if (ButtonPrompts::Update()) {
+        for (auto& bound : g_boundTexMaps) bound = {};
+    }
 
     if (tid >= g_boundTexMaps.size()) {
         if (s_invalidTidLogCount < 128) {

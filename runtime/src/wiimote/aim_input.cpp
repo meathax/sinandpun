@@ -151,11 +151,9 @@ void HandleSdlEvent(const SDL_Event& event) {
         }
         if (g.capturing && !event.key.repeat && g.captureProfile == InputMap::Profile::KeyboardMouse &&
             g.captureResult.state == CaptureState::Pending) {
-            if (event.key.scancode == SDL_SCANCODE_ESCAPE) {
-                g.captureResult.state = CaptureState::Cancelled;
-            } else if (event.key.scancode == SDL_SCANCODE_DELETE) {
-                g.captureResult = {CaptureState::Cleared, {}};
-            } else if (event.key.scancode != SDL_SCANCODE_F10 && event.key.scancode != SDL_SCANCODE_F1) {
+            // Clear/Cancel are explicit dialog buttons; Escape and Delete are
+            // legitimate game bindings. F10 remains the recovery menu key.
+            if (event.key.scancode != SDL_SCANCODE_F10) {
                 g.captureResult = {CaptureState::Done, InputMap::Key(code)};
             }
         }

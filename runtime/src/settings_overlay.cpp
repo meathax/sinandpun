@@ -10,6 +10,7 @@
 #include "controller_button_names.h"
 #include "controller_mapping_wizard.h"
 #include "aim_input.h"
+#include "aim_settings.h"
 #include "controls_menu.h"
 #include "game_ui.h"
 #include "input_bindings.h"
@@ -1579,10 +1580,13 @@ std::vector<std::pair<std::string, std::string>> FooterHints(const ListView& vie
     }
     hints.push_back({pad ? "B" : "Esc", "Back"});
     hints.push_back({pad ? "LB/RB" : "Q/E", "Tab"});
-    if (view.FocusedResettable()) hints.push_back({pad ? "X" : "Del", view.FocusedKind() == game_ui::RowKind::Bindings ? "Clear" : "Reset"});
+    if (pad) hints.push_back({"X", "Apply / Confirm"});
+    if (view.FocusedResettable()) hints.push_back({pad ? "L3" : "Del", view.FocusedKind() == game_ui::RowKind::Bindings ? "Clear" : "Reset"});
     hints.push_back({pad ? "Y" : "Ctrl+Del", "Reset page"});
     return hints;
 }
+
+bool AnyModalActive();
 
 void DrawMenu(game_ui::Frame& in, bool interactive) {
     if (!g_menuVisible) return;
@@ -1692,6 +1696,18 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
     }
     v.End();
 
+    if (live && in.apply && !AnyModalActive()) {
+        // Consume this edge so opening the display prompt cannot also accept it.
+        in.apply = false;
+        if (g_tab == kTabDisplay || g_tab == kTabGraphics) {
+            ApplyGraphicsDraft();
+        } else {
+            // These pages apply edits live; explicitly flush their settings.
+            AimSettings::Save();
+            SystemSettings::Save();
+        }
+    }
+
     // Help line for the highlighted row.
     {
         const ImVec2 hmin(pmin.x + U(48.0f), pmax.y - U(222.0f));
@@ -1737,10 +1753,18 @@ void DrawRevertPrompt(game_ui::Frame& in) {
         g_revertModal = game_ui::ModalState{};
         return;
     }
+    if (in.apply) {
+        in.apply = false;
+        KeepDisplay();
+        g_revertModal = game_ui::ModalState{};
+        return;
+    }
     game_ui::ModalSpec spec;
     spec.title = "Keep display settings?";
     spec.lines = {"The previous settings return in " + std::to_string(static_cast<int>(std::ceil(remaining))) +
-                  " seconds unless you keep these."};
+                  " seconds unless you keep these.", AimSettings::Get().playStationPrompts
+                      ? "Press Square to confirm and keep these settings."
+                      : "Press X to confirm and keep these settings."};
     spec.buttons = {"Keep", "Revert"};
     spec.defaultButton = 0;
     spec.cancelButton = 1;
@@ -1996,6 +2020,7 @@ void PollGamepadMenuChord() {
 
 void InitializeRuntimeSettings() noexcept {
     AimInput::Install();
+    AimSettings::UpgradeLayoutConfig();
     game_ui::InstallFont();
     aurora_set_resampler(static_cast<AuroraSampler>(SystemSettings::Get().scalingFilter));
     SystemSettings::EnsureVersionStamp();
@@ -2070,7 +2095,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             if (IsMouseActivity(ev->sdl)) g_lastMouseActivity = Clock::now();
             continue;
         }
-        if (IsToggleKey(ev->sdl, SDL_SCANCODE_F10) || IsToggleKey(ev->sdl, SDL_SCANCODE_F1)) {
+        if (IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
             if (!AnyModalActive()) {
                 ToggleDeveloperMenu();
                 ApplyInputBlockState();
@@ -2083,7 +2108,8 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         }
         // While the menu or a dialog is open Esc is a normal "back" input handled in Draw(); with nothing
         // open it asks whether to quit.
-        if (IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE) && !g_menuVisible && !AnyModalActive() && !ValveControllerConnected()) {
+        if (IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE) && !g_menuVisible && !AnyModalActive() && !ValveControllerConnected() &&
+            !AimSettings::KeyBound(AimSettings::Get(),SDL_SCANCODE_ESCAPE)) {
             game_ui::RequestConfirm("Quit", std::string("Quit ") + kGameTitle + "?", "Quit", [] { ExitForAuroraWindowClose(); }, true);
             ApplyInputBlockState();
         }

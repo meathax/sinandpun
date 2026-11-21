@@ -67,7 +67,7 @@ enum class Device { Gamepad, Keyboard, Mouse };
 struct Frame {
     float dt = 0.0f;
     bool up = false, down = false, left = false, right = false;
-    bool accept = false, back = false;
+    bool accept = false, back = false, apply = false;
     bool resetRow = false, resetPage = false;
     bool tabPrev = false, tabNext = false;
     bool pageUp = false, pageDown = false;

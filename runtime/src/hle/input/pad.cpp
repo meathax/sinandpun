@@ -3,6 +3,7 @@
 #include "hle/controller_status_contract.h"
 #include "input_bindings.h"
 #include "motion_trick.h"
+#include "virtual_remote.h"
 
 #include <algorithm>
 #include <atomic>
@@ -118,6 +119,14 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
     MotionTrick::Apply(statuses);
+
+    // SDL pad 0 is already translated through the remappable Wii/Classic
+    // action map. Do not simultaneously expose its unrelated GameCube defaults.
+    if (VirtualRemote::UsesVirtualInput()) {
+        statuses[0] = {};
+        statuses[0].err = PAD_ERR_NO_CONTROLLER;
+        rumbleMask &= ~0x80000000u;
+    }
 
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

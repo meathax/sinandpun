@@ -2,6 +2,7 @@
 
 #include "aim_input.h"
 #include "aim_settings.h"
+#include "remote_action_buttons.h"
 #include "dual_analog.h"
 #include "input_bindings.h"
 #include "input_map.h"
@@ -634,11 +635,8 @@ private:
         RefreshSettings();
         const InputMap::RawSample raw = AimInput::Sample();
         auto val = [&](Action a) {
-            const size_t i = static_cast<size_t>(a);
-            return std::max(InputMap::SlotsValue(m_settings.bindings.pad[i], raw),
-                            InputMap::SlotsValue(m_settings.bindings.kbm[i], raw));
+            return AimSettings::ActionValue(m_settings,a,raw);
         };
-        auto down = [&](Action a) { return val(a) >= 0.5f; };
         auto vec = [&](Action left, Action right, Action up, Action downA, float& x, float& y) {
             x = val(right) - val(left);
             y = val(downA) - val(up);
@@ -648,69 +646,26 @@ private:
                 y /= m;
             }
         };
-        const bool fire = down(Action::Fire), lock = down(Action::LockOn), jump = down(Action::Jump),
-                   evade = down(Action::Evade), confirm = down(Action::Confirm), cancel = down(Action::Cancel),
-                   pause = down(Action::Pause), minus = down(Action::Minus), home = down(Action::Home),
-                   bx = down(Action::ButtonX), by = down(Action::ButtonY), du = down(Action::DpadUp),
-                   dd = down(Action::DpadDown), dl = down(Action::DpadLeft), dr = down(Action::DpadRight);
+        const auto buttons = RemoteActions::Resolve(m_settings,raw,m_scheme,ClassicCoreMirror());
         float mx = 0, my = 0;
         vec(Action::MoveLeft, Action::MoveRight, Action::MoveUp, Action::MoveDown, mx, my);
         DualAnalog::ApplyDeadzone(mx, my, m_config.leftDeadzone);
         in.lx = mx;
         in.ly = my;
         vec(Action::AimLeft, Action::AimRight, Action::AimUp, Action::AimDown, in.rx, in.ry);
-        in.precision = down(Action::Precision);
-        in.recenter = down(Action::Recenter);
+        in.precision = buttons.precision;
+        in.recenter = buttons.recenter;
+        in.buttons = buttons.core;
+        in.cl4 = buttons.classic4;
+        in.cl5 = buttons.classic5;
+        in.c = buttons.c;
+        in.z = buttons.z;
+        in.lt = buttons.lt;
+        in.rt = buttons.rt;
         if (m_scheme == AimSettings::Scheme::Pointer) {
-            auto set = [&](bool on, uint16_t bit) { if (on) in.buttons |= bit; };
-            set(fire || cancel, kBtnB);
-            set(lock || confirm, kBtnA);
-            set(pause, kBtnPlus);
-            set(minus, kBtnMinus);
-            set(home, kBtnHome);
-            set(bx, kBtnOne);
-            set(by, kBtnTwo);
-            set(du, kBtnUp);
-            set(dd, kBtnDown);
-            set(dl, kBtnLeft);
-            set(dr, kBtnRight);
-            in.c = jump;
-            in.z = evade;
             const DualAnalog::NunchukState nun = DualAnalog::NunchukFromStick(mx, -my, 0.0f);
             in.sx = nun.x;
             in.sy = nun.y;
-        } else {
-            auto set = [&](bool on, uint8_t& mask, uint8_t bit) { if (on) mask |= bit; };
-            set(jump, in.cl4, kClL);
-            set(fire, in.cl4, kClR);
-            set(evade, in.cl5, kClZL);
-            set(lock, in.cl5, kClZR);
-            set(confirm, in.cl5, kClA);
-            set(cancel, in.cl5, kClB);
-            set(bx, in.cl5, kClX);
-            set(by, in.cl5, kClY);
-            set(pause, in.cl4, kClPlus);
-            set(minus, in.cl4, kClMinus);
-            set(home, in.cl4, kClHome);
-            set(du, in.cl5, kClDUp);
-            set(dl, in.cl5, kClDLeft);
-            set(dd, in.cl4, kClDDown);
-            set(dr, in.cl4, kClDRight);
-            in.lt = val(Action::Jump);
-            in.rt = val(Action::Fire);
-            if (ClassicCoreMirror()) {
-                // Menu-type keys also reach the game on the Wii Remote core buttons (same bits as the pointer scheme).
-                auto core = [&](bool on, uint16_t bit) { if (on) in.buttons |= bit; };
-                core(cancel, kBtnB);
-                core(confirm, kBtnA);
-                core(pause, kBtnPlus);
-                core(minus, kBtnMinus);
-                core(home, kBtnHome);
-                core(du, kBtnUp);
-                core(dd, kBtnDown);
-                core(dl, kBtnLeft);
-                core(dr, kBtnRight);
-            }
         }
         return in;
     }
@@ -1027,12 +982,7 @@ public:
 
 private:
     bool UseVirtual() const {
-        static const bool forced = [] {
-            const char* v = std::getenv("SIN_VIRTUAL_REMOTE");
-            return v && *v && *v != '0';
-        }();
-        if (Wiimote::Host().IsAttached(0)) return false;
-        return forced || PADGetSDLGamepadForIndex(0) != nullptr;
+        return UsesVirtualInput();
     }
 
     VirtualWiimote m_remote;
@@ -1044,6 +994,14 @@ private:
 Bluetooth::RemoteHost& Host() {
     static CompositeHost* host = new CompositeHost();
     return *host;
+}
+
+bool UsesVirtualInput() {
+    static const bool enabled = [] {
+        const char* v=std::getenv("SIN_VIRTUAL_REMOTE");
+        return !(v && *v=='0');
+    }();
+    return enabled && !Wiimote::Host().IsAttached(0);
 }
 
 void SetScheme(InputMap::Scheme scheme) {
