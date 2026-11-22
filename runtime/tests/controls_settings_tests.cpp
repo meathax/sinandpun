@@ -134,7 +134,12 @@ int main() {
     CHECK(InputMap::FormatList(custom.bindings.pad[0])=="pad:north");
     CHECK(custom.bindings.pad[1]==AimSettings::LegacyBindings().bindings.pad[1]);
     CHECK(custom.bindings.kbm==AimSettings::DefaultBindings().bindings.kbm);
+    WriteConfig("[input]\nversion = 3\nscheme = \"auto\"\n[aim]\ncurve = \"linear\"\n"
+                "max_speed = 900.0\nspeed_cap = 1600.0\nramp_ms = 120.0\ndual_zone_split = 0.5\n");
+    CHECK(Load().aim.curve == DualAnalog::Curve::PrecisionSweep);
     auto stored=AimSettings::DefaultBindings();
+    DualAnalog::ApplySweepPreset(stored.aim, DualAnalog::kSweepPresets[2]);
+    stored.aim.trackingSpeed = 325.f;
     stored.gyro.enabled = true; stored.gyro.activation = 2; stored.gyro.space = 2;
     stored.gyro.sensitivityX = 17.5f; stored.gyro.sensitivityY = 8.5f;
     stored.gyro.invertX = true; stored.gyro.invertY = true;
@@ -143,6 +148,8 @@ int main() {
     stored.bindings.pad[1]={};stored.bindings.kbm[1]={};
     AimSettings::Set(stored);CHECK(AimSettings::Save());
     const auto remapped=Load();
+    CHECK(remapped.aim.trackingSpeed == 325.f && remapped.aim.maxSpeedX == 5200.f);
+    CHECK(remapped.aim.curve == DualAnalog::Curve::PrecisionSweep);
     CHECK(remapped.gyro.enabled && remapped.gyro.activation == 2 && remapped.gyro.space == 2);
     CHECK(remapped.gyro.sensitivityX == 17.5f && remapped.gyro.sensitivityY == 8.5f);
     CHECK(remapped.gyro.invertX && remapped.gyro.invertY);

@@ -148,6 +148,40 @@ static void TestShapeAndSensitivity() {
     CHECK(x > 0.99f);
 }
 
+static void TestSweepPresets() {
+    for (const auto& preset : kSweepPresets) {
+        Config c;
+        ApplySweepPreset(c, preset);
+        Sanitize(c);
+        const float span = c.cameraMaxX - c.cameraMinX;
+        for (int hz : {30, 60, 120, 250}) {
+            PointerState p;
+            p.x = c.cameraMinX;
+            Advance(p, c, 0.1f, 0.f, 1.f / hz);
+            CHECK(p.x == c.cameraMinX);
+            int ticks = 0;
+            while (p.x < c.cameraMaxX && ticks < hz) {
+                Advance(p, c, 1.f, 0.f, 1.f / hz);
+                ++ticks;
+            }
+            CHECK(std::fabs(float(ticks) / hz - span / preset.peak) <= 1.001f / hz);
+            Advance(p, c, -1.f, 0.f, 1.f / hz);
+            CHECK(Near(p.x, c.cameraMaxX - preset.peak / hz, 0.001f));
+            const float stopped = p.x;
+            Advance(p, c, 0.f, 0.f, 1.f / hz);
+            CHECK(p.x == stopped);
+        }
+        float raw = c.radialDeadzone + 0.1f * (c.outerSaturation - c.radialDeadzone);
+        PointerState fine;
+        Advance(fine, c, raw, 0.f, 0.01f);
+        CHECK(Near(fine.x - CenterX(c), 0.001f * preset.tracking));
+        c.maxSpeedX *= 1.5f;
+        PointerState faster;
+        Advance(faster, c, raw, 0.f, 0.01f);
+        CHECK(Near(fine.x, faster.x));
+    }
+}
+
 static void TestPointer() {
     Config cfg;
     PointerState p;
@@ -383,7 +417,7 @@ static void TestSchemeModeParsing() {
     CHECK(EffectiveScheme(SchemeMode::Classic, SchemeArbiter{}) == Scheme::Classic);
     SchemeArbiter a;
     a.device = ActiveDevice::Gamepad;
-    CHECK(EffectiveScheme(SchemeMode::Auto, a) == Scheme::Classic);
+    CHECK(EffectiveScheme(SchemeMode::Auto, a) == Scheme::Pointer);
     CHECK(EffectiveScheme(SchemeMode::Pointer, a) == Scheme::Pointer);
 }
 
@@ -436,7 +470,7 @@ static void TestSchemeArbitration() {
     int64_t t = 10000;
     // First ever input is accepted immediately.
     SchemeUpdate u = UpdateScheme(a, kAuto, Pad(true, true), t);
-    CHECK(u.deviceChanged && u.schemeChanged && a.scheme == Scheme::Classic && a.device == ActiveDevice::Gamepad);
+    CHECK(u.deviceChanged && !u.schemeChanged && a.scheme == Scheme::Pointer && a.device == ActiveDevice::Gamepad);
     // Pad idle, dwell passed, mouse moves: switch.
     t += 600;
     u = UpdateScheme(a, kAuto, Kbm(true, false), t);
@@ -448,13 +482,13 @@ static void TestSchemeArbitration() {
     // After the dwell it switches.
     t += 400;
     u = UpdateScheme(a, kAuto, Pad(true, true), t);
-    CHECK(u.deviceChanged && a.scheme == Scheme::Classic);
+    CHECK(u.deviceChanged && a.scheme == Scheme::Pointer);
     // Never switch while the current device still holds something.
     t += 1000;
     DeviceSense mix = Kbm(true, false);
     mix.padHeld = true;
     u = UpdateScheme(a, kAuto, mix, t);
-    CHECK(!u.deviceChanged && a.scheme == Scheme::Classic);
+    CHECK(!u.deviceChanged && a.scheme == Scheme::Pointer);
     // Both devices active in one poll: nothing changes.
     DeviceSense both = Pad(true, false);
     both.kbmInput = true;
@@ -466,11 +500,11 @@ static void TestSchemeArbitration() {
     DeviceSense padWhileKey = Pad(true, true);
     padWhileKey.kbmHeld = true;
     CHECK(!UpdateScheme(b, kAuto, padWhileKey, 5000).deviceChanged && b.scheme == Scheme::Pointer);
-    CHECK(UpdateScheme(b, kAuto, Pad(true, true), 5100).deviceChanged && b.scheme == Scheme::Classic);
+    CHECK(UpdateScheme(b, kAuto, Pad(true, true), 5100).deviceChanged && b.scheme == Scheme::Pointer);
     // Idle polls never change anything.
     SchemeArbiter c;
     SeedScheme(c, kAuto, ActiveDevice::Gamepad);
-    CHECK(c.scheme == Scheme::Classic);
+    CHECK(c.scheme == Scheme::Pointer);
     for (int i = 0; i < 100; ++i) CHECK(!UpdateScheme(c, kAuto, DeviceSense{}, 20000 + i * 16).deviceChanged);
     // Pinned modes keep the scheme but track the device.
     SchemeArbiter d;
@@ -480,10 +514,10 @@ static void TestSchemeArbitration() {
     u = UpdateScheme(d, SchemeMode::Classic, DeviceSense{}, 10);
     CHECK(u.schemeChanged && d.scheme == Scheme::Classic);  // changing the setting applies live
     u = UpdateScheme(d, kAuto, DeviceSense{}, 20);
-    CHECK(!u.schemeChanged && d.scheme == Scheme::Classic);  // back to auto: device (pad) says classic
+    CHECK(u.schemeChanged && d.scheme == Scheme::Pointer);  // auto restores modern pointer aim
     // Change of the setting from pinned classic to pinned pointer with the pad as last device.
     u = UpdateScheme(d, SchemeMode::Pointer, DeviceSense{}, 30);
-    CHECK(u.schemeChanged && d.scheme == Scheme::Pointer);
+    CHECK(!u.schemeChanged && d.scheme == Scheme::Pointer);
 }
 
 static void TestPadConditioning() {
@@ -586,6 +620,7 @@ int main() {
     TestSymmetryAndMonotonicSweep();
     TestShapeAndSensitivity();
     TestPointer();
+    TestSweepPresets();
     TestSanitize();
     TestMouseMapping();
     TestNunchukAndQuantize();

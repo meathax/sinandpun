@@ -28,11 +28,11 @@ inline constexpr int kDeadzoneModeCount = 3;
 inline constexpr std::array<const char*, kDeadzoneModeCount> kDeadzoneModeKeys = {"scaled_radial", "radial", "axial"};
 inline constexpr std::array<const char*, kDeadzoneModeCount> kDeadzoneModeLabels = {"Scaled radial", "Radial", "Axial"};
 
-enum class Curve : uint8_t { Linear, Power, SCurve, DualZone, Classic, Raw };
-inline constexpr int kCurveCount = 6;
-inline constexpr std::array<const char*, kCurveCount> kCurveKeys = {"linear", "power", "s_curve", "dual_zone", "classic", "raw"};
+enum class Curve : uint8_t { Linear, Power, SCurve, DualZone, Classic, Raw, PrecisionSweep };
+inline constexpr int kCurveCount = 7;
+inline constexpr std::array<const char*, kCurveCount> kCurveKeys = {"linear", "power", "s_curve", "dual_zone", "classic", "raw", "precision_sweep"};
 inline constexpr std::array<const char*, kCurveCount> kCurveLabels = {
-    "Linear", "Exponential / Power", "S-curve (smoothstep)", "Dual-zone", "Classic (slow centre, fast edge)", "Instant / Raw"};
+    "Linear", "Exponential / Power", "S-curve (smoothstep)", "Dual-zone", "Classic (slow centre, fast edge)", "Instant / Raw", "Precision sweep"};
 
 // All units: stick in [-1, 1] (deadzone not yet applied); camera in IR pixel space; time in seconds.
 struct Config {
@@ -44,6 +44,7 @@ struct Config {
     float curveExponent = 1.6f;        // Power: <1 faster centre, >1 precision
     float dualZoneSplit = 0.5f;        // Dual-zone: end of the precision zone
     float dualZoneOutput = 0.25f;      // Dual-zone: output reached at the end of the precision zone
+    float trackingSpeed = 420.f;       // inner-region gain in camera px/s per unit of remapped travel
     float sensitivityX = 1.0f;
     float sensitivityY = 1.0f;
     bool invertY = false;
@@ -70,6 +71,35 @@ struct Config {
     float triggerThreshold = 0.5f;     // analog trigger pull that counts as pressed (applied when sampling the pad)
 };
 
+struct SweepPreset {
+    const char* name;
+    float tracking, crossover, peak;
+};
+inline constexpr SweepPreset kSweepPresets[] = {
+    {"Balanced", 420.f, 0.52f, 3200.f},
+    {"Sharpshooter", 260.f, 0.65f, 2400.f},
+    {"Arcade rush", 600.f, 0.42f, 5200.f},
+};
+
+inline void ApplySweepPreset(Config& c, const SweepPreset& p) {
+    c.curve = Curve::PrecisionSweep;
+    c.deadzoneMode = DeadzoneMode::ScaledRadial;
+    c.trackingSpeed = p.tracking;
+    c.dualZoneSplit = p.crossover;
+    c.maxSpeedX = p.peak;
+    c.maxSpeedY = p.peak * (700.f / 900.f);
+    c.speedCap = 8000.f;
+    c.rampSeconds = c.smoothingMs = 0.f;
+    c.edgeBoost = c.sensitivityX = c.sensitivityY = 1.f;
+    c.absoluteMode = c.recenterOnRelease = false;
+}
+
+inline Config ModernAim() {
+    Config c;
+    ApplySweepPreset(c, kSweepPresets[0]);
+    return c;
+}
+
 inline void Sanitize(Config& c) {
     auto fin = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
     c.radialDeadzone = std::clamp(fin(c.radialDeadzone, 0.12f), 0.0f, 0.6f);
@@ -77,6 +107,7 @@ inline void Sanitize(Config& c) {
     c.leftDeadzone = std::clamp(fin(c.leftDeadzone, 0.12f), 0.0f, 0.6f);
     c.leftSaturation = std::clamp(fin(c.leftSaturation, 1.0f), 0.5f, 1.0f);
     c.triggerThreshold = std::clamp(fin(c.triggerThreshold, 0.5f), 0.1f, 0.9f);
+    c.trackingSpeed = std::clamp(fin(c.trackingSpeed, 420.f), 50.f, 1200.f);
     c.curveExponent = std::clamp(fin(c.curveExponent, 1.6f), 0.3f, 4.0f);
     c.dualZoneSplit = std::clamp(fin(c.dualZoneSplit, 0.5f), 0.1f, 0.9f);
     c.dualZoneOutput = std::clamp(fin(c.dualZoneOutput, 0.25f), 0.05f, 0.9f);
@@ -84,9 +115,9 @@ inline void Sanitize(Config& c) {
     c.sensitivityY = std::clamp(fin(c.sensitivityY, 1.0f), 0.1f, 4.0f);
     c.smoothingMs = std::clamp(fin(c.smoothingMs, 0.0f), 0.0f, 150.0f);
     c.precisionScale = std::clamp(fin(c.precisionScale, 0.35f), 0.1f, 1.0f);
-    c.maxSpeedX = std::clamp(fin(c.maxSpeedX, 900.0f), 100.0f, 3000.0f);
-    c.maxSpeedY = std::clamp(fin(c.maxSpeedY, 700.0f), 100.0f, 3000.0f);
-    c.speedCap = std::clamp(fin(c.speedCap, 1600.0f), 200.0f, 4000.0f);
+    c.maxSpeedX = std::clamp(fin(c.maxSpeedX, 900.0f), 100.0f, 8000.0f);
+    c.maxSpeedY = std::clamp(fin(c.maxSpeedY, 700.0f), 100.0f, 8000.0f);
+    c.speedCap = std::clamp(fin(c.speedCap, 1600.0f), 200.0f, 8000.0f);
     c.rampSeconds = std::clamp(fin(c.rampSeconds, 0.12f), 0.0f, 0.5f);
     c.edgeBoost = std::clamp(fin(c.edgeBoost, 1.0f), 1.0f, 3.0f);
     c.edgeAccelSeconds = std::clamp(fin(c.edgeAccelSeconds, 0.4f), 0.05f, 2.0f);
@@ -110,6 +141,13 @@ inline float EvalCurve(const Config& cfg, float m) {
         const float s = cfg.dualZoneSplit;
         const float o = cfg.dualZoneOutput;
         return m <= s ? o * m / s : o + (1.0f - o) * (m - s) / (1.0f - s);
+    }
+    case Curve::PrecisionSweep: {
+        // Linear tracking plus a quadratic outer term. Both speed and slope
+        // are continuous at crossover. Peak changes leave the inner gain alone.
+        const float gain = std::min(cfg.trackingSpeed / cfg.maxSpeedX, 1.f);
+        const float edge = std::max(0.f, (m - cfg.dualZoneSplit) / (1.f - cfg.dualZoneSplit));
+        return gain * m + (1.f - gain) * edge * edge;
     }
     case Curve::Classic:
         return m * m * (0.4f + 0.6f * m);

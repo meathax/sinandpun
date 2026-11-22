@@ -2,8 +2,8 @@
 
 // Controls state shared between the F10 settings menu and the virtual Wii Remote: aiming tunables, the
 // controller scheme, mouse options and the per-profile action bindings. Persisted to Config.toml:
-//   [input]                version = 3, scheme = "auto" | "classic" | "pointer", switch_toast = true
-//                          (auto: the device used last picks the scheme live; files written before version 2
+//   [input]                version = 4, scheme = "auto" | "classic" | "pointer", switch_toast = true
+//                          (auto: both devices drive the Wii pointer; files written before version 2
 //                          with scheme = "pointer" - the old default - are read as "auto")
 //   [input.gamepad]        <action> = "pad:south | pad:right_trigger"        (up to 3 bindings)
 //   [input.keyboard_mouse] <action> = "key:Space | mouse:x1 | mouse:wheel_up"
@@ -29,7 +29,7 @@
 
 namespace AimSettings {
 
-inline constexpr int kSchemaVersion = 3;
+inline constexpr int kSchemaVersion = 4;
 
 // Action names follow Sin & Punishment: Star Successor (manual + StrategyWiki control tables). The Classic
 // Controller / Wii Remote+Nunchuk wire mapping is in virtual_remote.cpp.
@@ -126,13 +126,12 @@ struct MouseConfig {
 
 struct Settings {
     SchemeMode schemeMode = SchemeMode::Auto;
-    // Scheme the virtual remote starts with: the pinned scheme, or Pointer (the verified path) in Auto until the
-    // first input decides. The input service keeps it equal to the scheme in effect so a remote created late
+    // The input service keeps the initial extension equal to the scheme in effect so a remote created late
     // starts right; live changes go through VirtualRemote::SetScheme.
     Scheme scheme = Scheme::Pointer;
     bool switchToast = true;          // brief on-screen note when the scheme switches automatically
     bool playStationPrompts = false;  // Xbox One by default; independent of the input scheme
-    DualAnalog::Config aim;
+    DualAnalog::Config aim = DualAnalog::ModernAim();
     MouseConfig mouse;
     GyroAim::Config gyro;
     InputMap::Table<kActionCount> bindings;
@@ -299,6 +298,7 @@ inline void LoadFromConfig(Settings& s) {
     int schemaVersion = 1;
     if (const auto v = FindValue<int64_t>(d, "input", "version")) schemaVersion = static_cast<int>(*v);
     if (schemaVersion < 3) s.bindings = LegacyBindings().bindings;
+    if (schemaVersion < 4 && d.contains("aim")) c = DualAnalog::Config{};
     if (const auto v = FindValue<std::string>(d, "input", "scheme")) {
         s.schemeMode = InputMap::ParseSchemeMode(*v, schemaVersion, s.schemeMode);
     }
@@ -316,6 +316,7 @@ inline void LoadFromConfig(Settings& s) {
     if (const auto v = FindValue<std::string>(d, "aim", "pointer_mode")) c.absoluteMode = *v == "absolute";
     num("right_deadzone", c.radialDeadzone);
     num("right_saturation", c.outerSaturation);
+    num("tracking_speed", c.trackingSpeed);
     num("curve_exponent", c.curveExponent);
     num("dual_zone_split", c.dualZoneSplit);
     num("dual_zone_output", c.dualZoneOutput);
@@ -336,6 +337,13 @@ inline void LoadFromConfig(Settings& s) {
     num("left_saturation", c.leftSaturation);
     num("trigger_threshold", c.triggerThreshold);
     flag("aim", "invert_move_y", c.invertMoveY);
+
+    if (schemaVersion < 4 && s.schemeMode == SchemeMode::Auto && c.curve == DualAnalog::Curve::Linear &&
+        c.maxSpeedX == 900.f && c.speedCap == 1600.f && !c.absoluteMode && !c.recenterOnRelease &&
+        c.sensitivityX == 1.f && c.sensitivityY == 1.f && c.edgeBoost == 1.f && c.smoothingMs == 0.f &&
+        std::fabs(c.rampSeconds - 0.12f) < 0.0001f && c.deadzoneMode == DualAnalog::DeadzoneMode::ScaledRadial &&
+        c.dualZoneSplit == 0.5f)
+        DualAnalog::ApplySweepPreset(c, DualAnalog::kSweepPresets[0]);
 
     ApplyTestOverrides(s);
 
@@ -421,7 +429,7 @@ inline void SetEffectiveScheme(Scheme scheme) {
 
 inline void ResetAimToDefaults() {
     Settings s = Get();
-    s.aim = DualAnalog::Config{};
+    s.aim = DualAnalog::ModernAim();
     s.mouse = MouseConfig{};
     s.gyro = GyroAim::Config{};
     Set(s);
@@ -461,6 +469,7 @@ inline bool Save() {
     put("aim", "right_deadzone", Float(c.radialDeadzone));
     put("aim", "right_saturation", Float(c.outerSaturation));
     put("aim", "curve", str(DualAnalog::kCurveKeys[static_cast<size_t>(c.curve)]));
+    put("aim", "tracking_speed", Float(c.trackingSpeed));
     put("aim", "curve_exponent", Float(c.curveExponent));
     put("aim", "dual_zone_split", Float(c.dualZoneSplit));
     put("aim", "dual_zone_output", Float(c.dualZoneOutput));

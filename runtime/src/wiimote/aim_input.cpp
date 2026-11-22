@@ -388,12 +388,12 @@ void TickScheme() {
             const InputMap::SchemeUpdate update =
                 InputMap::UpdateScheme(g.arbiter, mode, sense, static_cast<int64_t>(now));
             if (update.deviceChanged) pub.device.store(static_cast<uint8_t>(g.arbiter.device));
+            if (update.deviceChanged && mode == InputMap::SchemeMode::Auto) {
+                pub.noticeScheme.store(static_cast<uint8_t>(g.arbiter.scheme));
+                pub.noticeAt.store(now);
+                pub.noticeSerial.fetch_add(1);
+            }
             if (update.schemeChanged) {
-                if (update.deviceChanged && mode == InputMap::SchemeMode::Auto) {
-                    pub.noticeScheme.store(static_cast<uint8_t>(g.arbiter.scheme));
-                    pub.noticeAt.store(now);
-                    pub.noticeSerial.fetch_add(1);
-                }
                 publish = log = true;
                 why = mode == InputMap::SchemeMode::Auto ? "auto" : "setting";
             }

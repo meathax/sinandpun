@@ -92,7 +92,7 @@ InputMap::AimSource UpdatePreview(const AimSettings::Settings& s) {
             g_preview.pointer.y = DualAnalog::SmoothToward(g_preview.pointer.y, ty, dt, s.mouse.smoothingMs);
         }
     } else {
-        DualAnalog::Advance(g_preview.pointer, s.aim, -g_preview.rawX, g_preview.rawY, dt, false);
+        DualAnalog::Advance(g_preview.pointer, s.aim, -g_preview.rawX, g_preview.rawY, dt, AimSettings::ActionValue(s, Action::Precision, raw) >= 0.5f);
     }
     return g_preview.arbiter.active;
 }
@@ -273,7 +273,7 @@ void DrawPreview(ListView& v, const AimSettings::Settings& s) {
 
 void BuildStickShaping(ListView& v, AimSettings::Settings& s, Edit& e) {
     DualAnalog::Config& c = s.aim;
-    const DualAnalog::Config d{};
+    const auto d = DualAnalog::ModernAim();
     v.Section("Left stick (move)");
     e.Take(v.Slider("Inner deadzone", &c.leftDeadzone, 0.0f, 0.5f, 0.01f, "%.2f", d.leftDeadzone,
                     "Left stick travel ignored around the centre. Raise it if the character drifts."));
@@ -282,6 +282,28 @@ void BuildStickShaping(ListView& v, AimSettings::Settings& s, Edit& e) {
     e.Take(v.Toggle("Invert Y (move)", &c.invertMoveY, d.invertMoveY, "Swap up and down on the left stick."));
 
     v.Section("Right stick (aim)");
+    for (const auto& preset : DualAnalog::kSweepPresets) {
+        if (v.Action(preset.name, "Apply", preset.peak < 3000.f ? "Wider fine-control zone for small targets." :
+                    preset.peak > 4000.f ? "Earlier acceleration for rapid target changes." :
+                    "Fine tracking near centre and a fast sweep at the rim.")) {
+            DualAnalog::ApplySweepPreset(c, preset);
+            s.schemeMode = AimSettings::SchemeMode::Auto;
+            e.dirty = e.save = true;
+        }
+    }
+    if (c.curve == DualAnalog::Curve::PrecisionSweep) {
+        e.Take(v.Slider("Tracking speed", &c.trackingSpeed, 50.f, 1200.f, 10.f, "%.0f", 420.f,
+                        "Gain for small corrections inside the sweep threshold."));
+        e.Take(v.Slider("Sweep threshold", &c.dualZoneSplit, 0.1f, 0.9f, 0.01f, "%.2f", 0.52f,
+                        "Fraction of usable stick travel before the fast sweep blends in."));
+    }
+    float maxSpeed = c.maxSpeedX;
+    if (auto r = v.Slider("Full-stick speed", &maxSpeed, 100.0f, 8000.0f, 50.0f, "%.0f px/s", d.maxSpeedX,
+                          "Camera pixels per second at full deflection.")) {
+        c.maxSpeedX = maxSpeed;
+        c.maxSpeedY = maxSpeed * (700.0f / 900.0f);
+        e.Take(r);
+    }
     int dz = static_cast<int>(c.deadzoneMode);
     if (auto r = v.Choice("Deadzone type", &dz, DualAnalog::kDeadzoneModeLabels.data(), DualAnalog::kDeadzoneModeCount,
                           static_cast<int>(d.deadzoneMode),
@@ -339,7 +361,7 @@ void BuildPointerAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
     if (v.Action("Calibrate gyro", "Calibrate", AimInput::GyroStatus())) AimInput::CalibrateGyro();
 
     DualAnalog::Config& c = s.aim;
-    const DualAnalog::Config d{};
+    const auto d = DualAnalog::ModernAim();
     v.Section("Stick pointer (Wii Remote scheme)");
     int mode = c.absoluteMode ? 1 : 0;
     static const char* const kModes[] = {"Velocity", "Absolute"};
@@ -348,14 +370,7 @@ void BuildPointerAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
         c.absoluteMode = mode == 1;
         e.Take(r);
     }
-    float maxSpeed = c.maxSpeedX;
-    if (auto r = v.Slider("Max speed", &maxSpeed, 100.0f, 3000.0f, 50.0f, "%.0f px/s", d.maxSpeedX,
-                          "Camera pixels per second at full deflection.")) {
-        c.maxSpeedX = maxSpeed;
-        c.maxSpeedY = maxSpeed * (700.0f / 900.0f);
-        e.Take(r);
-    }
-    e.Take(v.Slider("Speed cap", &c.speedCap, 200.0f, 4000.0f, 50.0f, "%.0f px/s", d.speedCap, "Upper limit after ramp-up and edge boost."));
+    e.Take(v.Slider("Speed cap", &c.speedCap, 200.0f, 8000.0f, 50.0f, "%.0f px/s", d.speedCap, "Upper limit after ramp-up and edge boost."));
     float rampMs = c.rampSeconds * 1000.0f;
     if (auto r = v.Slider("Ramp-up time", &rampMs, 0.0f, 500.0f, 10.0f, "%.0f ms", d.rampSeconds * 1000.0f,
                           "Slow start after leaving the deadzone.")) {
@@ -491,7 +506,7 @@ void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
     int mode = static_cast<int>(s.schemeMode);
     if (auto r = v.Choice("Control scheme", &mode, InputMap::kSchemeModeLabels.data(),
                           static_cast<int>(InputMap::kSchemeModeLabels.size()), 0,
-                          "Automatic: the last device you used decides. A gamepad plays as a Wii Classic Controller (right stick aims); mouse or keyboard plays as a Wii Remote + Nunchuk (the mouse is the pointer). The other two options pin one scheme. Applies live.",
+                          "Automatic uses the Wii pointer for modern right-stick and mouse aiming. Choose Legacy Classic Controller for original stick behaviour.",
                           0, "Automatic")) {
         s.schemeMode = static_cast<InputMap::SchemeMode>(mode);
         e.Take(r);
@@ -593,7 +608,7 @@ void BuildSchemeRow(ListView& view) {
 void DrawHud() {
     static uint32_t seen = AimInput::LatestSwitch().serial;
     static Clock::time_point shown{};
-    static InputMap::Scheme scheme = InputMap::Scheme::Pointer;
+    static bool gamepad = false;
     static bool active = false;
     const AimInput::SchemeNotice n = AimInput::LatestSwitch();
     if (n.serial != seen) {
@@ -601,7 +616,7 @@ void DrawHud() {
         if (AimSettings::Get().switchToast) {
             active = true;
             shown = Clock::now();
-            scheme = n.scheme;
+            gamepad = AimInput::LastDevice() == InputMap::ActiveDevice::Gamepad;
         }
     }
     if (!active) return;
@@ -612,8 +627,7 @@ void DrawHud() {
         return;
     }
     const float alpha = age < kFadeIn ? age / kFadeIn : age < kHold ? 1.0f : 1.0f - (age - kHold) / kFadeOut;
-    const char* text = scheme == InputMap::Scheme::Classic ? "Gamepad detected - Classic Controller"
-                                                           : "Mouse & keyboard - Wii Remote";
+    const char* text = gamepad ? "Gamepad pointer active" : "Mouse and keyboard active";
     const ImGuiIO& io = ImGui::GetIO();
     const float S = game_ui::Scale();
     const float w = game_ui::TextSize(22.0f, text).x + 24.0f * S;
@@ -668,12 +682,10 @@ bool Capturing() { return g_capture.open || AimInput::Capturing(); }
 
 void ResetPage(int page) {
     AimSettings::Settings s = AimSettings::Get();
-    const DualAnalog::Config fresh{};
+    const auto fresh = DualAnalog::ModernAim();
     const DualAnalog::Config current = s.aim;
     auto pointerFields = [](DualAnalog::Config& to, const DualAnalog::Config& from) {
         to.absoluteMode = from.absoluteMode;
-        to.maxSpeedX = from.maxSpeedX;
-        to.maxSpeedY = from.maxSpeedY;
         to.speedCap = from.speedCap;
         to.rampSeconds = from.rampSeconds;
         to.edgeBoost = from.edgeBoost;

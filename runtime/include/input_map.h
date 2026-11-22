@@ -322,8 +322,8 @@ enum class ActiveDevice : uint8_t { None, Gamepad, KeyboardMouse };
 inline constexpr int kSchemeSchemaVersion = 2;
 inline constexpr std::array<const char*, 3> kSchemeModeKeys = {"auto", "classic", "pointer"};
 inline constexpr std::array<const char*, 3> kSchemeModeLabels = {"Automatic (recommended)",
-                                                                  "Always Classic Controller (gamepad)",
-                                                                  "Always Wii Remote (mouse + keyboard)"};
+                                                                  "Legacy Classic Controller",
+                                                                  "Always Wii Remote pointer"};
 
 inline std::string SchemeModeKey(SchemeMode m) { return kSchemeModeKeys[static_cast<size_t>(m)]; }
 
@@ -337,10 +337,6 @@ inline SchemeMode ParseSchemeMode(std::string_view text, int schemaVersion, Sche
     if (t == "classic") return SchemeMode::Classic;
     if (t == "pointer") return schemaVersion < kSchemeSchemaVersion ? SchemeMode::Auto : SchemeMode::Pointer;
     return fallback;
-}
-
-inline Scheme SchemeForDevice(ActiveDevice d, Scheme current) {
-    return d == ActiveDevice::Gamepad ? Scheme::Classic : d == ActiveDevice::KeyboardMouse ? Scheme::Pointer : current;
 }
 
 // Pad axis layout of RawSample: 0 LX, 1 LY, 2 RX, 3 RY, 4 LT, 5 RT.
@@ -420,9 +416,8 @@ struct SchemeUpdate {
 
 inline constexpr int64_t kSchemeDwellMs = 400;
 
-inline Scheme EffectiveScheme(SchemeMode mode, const SchemeArbiter& a) {
-    return mode == SchemeMode::Classic ? Scheme::Classic : mode == SchemeMode::Pointer ? Scheme::Pointer
-                                                                                       : SchemeForDevice(a.device, a.scheme);
+inline Scheme EffectiveScheme(SchemeMode mode, const SchemeArbiter&) {
+    return mode == SchemeMode::Classic ? Scheme::Classic : Scheme::Pointer;
 }
 
 // Seeds the device without a switch (startup, mode change): no dwell consumed, no event.
