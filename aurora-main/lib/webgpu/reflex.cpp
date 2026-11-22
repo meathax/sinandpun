@@ -1,4 +1,5 @@
 #include "reflex.hpp"
+#include "dlss.hpp"
 
 #if defined(_WIN32) && __has_include("../../../third_party/nvidia/nvapi/nvapi.h")
 #include <d3d12.h>
@@ -128,6 +129,7 @@ void mark(uint64_t frame, Marker type) {
     if (!frame || !active()) return;
     std::shared_lock lock(lifetime);
     if (!device || !active()) return;
+    if (webgpu::dlss::fg_marker(frame, unsigned(type))) return;
     NV_LATENCY_MARKER_PARAMS m{};
     m.version = NV_LATENCY_MARKER_PARAMS_VER;
     m.frameID = frame;
@@ -141,12 +143,12 @@ void begin() {
     {
         std::shared_lock lock(lifetime);
         if (!device || !active()) return;
-        if (const auto error = sleepFrame(device); error != NVAPI_OK) {
+        frame = ++sequence;
+        if (const auto error = webgpu::dlss::fg_sleep(frame) ? NVAPI_OK : sleepFrame(device); error != NVAPI_OK) {
             enabled.store(false);
             std::fprintf(stderr, "[reflex] sleep failed: %d\n", int(error));
             return;
         }
-        frame = ++sequence;
         producer.store(frame);
         if (frame == 120 && getStatus) {
             NV_GET_SLEEP_STATUS_PARAMS state{};

@@ -64,6 +64,7 @@ struct RuntimeUserConfig {
     std::optional<std::string> dlssMode;
     std::optional<uint32_t> dlssSharpness;
     std::optional<bool> dlssMotionVectors;
+    std::optional<bool> frameGeneration;
     std::optional<bool> reflex;
     std::optional<bool> skipUnreadyPipelines;
     std::optional<bool> vsync;
@@ -794,6 +795,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
             config.dlssSharpness =
                 static_cast<uint32_t>(std::lround(std::clamp(*sharpness, 0.0f, 100.0f)));
         }
+        config.frameGeneration = FindConfigValue<bool>(document, "video", "dlss_frame_generation");
         config.reflex = FindConfigValue<bool>(document, "video", "reflex");
         config.dlssMotionVectors = FindConfigValue<bool>(document, "video", "dlss_motion_vectors");
     }
@@ -1097,6 +1099,11 @@ inline bool SetDlssSharpness(uint32_t value) {
     value = std::min<uint32_t>(value, 100u);
     Mutable().dlssSharpness = value;
     return WriteSetting("video", "dlss_sharpness", std::to_string(value));
+}
+
+inline bool SetFrameGeneration(bool value) {
+    Mutable().frameGeneration = value;
+    return WriteSetting("video", "dlss_frame_generation", value ? "true" : "false");
 }
 
 inline bool SetReflex(bool value) {

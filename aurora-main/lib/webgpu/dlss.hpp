@@ -95,6 +95,14 @@ struct Output {
 // left untouched whenever possible.
 bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& params, Output& output);
 // Call after the command buffer built from the encoder passed back by dispatch() was submitted.
+void set_fg(bool enabled) noexcept;
+bool fg_marker(uint64_t frame, unsigned marker) noexcept;
+void fg_render_frame(uint64_t frame) noexcept;
+bool fg_sleep(uint64_t frame) noexcept;
+bool fg_active() noexcept;
+void capture_fg(wgpu::CommandEncoder& encoder, const wgpu::Texture& source, void* window) noexcept;
+wgpu::Texture fg_target(unsigned width, unsigned height, wgpu::TextureFormat format);
+void present_fg(bool vsync) noexcept;
 void after_submit() noexcept;
 
 // A/B switch: with false the motion vectors are all zero (DLSS then relies on its own history rectification).

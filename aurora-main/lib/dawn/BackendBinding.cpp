@@ -25,7 +25,8 @@ std::shared_ptr<wgpu::ChainedStruct> SetupWindowAndGetSurfaceDescriptor(SDL_Wind
   return std::move(desc);
 #elif defined(SDL_PLATFORM_WIN32)
   std::shared_ptr<wgpu::SurfaceSourceWindowsHWND> desc = std::make_shared<wgpu::SurfaceSourceWindowsHWND>();
-  desc->hwnd = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+  desc->hwnd = SDL_GetPointerProperty(props, "aurora.dawn.fallback.hwnd",
+      SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
   desc->hinstance = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, nullptr);
   return std::move(desc);
 #elif defined(SDL_PLATFORM_LINUX)

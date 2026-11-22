@@ -36,6 +36,9 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include <sl_dlss_g.h>
+#include <sl_reflex.h>
+#include <sl_pcl.h>
 #include "reflex.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -205,6 +208,7 @@ struct Runtime {
   std::atomic<bool> fsrAvailable{false};
   bool slLoaded = false;
   bool dlssFeature = false;
+  bool fgSupported = false;
   ~Runtime() {
     // a joinable std::thread must not be destroyed (shutdown() normally joins it)
     if (initThread.joinable()) initThread.join();
@@ -306,18 +310,18 @@ void init_streamline(uint32_t vendorId, uint32_t deviceId, LUID adapterLuid) {
   pluginDir = dir;
   static const wchar_t* pluginPaths[1];
   pluginPaths[0] = pluginDir.c_str();
-  static const sl::Feature features[] = {sl::kFeatureDLSS};
+  static const sl::Feature features[] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
   sl::Preferences pref{};
   pref.showConsole = false;
   pref.logLevel = sl::LogLevel::eDefault;
   pref.pathsToPlugins = pluginPaths;
   pref.numPathsToPlugins = 1;
   pref.logMessageCallback = sl_log;
-  // Manual hooking: Dawn owns the device and swap chain. No command-list state tracking, no downloaded (OTA) plugins.
-  pref.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging |
+  // Only our foreground presenter uses the interposed DXGI factory. Dawn keeps its native device.
+  pref.flags = sl::PreferenceFlags::eUseFrameBasedResourceTagging |
                sl::PreferenceFlags::eDisableCLStateTracking;
   pref.featuresToLoad = features;
-  pref.numFeaturesToLoad = 1;
+  pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(features));
   pref.engine = sl::EngineType::eCustom;
   pref.engineVersion = "1";
   pref.projectId = "754abb53-63e1-4cba-9c0a-3f4e44b18da9";
@@ -339,6 +343,7 @@ void init_streamline(uint32_t vendorId, uint32_t deviceId, LUID adapterLuid) {
   if (const auto r = slIsFeatureSupported(sl::kFeatureDLSS, sai); r != sl::Result::eOk) {
     return set_state(State::Unavailable, sl_result_text(r));
   }
+  g_rt.fgSupported = slIsFeatureSupported(sl::kFeatureDLSS_G, sai) == sl::Result::eOk;
   g_rt.dlssFeature = true;
 
   sl::FeatureVersion fv{};
@@ -676,6 +681,20 @@ ConfigKey g_failedKey;
 ConfigKey g_currentKey;
 sl::ViewportHandle kViewport{0};
 
+std::atomic<bool> fgRequested{false}, fgConfirmed{false};
+ComPtr<IDXGISwapChain3> fgChain;
+SharedTex fgImage;
+wgpu::Texture fgComposed;
+bool fgTearing{};
+HWND fgWindow{};
+unsigned fgWidth{}, fgHeight{};
+sl::FrameToken* fgToken{};
+thread_local uint32_t renderFrameId{};
+std::atomic<bool> fgReflexReady{};
+ComPtr<ID3D12CommandAllocator> fgAllocators[3];
+unsigned measuredFrames{}, measuredPresents{}, generatedAge{120};
+bool fgOn{}, fgCaptured{}, fgShown{}, fgFailed{};
+void stop_fg();
 void wait_idle() {
   if (!g_rt.queue || !g_rt.fence) return;
   if (g_rt.fence->GetCompletedValue() >= g_rt.signaled) return;
@@ -686,6 +705,7 @@ void wait_idle() {
 }
 
 void destroy_instance() {
+  stop_fg();
   if (!g_instance) return;
   wait_idle();
   if (g_instance->outPending) {
@@ -853,7 +873,8 @@ bool record_fsr(Instance& inst, const DispatchParams& p) {
 
 bool record_dlss(Instance& inst, const DispatchParams& p, uint32_t frameIndex) {
   sl::FrameToken* token = nullptr;
-  if (slGetNewFrameToken(token, &frameIndex) != sl::Result::eOk || !token) {
+  const uint32_t tokenId = fgRequested.load() && renderFrameId ? renderFrameId : frameIndex;
+  if (slGetNewFrameToken(token, &tokenId) != sl::Result::eOk || !token) {
     return false;
   }
   float jx = 0.f, jy = 0.f;
@@ -901,6 +922,7 @@ bool record_dlss(Instance& inst, const DispatchParams& p, uint32_t frameIndex) {
   ok = ok && slSetTagForFrame(*token, kViewport, tags, 4, g_rt.list.Get()) == sl::Result::eOk;
   const sl::BaseStructure* inputs[] = {&kViewport};
   ok = ok && slEvaluateFeature(sl::kFeatureDLSS, *token, inputs, 1, g_rt.list.Get()) == sl::Result::eOk;
+  if (ok && fgRequested.load()) fgToken = token;
   return ok;
 }
 
@@ -1085,7 +1107,7 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
   float jx = 0.f, jy = 0.f;
   current_jitter(jx, jy);
   const bool constantMotion = g_constantMotion.load();
-  const bool estimateMotion = p.fsr || g_motionEnabled.load();
+  const bool estimateMotion = p.fsr || fgRequested.load() || g_motionEnabled.load();
   if (constantMotion || !estimateMotion) {
     // test hook: every pixel moves by the same known vector
     const wgpu::RenderPassColorAttachment attachment{.view = inst.mv.view, .loadOp = wgpu::LoadOp::Clear,
@@ -1164,6 +1186,216 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
   result.sampler = g_pipes.sampler;
   output = std::move(result);
   return true;
+}
+
+namespace {
+void stop_fg() {
+  fgReflexReady.store(false);
+  if (fgOn) {
+    sl::DLSSGOptions off{};
+    off.mode = sl::DLSSGMode::eOff;
+    slDLSSGSetOptions(kViewport, off);
+  }
+  if (fgShown && fgWindow) ShowWindowAsync(fgWindow, SW_SHOWNOACTIVATE);
+  if (fgChain) wait_idle();
+  fgChain.Reset();
+  for (auto& allocator : fgAllocators) allocator.Reset();
+  measuredFrames = measuredPresents = 0;
+  generatedAge = 120;
+  fgComposed = {};
+  fgImage = {};
+  fgWindow = nullptr;
+  fgOn = fgShown = fgCaptured = false;
+  fgConfirmed.store(false);
+  fgToken = nullptr;
+}
+
+bool start_fg(HWND window, unsigned width, unsigned height, wgpu::TextureFormat format) {
+  const DXGI_FORMAT dx = format == wgpu::TextureFormat::BGRA8Unorm ? DXGI_FORMAT_B8G8R8A8_UNORM :
+      format == wgpu::TextureFormat::RGBA8Unorm ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN;
+  if (dx == DXGI_FORMAT_UNKNOWN) return false;
+  using CreateFactory = HRESULT(WINAPI*)(UINT, REFIID, void**);
+  auto create = reinterpret_cast<CreateFactory>(GetProcAddress(g_slModule, "CreateDXGIFactory2"));
+  ComPtr<IDXGIFactory4> factory;
+  if (!create || FAILED(create(0, IID_PPV_ARGS(&factory)))) return false;
+  DXGI_SWAP_CHAIN_DESC1 desc{};
+  desc.Width = width;
+  desc.Height = height;
+  desc.Format = dx;
+  desc.SampleDesc.Count = 1;
+  desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+  desc.BufferCount = 3;
+  desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+  ComPtr<IDXGIFactory5> factory5;
+  BOOL tearing = FALSE;
+  fgTearing = SUCCEEDED(factory.As(&factory5)) &&
+      SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearing, sizeof(tearing))) && tearing;
+  if (fgTearing) desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+  ComPtr<IDXGISwapChain1> chain;
+  HRESULT hr = factory->CreateSwapChainForHwnd(g_rt.queue.Get(), GetParent(window), &desc, nullptr, nullptr, &chain);
+  if (FAILED(hr) || FAILED(chain.As(&fgChain))) {
+    logf(2, "[dlss-g] swapchain creation failed 0x%08lx", static_cast<unsigned long>(hr));
+    return false;
+  }
+  for (auto& allocator : fgAllocators) {
+    if (FAILED(g_rt.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)))) return false;
+  }
+  fgWindow = window;
+  fgWidth = width;
+  fgHeight = height;
+  if (!make_shared_tex(fgImage, width, height, dx, format, wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding,
+                       D3D12_RESOURCE_FLAG_NONE, "DLSS-G composed frame")) return false;
+  sl::ReflexOptions reflexOptions{};
+  reflexOptions.mode = sl::ReflexMode::eLowLatency;
+  if (slReflexSetOptions(reflexOptions) != sl::Result::eOk) return false;
+  fgReflexReady.store(true);
+  sl::DLSSGOptions options{};
+  options.mode = sl::DLSSGMode::eOn;
+  options.numFramesToGenerate = 1;
+  options.numBackBuffers = desc.BufferCount;
+  options.colorWidth = width;
+  options.colorHeight = height;
+  options.colorBufferFormat = dx;
+  options.hudLessBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+  options.mvecDepthWidth = g_instance->rw;
+  options.mvecDepthHeight = g_instance->rh;
+  options.depthBufferFormat = DXGI_FORMAT_R32_FLOAT;
+  options.mvecBufferFormat = DXGI_FORMAT_R16G16_FLOAT;
+  const auto result = slDLSSGSetOptions(kViewport, options);
+  logf(1, "[dlss-g] set options %d, presenter %ux%u", int(result), width, height);
+  fgOn = result == sl::Result::eOk;
+  return fgOn;
+}
+} // namespace
+
+void fg_render_frame(uint64_t frame) noexcept { renderFrameId = static_cast<uint32_t>(frame); }
+
+bool fg_sleep(uint64_t frame) noexcept {
+  if (!fgReflexReady.load()) return false;
+  const auto id = static_cast<uint32_t>(frame);
+  sl::FrameToken* token{};
+  return slGetNewFrameToken(token, &id) == sl::Result::eOk && token && slReflexSleep(*token) == sl::Result::eOk;
+}
+
+bool fg_marker(uint64_t frame, unsigned marker) noexcept {
+  if (!fgReflexReady.load()) return false;
+  // The visible swapchain has its own present markers below.
+  if (marker >= unsigned(sl::PCLMarker::ePresentStart)) return true;
+  const auto id = static_cast<uint32_t>(frame);
+  sl::FrameToken* token{};
+  return slGetNewFrameToken(token, &id) == sl::Result::eOk && token &&
+         slPCLSetMarker(static_cast<sl::PCLMarker>(marker), *token) == sl::Result::eOk;
+}
+void set_fg(bool enabled) noexcept { fgRequested.store(enabled); }
+bool fg_active() noexcept { return fgConfirmed.load(); }
+
+void capture_fg(wgpu::CommandEncoder& encoder, const wgpu::Texture& source, void* window) noexcept {
+  if (!fgRequested.load()) fgFailed = false;
+  if (!fgRequested.load() || fgFailed || !ready() || !g_rt.fgSupported || !window || !source ||
+      !fgToken || !g_instance || !(source.GetUsage() & wgpu::TextureUsage::CopySrc)) {
+    if (fgChain) stop_fg();
+    fgToken = nullptr;
+    return;
+  }
+  const auto width = source.GetWidth(), height = source.GetHeight();
+  if (fgChain && (width != fgWidth || height != fgHeight)) {
+    stop_fg();
+    return;
+  }
+  if (!fgChain && !start_fg(static_cast<HWND>(window), width, height, source.GetFormat())) {
+    logf(2, "[dlss-g] could not start presenter (format %u)", unsigned(source.GetFormat()));
+    stop_fg();
+    fgFailed = true;
+    return;
+  }
+  if (!begin_access(fgImage, true)) { stop_fg(); return; }
+  const wgpu::TexelCopyTextureInfo src{.texture=source}, dst{.texture=fgImage.texture};
+  const wgpu::Extent3D size{width, height, 1};
+  encoder.CopyTextureToTexture(&src, &dst, &size);
+  fgCaptured = true;
+}
+
+wgpu::Texture fg_target(unsigned width, unsigned height, wgpu::TextureFormat format) {
+  if (!fgOn || !fgRequested.load() || width != fgWidth || height != fgHeight) return {};
+  if (!fgComposed) {
+    const wgpu::TextureDescriptor td{.label = "DLSS-G display composition",
+        .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc,
+        .size = {width, height, 1}, .format = format};
+    fgComposed = g_rt.dawn.CreateTexture(&td);
+  }
+  return fgComposed;
+}
+void present_fg(bool vsync) noexcept {
+  if (!fgCaptured) return;
+  fgCaptured = false;
+  std::vector<FenceWait> waits;
+  end_access(fgImage, waits);
+  for (const auto& w : waits) g_rt.queue->Wait(w.fence.Get(), w.value);
+  // run_dlss has already waited for this slot's last submission.
+  const auto slot = (g_rt.frameIndex - 1) % 3;
+  ComPtr<ID3D12Resource> back;
+  if (FAILED(fgChain->GetBuffer(fgChain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back))) ||
+      FAILED(fgAllocators[slot]->Reset()) || FAILED(g_rt.list->Reset(fgAllocators[slot].Get(), nullptr))) {
+    stop_fg(); return;
+  }
+  D3D12_RESOURCE_BARRIER barrier{};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition = {back.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST};
+  g_rt.list->ResourceBarrier(1, &barrier);
+  g_rt.list->CopyResource(back.Get(), fgImage.resource.Get());
+  std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+  g_rt.list->ResourceBarrier(1, &barrier);
+  const sl::Extent rect{0, 0, g_instance->rw, g_instance->rh};
+  sl::Resource depth{sl::ResourceType::eTex2d, g_instance->depth.resource.Get(), nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON};
+  sl::Resource motion{sl::ResourceType::eTex2d, g_instance->mv.resource.Get(), nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON};
+  const sl::Extent outputRect{0, 0, fgWidth, fgHeight};
+  const sl::Extent sceneRect{0, 0, g_instance->ow, g_instance->oh};
+  sl::Resource hudless{sl::ResourceType::eTex2d, g_instance->out.resource.Get(), nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON};
+  const sl::ResourceTag tags[] = {
+    {nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &outputRect},
+    {&hudless, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &sceneRect},
+    {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &rect},
+    {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &rect}
+  };
+  // The scene output is also sampled by the final Dawn submission.
+  for (const auto& wait : g_instance->outReadWaits) g_rt.queue->Wait(wait.fence.Get(), wait.value);
+  auto* presentToken = fgToken;
+  auto tagged = slSetTagForFrame(*fgToken, kViewport, tags, static_cast<uint32_t>(std::size(tags)), g_rt.list.Get());
+  fgToken = nullptr;
+  if (FAILED(g_rt.list->Close()) || tagged != sl::Result::eOk) { stop_fg(); return; }
+  ID3D12CommandList* lists[]{g_rt.list.Get()};
+  g_rt.queue->ExecuteCommandLists(1, lists);
+  if (!fgShown) {
+    ShowWindowAsync(fgWindow, SW_HIDE);
+    fgShown = true;
+  }
+  slPCLSetMarker(sl::PCLMarker::ePresentStart, *presentToken);
+  const auto hr = fgChain->Present(vsync ? 1 : 0, !vsync && fgTearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
+  slPCLSetMarker(sl::PCLMarker::ePresentEnd, *presentToken);
+  g_rt.queue->Signal(g_rt.fence.Get(), ++g_rt.signaled);
+  g_rt.allocatorFence[slot] = g_rt.signaled;
+  if (FAILED(hr)) { stop_fg(); return; }
+  sl::DLSSGState state{};
+  const auto result = slDLSSGGetState(kViewport, state, nullptr);
+  // Dawn writes depth and vectors on another queue. Chain the plugin consumption
+  // fence into the shared fence Dawn waits on before its next BeginAccess.
+  if (result == sl::Result::eOk && state.inputsProcessingCompletionFence) {
+    g_rt.queue->Wait(static_cast<ID3D12Fence*>(state.inputsProcessingCompletionFence),
+                     state.lastPresentInputsProcessingCompletionFenceValue);
+    g_rt.queue->Signal(g_rt.fence.Get(), ++g_rt.signaled);
+  }
+  const bool generated = result == sl::Result::eOk && unsigned(state.status) == 0 && state.numFramesActuallyPresented > 1;
+  if (generated && !fgConfirmed.load())
+    logf(0, "[dlss-g] NVIDIA confirmed generation: result=%d status=%u actuallyPresented=%u", int(result),
+         unsigned(state.status), state.numFramesActuallyPresented);
+  generatedAge = generated ? 0u : std::min(generatedAge + 1u, 120u);
+  fgConfirmed.store(generatedAge < 30u && result == sl::Result::eOk && unsigned(state.status) == 0);
+  measuredPresents += result == sl::Result::eOk ? state.numFramesActuallyPresented : 0u;
+  if (++measuredFrames == 120) {
+    logf(0, "[dlss-g] applicationFrames=%u nvidiaPresents=%u result=%d status=%u", measuredFrames,
+         measuredPresents, int(result), unsigned(state.status));
+    measuredFrames = measuredPresents = 0;
+  }
 }
 
 void after_submit() noexcept {

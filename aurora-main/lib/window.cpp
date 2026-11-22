@@ -86,6 +86,7 @@ std::atomic_bool g_surfaceReady = true;
 bool g_lastPaused = false;
 bool g_gotFocus = false;
 #if defined(_WIN32)
+HWND g_fallbackPresentationWindow = nullptr;
 WNDPROC g_prevWindowProc = nullptr;
 // Native window handle captured once when the hook is installed. The presenter checks the native
 // size several times per slot, which used to be an SDL lookup for a handle that never changes.
@@ -107,6 +108,9 @@ LRESULT CALLBACK aurora_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
   if (sizeChanged) {
     g_nativeResizePending.store(true, std::memory_order_release);
     if (msg == WM_SIZE) {
+      if (g_fallbackPresentationWindow)
+        SetWindowPos(g_fallbackPresentationWindow, nullptr, 0, 0, LOWORD(lparam), HIWORD(lparam),
+                     SWP_NOACTIVATE | SWP_NOZORDER);
       // WM_SIZE carries the new client size directly.
       g_nativeClientSize.store(pack_native_size(static_cast<uint32_t>(LOWORD(lparam)),
                                                 static_cast<uint32_t>(HIWORD(lparam))),
@@ -129,6 +133,15 @@ void install_window_proc_hook() noexcept {
   if (hwnd == nullptr) {
     return;
   }
+  RECT rect{};
+  GetClientRect(hwnd, &rect);
+  if (aurora_frame_generation_requested()) {
+    g_fallbackPresentationWindow = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, L"STATIC", L"",
+      WS_CHILD | WS_VISIBLE | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0, rect.right, rect.bottom,
+        hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (g_fallbackPresentationWindow)
+      SDL_SetPointerProperty(props, "aurora.dawn.fallback.hwnd", g_fallbackPresentationWindow);
+  }
   g_nativeWindowHandle = hwnd;
   g_nativeClientSize.store(0, std::memory_order_release);
   g_prevWindowProc = reinterpret_cast<WNDPROC>(SetWindowLongPtr(hwnd, GWLP_WNDPROC,
@@ -147,6 +160,7 @@ void uninstall_window_proc_hook() noexcept {
     SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_prevWindowProc));
   }
   g_prevWindowProc = nullptr;
+  g_fallbackPresentationWindow = nullptr;
   g_nativeWindowHandle = nullptr;
   g_nativeClientSize.store(0, std::memory_order_release);
 }
@@ -297,6 +311,14 @@ void resize_swapchain() noexcept {
 }
 
 } // namespace
+
+void* frame_generation_window() noexcept {
+#if defined(_WIN32)
+  return g_fallbackPresentationWindow;
+#else
+  return nullptr;
+#endif
+}
 
 void apply_pending_surface_changes() noexcept {
 #ifdef AURORA_ENABLE_GX

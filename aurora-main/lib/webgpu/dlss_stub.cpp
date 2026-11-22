@@ -6,6 +6,15 @@
 
 namespace aurora::webgpu::dlss {
 
+void set_fg(bool) noexcept {}
+bool fg_marker(uint64_t, unsigned) noexcept { return false; }
+void fg_render_frame(uint64_t) noexcept {}
+bool fg_sleep(uint64_t) noexcept { return false; }
+bool fg_active() noexcept { return false; }
+void capture_fg(wgpu::CommandEncoder&, const wgpu::Texture&, void*) noexcept {}
+wgpu::Texture fg_target(unsigned, unsigned, wgpu::TextureFormat) { return {}; }
+void present_fg(bool) noexcept {}
+
 const char* mode_name(Mode mode) noexcept {
   switch (mode) {
   case Mode::UltraPerformance: return "Ultra Performance";

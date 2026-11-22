@@ -238,9 +238,11 @@ AuroraFrameRateMode AuroraModeFor(RuntimeConfigFile::FrameRateKind kind) {
     }
 }
 
+bool g_frameGeneration = RuntimeConfigFile::Get().frameGeneration.value_or(false);
+
 void ApplyFrameRate(int index) {
     const FrameRateItem& item = kFrameRates[static_cast<size_t>(index)];
-    aurora_set_frame_rate(AuroraModeFor(item.kind), item.fps, g_frameRateCap);
+    aurora_set_frame_rate(g_frameGeneration ? AURORA_FRAME_RATE_OFF : AuroraModeFor(item.kind), item.fps, g_frameRateCap);
 }
 
 void SetResolutionScale(float scale) {
@@ -340,7 +342,9 @@ void ApplyUpscaler() {
         factor = RuntimeConfigFile::kDlssModes[static_cast<size_t>(g_dlssMode)].factor;
         sharpness = g_dlssSharpness;
     }
-    aurora_set_reflex(g_reflex);
+    aurora_set_frame_generation(g_frameGeneration);
+    ApplyFrameRate(g_frameInterpolationMode);
+    aurora_set_reflex(g_frameGeneration || g_reflex);
     aurora_set_dlss_motion_vectors(g_dlssMotion);
     AuroraUpscaler mode = AURORA_UPSCALER_OFF;
     if (dlss) mode = AURORA_UPSCALER_DLSS;
@@ -354,6 +358,7 @@ void PersistUpscaler() {
     RuntimeConfigFile::SetFsrSharpness(static_cast<uint32_t>(std::lround(g_fsrSharpness)));
     RuntimeConfigFile::SetDlssMode(RuntimeConfigFile::kDlssModes[static_cast<size_t>(g_dlssMode)].name);
     RuntimeConfigFile::SetDlssSharpness(static_cast<uint32_t>(std::lround(g_dlssSharpness)));
+    RuntimeConfigFile::SetFrameGeneration(g_frameGeneration);
     RuntimeConfigFile::SetReflex(g_reflex);
     RuntimeConfigFile::SetDlssMotionVectors(g_dlssMotion);
 }
@@ -364,6 +369,7 @@ void ResetUpscaler() {
     g_fsrSharpness = static_cast<float>(RuntimeConfigFile::kDefaultFsrSharpness);
     g_dlssMode = static_cast<int>(RuntimeConfigFile::kDefaultDlssModeIndex);
     g_dlssSharpness = static_cast<float>(RuntimeConfigFile::kDefaultDlssSharpness);
+    g_frameGeneration = false;
     g_reflex = true;
     g_dlssMotion = false;
     ApplyUpscaler();
@@ -437,6 +443,7 @@ struct GraphicsState {
     float fsrSharpness = g_fsrSharpness;
     int dlssMode = g_dlssMode;
     float dlssSharpness = g_dlssSharpness;
+    bool frameGeneration = g_frameGeneration;
     bool reflex = g_reflex;
     bool dlssMotion = g_dlssMotion;
     bool disableCopyFilter = g_disableCopyFilter;
@@ -480,6 +487,7 @@ GraphicsState CurrentGraphicsState() {
         .fsrSharpness = g_fsrSharpness,
         .dlssMode = g_dlssMode,
         .dlssSharpness = g_dlssSharpness,
+        .frameGeneration = g_frameGeneration,
         .reflex = g_reflex,
         .dlssMotion = g_dlssMotion,
         .disableCopyFilter = g_disableCopyFilter,
@@ -598,6 +606,7 @@ void ApplyGraphicsLive(GraphicsState next) {
     g_fsrSharpness = next.fsrSharpness;
     g_dlssMode = next.dlssMode;
     g_dlssSharpness = next.dlssSharpness;
+    g_frameGeneration = next.frameGeneration;
     g_reflex = next.reflex;
     g_dlssMotion = next.dlssMotion;
     ApplyUpscaler();
@@ -629,6 +638,7 @@ void PersistGraphics(const GraphicsState& state) {
     RuntimeConfigFile::SetFsrSharpness(static_cast<uint32_t>(std::lround(state.fsrSharpness)));
     RuntimeConfigFile::SetDlssMode(RuntimeConfigFile::kDlssModes[static_cast<size_t>(state.dlssMode)].name);
     RuntimeConfigFile::SetDlssSharpness(static_cast<uint32_t>(std::lround(state.dlssSharpness)));
+    RuntimeConfigFile::SetFrameGeneration(state.frameGeneration);
     RuntimeConfigFile::SetReflex(state.reflex);
     RuntimeConfigFile::SetDlssMotionVectors(state.dlssMotion);
 
@@ -694,6 +704,7 @@ bool GraphicsDraftDirty() {
              std::fabs(g_graphicsDraft.fsrSharpness - g_fsrSharpness) < 1e-4f &&
              g_graphicsDraft.dlssMode == g_dlssMode &&
              std::fabs(g_graphicsDraft.dlssSharpness - g_dlssSharpness) < 1e-4f &&
+             g_graphicsDraft.frameGeneration == g_frameGeneration &&
              g_graphicsDraft.reflex == g_reflex &&
              g_graphicsDraft.dlssMotion == g_dlssMotion &&
              g_graphicsDraft.disableCopyFilter == g_disableCopyFilter &&
@@ -1499,9 +1510,12 @@ void BuildGraphicsPage(ListView& v) {
 
     // The built-in transform-based interpolation; it is not AMD's optical-flow FSR 3 Frame Generation (docs/FSR-NOTES.md).
     v.Section("Frame generation");
+    v.Toggle("NVIDIA DLSS Frame Generation (2x)", &g_graphicsDraft.frameGeneration, false,
+             "Apply and restart to enable. Requires D3D12 and DLSS or DLAA. Uses the original game rate and Reflex.");
+    if (g_frameGeneration) v.Info("Generated frames", aurora_frame_generation_active() ? "Active (NVIDIA confirmed)" : "Restart, then use DLSS or DLAA in a focused game window");
     v.Toggle("NVIDIA Reflex", &g_graphicsDraft.reflex, true,
              "Enable driver low-latency pacing on a supported NVIDIA GPU in Direct3D 12. Applies with graphics changes.");
-    if (g_reflex) v.Info("Reflex driver", aurora_reflex_active() ? "Active" : "Unavailable");
+    if (g_reflex || g_frameGeneration) v.Info("Reflex driver", aurora_reflex_active() ? "Active" : "Unavailable");
     static std::array<const char*, kFrameRates.size()> frameRateLabels{};
     for (size_t i = 0; i < kFrameRates.size(); ++i) {
         frameRateLabels[i] = kFrameRates[i].label;
@@ -1525,7 +1539,6 @@ void BuildGraphicsPage(ListView& v) {
     }
     v.Note("Turn VSync on (Display tab) for tear-free motion at a fixed rate or Match display; with VSync the rate cannot exceed the display refresh.");
 
-    v.Note("NVIDIA DLSS Frame Generation is not offered: it needs control of the swap chain (owned by the renderer) and true motion vectors, which this port does not have. The interpolation above is the frame generation available.");
 
     v.Section("Advanced");
     v.Toggle("Disable copy filter", &g_graphicsDraft.disableCopyFilter, true,

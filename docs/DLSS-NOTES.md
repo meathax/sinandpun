@@ -1,14 +1,6 @@
 # NVIDIA DLSS (Super Resolution, DLAA) and frame generation - notes
 
-Status: The Windows game and release probes run DLSS Super Resolution and DLAA on Direct3D 12. **The quality limit is motion vectors**: the game has no velocity buffer and this stage does
-not add one (section 4). NVIDIA Frame Generation (DLSS-G) is **not** implemented and not feasible in this renderer
-(section 7); the built-in interpolation is the frame generation on offer.
-
-The Windows ready and release packages include the pinned Streamline DLSS, DLSS-G,
-Reflex and PCL plugins and their NGX runtimes. D3D12 enables the Super Resolution
-and DLAA paths. NVIDIA Reflex uses the driver NVAPI interface for low-latency
-sleep and frame markers. Its Graphics toggle reports the live driver state.
-The presence of DLSS-G files alone does not connect the presentation chain.
+The Windows D3D12 renderer supports DLSS Super Resolution, DLAA, NVIDIA DLSS Frame Generation (2x) and Reflex. The ready and release packages include the pinned NVIDIA plugins. Section 4 explains the motion-vector quality limits. Section 7 describes the foreground presentation path and verification.
 
 ## 1. What exists
 
@@ -218,20 +210,12 @@ like a strong spatial upscaler with temporal AA in motion; try "Estimated motion
 
 ## 7. Frame generation (question C)
 
-**NVIDIA DLSS Frame Generation: not feasible / not safe here; not implemented.**
+Enable **NVIDIA DLSS Frame Generation (2x)** under Graphics, apply, then restart with D3D12 and DLSS Quality or DLAA. The game uses its original simulation cadence and enables Reflex. The toggle is opt-in on a new install.
 
-* DLSS-G needs the application's DXGI swap chain to be a Streamline proxy (`slUpgradeInterface` on the swap chain, or
-  `CreateSwapChain*` through the proxied factory) so Streamline can hook `Present`, `ResizeBuffers` and `GetBuffer`. The
-  swap chain here is created and presented inside `webgpu_dawn.dll` from Dawn's own factory; Dawn exposes no
-  `IDXGISwapChain` and no hook. Replacing it means giving up Dawn's `wgpu::Surface` for the window and presenting through
-  our own swap chain (copy the Dawn frame into a back buffer), which collides with the VRR / present-mode / frame-limiter
-  work that owns that code and with SDL's window handling. Not a safe change to make blind.
-* DLSS-G also needs per-frame depth and true motion vectors plus a HUD-less colour buffer and a separate UI buffer. This
-  engine has estimated vectors at best, a constant depth and the HUD baked into the EFB (section 3-4); generated frames
-  from bad vectors are visibly worse than the existing approach. It also needs `sl.dlss_g.dll`, NVAPI-side requirements
-  (hardware GPU scheduling) and a focused window.
-* Evidence that it *is* a sound design in a renderer that owns its swap chain: lessons 47015 / 46959 / 47527 (GDL project:
-  Streamline proxy swap chain, DLSS-G 2.00 frames per rendered frame). That is a different engine.
+On a configured launch, Dawn keeps a fallback child surface. A Streamline DXGI factory creates the visible flip-model swapchain on the focused top-level game window. The presenter copies the final composited frame through shared GPU memory and supplies the scene output, depth, and estimated motion vectors. A common Streamline frame token ties inputs to Reflex markers and the real Present call. Shared fences order Dawn, the native queue and the plugin's consumption of frame inputs.
+
+The Graphics status uses NVIDIA's actual presented-frame count. The runtime emits 120-application-frame measurement windows. Compare the reported NVIDIA presents with application frames in a focused, moving scene. Windows focus loss can suspend generation. Estimated motion vectors and guest HUD extraction can cause artifacts on fine HUD elements or newly revealed scenery.
+
 
 What is offered instead (already present, labelled "Frame generation" in the Graphics tab, `video.frame_rate`):
 
@@ -248,8 +232,7 @@ the GPU, with no optical flow, no neural network and no latency-hiding extra fra
 Compared with DLSS-G / FSR 3 frame generation: it is exact for rigid motion and camera moves (no image-space
 artifacts), but cannot invent in-between motion for anything it fails to match (particles, UI, texture animation,
 new objects), costs a full extra scene render per generated frame (GPU time scales with the factor) and CPU time at seal
-time. DLSS-G would be image-space and cheaper per extra frame but needs everything above. A note in the Frame generation
-section of the menu says the NVIDIA option is not offered.
+time.
 
 DLSS works together with the interpolation: each presented slot is jittered, upscaled and counts as one DLSS frame.
 

@@ -687,6 +687,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
     const bool blockingPresent = presentMode == wgpu::PresentMode::Fifo || presentMode == wgpu::PresentMode::FifoRelaxed;
     if (replay.nativeUncapped) gfx::presentation::request_native_surface();
     const auto present = [&](wgpu::CommandEncoder& encoder, bool finalPresent, bool show) {
+      webgpu::dlss::fg_render_frame(reflexFrame);
       using M = reflex::Marker;
       const bool extra = replay.scenePresentOnly || !finalPresent;
       reflex::mark(reflexFrame, extra ? M::ExtraSubmitStart : M::SubmitStart);
@@ -707,7 +708,13 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
       bool acquiredAsync=false;
       auto surfaceStatus = wgpu::SurfaceGetCurrentTextureStatus::Error;
       uint64_t surfaceWaitNanos = 0;
-      if (show) {
+      const auto& surfaceConfig = webgpu::g_graphicsConfig.surfaceConfiguration;
+      if (show && window::is_presentable())
+        currentTexture = webgpu::dlss::fg_target(surfaceConfig.width, surfaceConfig.height, surfaceConfig.format);
+      const bool nativePresenter = static_cast<bool>(currentTexture);
+      if (nativePresenter) {
+        currentView = currentTexture.CreateView();
+      } else if (show) {
         auto acquired=gfx::presentation::take_native_surface(!replay.nativeUncapped);
         if (acquired) {
           acquiredAsync=true;
@@ -863,6 +870,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
         Log.info("Skipping present; window not presentable");
       }
 
+      webgpu::dlss::capture_fg(encoder, currentTexture, window::frame_generation_window());
       if (finalPresent) {
         webgpu::gpu_prof::frame_end(encoder);
       }
@@ -882,10 +890,14 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
         g_metalfxPendingOutput = nullptr;
       }
       webgpu::dlss::after_submit();
+      webgpu::dlss::present_fg(blockingPresent);
       if (finalPresent) {
         webgpu::gpu_prof::after_submit();
       }
-      if (canPresent && g_surface) {
+      if (nativePresenter) {
+        gfx::after_present();
+        gfx::presentation::record_present(false);
+      } else if (canPresent && g_surface) {
         ZoneScopedN("Present");
         wgpu::ConvertibleStatus status = wgpu::Status::Error;
         {
@@ -1210,6 +1222,21 @@ bool aurora_reflex_active() {
   return aurora::reflex::active();
 #else
   return false;
+#endif
+}
+static std::atomic<bool> s_frameGenerationRequested{};
+bool aurora_frame_generation_requested(void) { return s_frameGenerationRequested.load(); }
+bool aurora_frame_generation_active(void) {
+#ifdef AURORA_ENABLE_GX
+  return aurora::webgpu::dlss::fg_active();
+#else
+  return false;
+#endif
+}
+void aurora_set_frame_generation(bool enabled) {
+  s_frameGenerationRequested.store(enabled);
+#ifdef AURORA_ENABLE_GX
+  aurora::webgpu::dlss::set_fg(enabled);
 #endif
 }
 void aurora_set_reflex(bool enabled) {

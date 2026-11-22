@@ -7,6 +7,7 @@ struct SDL_Window;
 struct SDL_Renderer;
 
 namespace aurora::window {
+void* frame_generation_window() noexcept;
 
 enum class CustomEvent {
   FutureResize,
