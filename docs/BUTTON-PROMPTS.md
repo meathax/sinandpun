@@ -19,10 +19,7 @@ binding changes replace that registration and invalidate redundant bindings.
 Storage remains alive until unregistering the old registration. Texture
 replacement files need not be enabled. Only the exact BTN hash matches.
 
-Remote A is both Confirm and Lock-on; Remote B is both Cancel and Fire in
-`virtual_remote.cpp`. Those two shared icons show both configured bindings
-when different. Classic prompts have distinct menu and combat icons. This
-avoids silently mislabelling Remote prompts with just one of two valid inputs.
+Remote A/B use one full-size glyph each. Menus show Confirm/Cancel and active gameplay shows Lock-on/Fire. Each uses the first configured pad binding. Jump and Evade use their own action bindings.
 
 `tools/gen_button_prompts.py` generates original glyph artwork with Pillow and
 the existing Apache-2.0 Roboto font. Face symbols use vector shapes. Generated

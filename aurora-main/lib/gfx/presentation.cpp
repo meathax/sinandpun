@@ -35,6 +35,7 @@ struct SurfaceAcquirer {
   std::condition_variable cv;
   std::thread worker;
   SurfaceAcquisition result;
+  uint64_t lastNativeAcquire = 0;
   unsigned paused = 0;
   bool requested = false, acquiring = false, ready = false, inUse = false, stopping = false;
   ~SurfaceAcquirer() {
@@ -83,7 +84,12 @@ bool native_surface_ready() {
   auto& state=surfaceAcquirer;
   std::lock_guard lock{state.mutex};
   request_surface_locked(state);
-  return !state.paused && state.ready;
+  if (state.paused || !state.ready) return false;
+  AuroraFrameRateMode mode;
+  uint32_t fixedFps, cap;
+  gx::get_frame_rate(mode, fixedFps, cap);
+  return mode != AURORA_FRAME_RATE_UNCAPPED || !cap ||
+      now_nanos() - state.lastNativeAcquire >= 1000000000ull / cap;
 }
 std::optional<SurfaceAcquisition> take_native_surface(bool wait) {
   auto& state=surfaceAcquirer;
@@ -92,6 +98,7 @@ std::optional<SurfaceAcquisition> take_native_surface(bool wait) {
     state.cv.wait(lock,[&]{return state.ready || state.paused || state.stopping;});
   if(!state.ready || state.paused) return {};
   state.ready=false; state.inUse=true;
+  if (!wait) state.lastNativeAcquire = now_nanos();
   return std::exchange(state.result,{});
 }
 bool wait_native_surface() {
@@ -462,6 +469,18 @@ void aurora_wait_for_frame_worker() { aurora::gfx::render_worker::synchronize();
 
 bool aurora_wait_for_frame_worker_for(uint32_t timeoutMicros) {
   return aurora::gfx::render_worker::synchronize_for(std::chrono::microseconds{timeoutMicros});
+}
+
+void aurora_get_present_intervals(float* milliseconds, uint32_t count) {
+  using namespace aurora::gfx::presentation;
+  if (!milliseconds || !count) return;
+  std::lock_guard lock(g_timingMutex);
+  const size_t available = std::min<size_t>(count, g_timingSampleCount);
+  std::fill_n(milliseconds, count - available, 0.f);
+  for (size_t i = 0; i < available; ++i) {
+    const size_t index = (g_timingWriteIndex + g_timingSamples.size() - available + i) % g_timingSamples.size();
+    milliseconds[count - available + i] = std::chrono::duration<float, std::milli>(g_timingSamples[index].interval).count();
+  }
 }
 
 void aurora_set_present_schedule(uint64_t baseNanos, uint64_t intervalNanos) {

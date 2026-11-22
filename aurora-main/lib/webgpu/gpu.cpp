@@ -563,6 +563,8 @@ wgpu::PresentMode select_present_mode(const wgpu::SurfaceCapabilities& capabilit
     return wgpu::PresentMode::Immediate;
   }
   gfx::presentation::vrr_note_applied(false);
+  if (immediateSupported && g_presentUncapped.load(std::memory_order_acquire))
+    return wgpu::PresentMode::Immediate;
   if (vsync_enabled()) {
     return wgpu::PresentMode::Fifo;
   }

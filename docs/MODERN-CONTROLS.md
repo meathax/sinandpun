@@ -6,11 +6,10 @@ The default layout keeps both thumbs on the sticks during combat:
 | --- | --- | --- |
 | Shoot (hold), slash (tap) | RT | Left mouse / J |
 | Lock on (tap), charge (hold/release) | LT | Right mouse / K |
-| Jump | LB | Space / mouse side 1 |
-| Evade | RB | Left Shift / mouse side 2 |
+| Jump | RB | Space / mouse side 1 |
+| Evade | LB | Left Shift / mouse side 2 |
 | Move | Left stick | WASD |
 | Aim | Right stick | Mouse / arrow keys |
-| Precision aim | Right-stick click | Left Ctrl |
 | Recenter pointer | Left-stick click | R / middle mouse |
 | Pause / skip | Menu | Escape / P |
 | Switch character, when unlocked | View | Tab |
@@ -41,9 +40,7 @@ Remote A serves both confirm and lock, and Remote B serves both cancel and fire.
 
 ### Right-stick aiming
 
-Start with **Controls > Gamepad > Balanced**. Make small stick movements to
-track a target, push toward the rim to cross the screen, and release to park
-the reticle. Holding right-stick click reduces speed across the whole range.
+Reset **Controls > Gamepad** to restore a 0.12 deadzone, S-curve, 1,100 px/s full-stick speed and 0.80 sensitivity on both axes. Optional sweep presets are listed below.
 
 | Preset | Tracking gain (camera px/s) | Sweep begins at usable travel | Full-stick speed (camera px/s) |
 | --- | ---: | ---: | ---: |

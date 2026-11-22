@@ -36,6 +36,7 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include "reflex.hpp"
 
 using Microsoft::WRL::ComPtr;
 using namespace std::string_view_literals;
@@ -400,7 +401,10 @@ void init_thread_main(uint32_t vendorId, uint32_t deviceId, bool backendOk, bool
     ffxLoadFunctions(&g_rt.ffx, g_rt.fsrModule);
     g_rt.fsrAvailable.store(g_rt.ffx.CreateContext && g_rt.ffx.DestroyContext && g_rt.ffx.Dispatch);
   }
-  if (vendorId == 0x10DE) init_streamline(vendorId, deviceId, desc.AdapterLuid);
+  if (vendorId == 0x10DE) {
+    reflex::attach(g_rt.device.Get());
+    init_streamline(vendorId, deviceId, desc.AdapterLuid);
+  }
   else set_state(State::Unavailable, "DLSS requires an NVIDIA RTX GPU");
 }
 
@@ -991,6 +995,7 @@ void shutdown() noexcept {
   if (g_rt.fsrModule) FreeLibrary(g_rt.fsrModule);
   g_rt.fsrModule = nullptr;
   g_failed = false;
+  reflex::detach();
   g_rt.device.Reset();
   g_rt.dawn = {};
   g_rt.dawnQueue = {};

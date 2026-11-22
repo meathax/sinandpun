@@ -192,7 +192,7 @@ private:
         float lt = 0, rt = 0;          // Classic analog L / R
         float lx = 0, ly = 0;          // move stick after deadzone
         float rx = 0, ry = 0;          // aim stick, raw
-        bool precision = false, recenter = false;
+        bool recenter = false;
         bool blocked = false, scripted = false;
         bool absPtr = false;  // scripted absolute pointer (screen fractions)
         float au = 0.5f, av = 0.5f;
@@ -654,7 +654,6 @@ private:
         in.lx = mx;
         in.ly = my;
         vec(Action::AimLeft, Action::AimRight, Action::AimUp, Action::AimDown, in.rx, in.ry);
-        in.precision = buttons.precision;
         in.recenter = buttons.recenter;
         in.buttons = buttons.core;
         in.cl4 = buttons.classic4;
@@ -748,7 +747,7 @@ private:
         if (m_scheme == AimSettings::Scheme::Classic) {
             float sx = in.rx, sy = in.ry;
             if (byMouse) DualAnalog::MouseDeltaToStick(mdx, mdy, dt, mouse.stickSpeed, sx, sy);
-            DualAnalog::ClassicStick(m_config, m_classicFilter, sx, sy, dt, in.precision, classicX, classicY);
+            DualAnalog::ClassicStick(m_config, m_classicFilter, sx, sy, dt, classicX, classicY);
             return;
         }
         if (in.recenter && !m_prevRecenter) {
@@ -775,7 +774,7 @@ private:
                 config.absoluteMode = false;
                 config.recenterOnRelease = false;
             }
-            DualAnalog::Advance(m_pointer, config, -in.rx, in.ry, dt, in.precision);
+            DualAnalog::Advance(m_pointer, config, -in.rx, in.ry, dt);
         }
         if (m_settings.gyro.enabled && !in.scripted)
             DualAnalog::MouseRelativeStep(m_pointer, m_config, gdx, gdy, 1.f);

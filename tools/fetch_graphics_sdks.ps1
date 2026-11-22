@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $thirdParty = Join-Path (Split-Path $PSScriptRoot -Parent) "third_party"
 $sl = Join-Path $thirdParty "nvidia/streamline"
 $required = @("include/sl.h", "license.txt", "3rd-party-licenses.md", "bin/x64/nvngx_dlss.license.txt",
-              "bin/x64/sl.interposer.dll", "bin/x64/sl.common.dll", "bin/x64/sl.dlss.dll", "bin/x64/nvngx_dlss.dll")
+              "bin/x64/sl.interposer.dll", "bin/x64/sl.common.dll", "bin/x64/sl.dlss.dll", "bin/x64/nvngx_dlss.dll", "bin/x64/sl.dlss_g.dll", "bin/x64/nvngx_dlssg.dll", "bin/x64/sl.reflex.dll", "bin/x64/sl.pcl.dll", "bin/x64/reflex.license.txt")
 if ($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $sl $_) -PathType Leaf) }) {
     $version = "v2.14.16"
     $scratch = New-Item -ItemType Directory (Join-Path ([IO.Path]::GetTempPath()) ("sin-streamline-" + [guid]::NewGuid()))
@@ -20,6 +20,15 @@ if ($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $sl $_) -
     }
     if ($scratch.Parent.FullName -eq [IO.Path]::GetTempPath().TrimEnd('\') -and $scratch.Name -like "sin-streamline-*") {
         Remove-Item -LiteralPath $scratch.FullName -Recurse -Force
+    }
+}
+$nvapi = Join-Path $thirdParty "nvidia/nvapi"
+$nvapiCommit = "51e5aae4bc40c3ccd3fb7d4dfd94256e7bfc496e"
+New-Item -ItemType Directory -Force $nvapi | Out-Null
+foreach ($header in @("nvapi.h", "nvapi_interface.h", "nvapi_lite_common.h", "nvapi_lite_d3dext.h", "nvapi_lite_salend.h", "nvapi_lite_salstart.h", "nvapi_lite_sli.h", "nvapi_lite_stereo.h", "nvapi_lite_surround.h", "NvApiDriverSettings.h", "nvHLSLExtns.h", "nvHLSLExtnsInternal.h", "nvShaderExtnEnums.h")) {
+    $headerPath = Join-Path $nvapi $header
+    if (!(Test-Path -LiteralPath $headerPath)) {
+        Invoke-WebRequest "https://raw.githubusercontent.com/NVIDIA/nvapi/$nvapiCommit/$header" -OutFile $headerPath
     }
 }
 function Get-AmdSdk($name, $tag, $commit, $paths) {

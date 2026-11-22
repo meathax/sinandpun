@@ -49,7 +49,6 @@ struct Config {
     float sensitivityY = 1.0f;
     bool invertY = false;
     float smoothingMs = 0.0f;          // 1-pole low-pass time constant, 0 = off
-    float precisionScale = 0.35f;      // output factor while the precision control is held
     // Pointer synthesis (Wii Remote scheme)
     bool absoluteMode = false;         // stick position maps straight to pointer position
     float maxSpeedX = 900.0f;          // camera px/s at full deflection
@@ -97,6 +96,10 @@ inline void ApplySweepPreset(Config& c, const SweepPreset& p) {
 inline Config ModernAim() {
     Config c;
     ApplySweepPreset(c, kSweepPresets[0]);
+    c.curve = Curve::SCurve;
+    c.maxSpeedX = 1100.f;
+    c.maxSpeedY = c.maxSpeedX * (700.f / 900.f);
+    c.sensitivityX = c.sensitivityY = 0.80f;
     return c;
 }
 
@@ -104,7 +107,7 @@ inline Config ModernAim() {
 // camera pixel. TV bar placement offsets the vertical origin by ~103 pixels.
 // Keep a stick sweep inside the visible -1..1 playfield, even at its corners.
 inline Config StickPointerConfig(Config c, bool barAbove) {
-    if (c.curve != Curve::PrecisionSweep) return c;
+    if (c.absoluteMode) return c;
     c.cameraMinX = 287.f;
     c.cameraMaxX = 736.f;
     const float centerY = barAbove ? 487.f : 281.f;
@@ -112,7 +115,7 @@ inline Config StickPointerConfig(Config c, bool barAbove) {
     c.cameraMaxY = centerY + 224.f;
     // GunSight draws in an 810x456 layer. Equal screen-pixel motion on
     // both axes needs more vertical camera travel per unit of stick input.
-    c.maxSpeedY = c.maxSpeedX * (810.f / 456.f);
+    if (c.curve == Curve::PrecisionSweep) c.maxSpeedY = c.maxSpeedX * (810.f / 456.f);
     return c;
 }
 
@@ -130,7 +133,6 @@ inline void Sanitize(Config& c) {
     c.sensitivityX = std::clamp(fin(c.sensitivityX, 1.0f), 0.1f, 4.0f);
     c.sensitivityY = std::clamp(fin(c.sensitivityY, 1.0f), 0.1f, 4.0f);
     c.smoothingMs = std::clamp(fin(c.smoothingMs, 0.0f), 0.0f, 150.0f);
-    c.precisionScale = std::clamp(fin(c.precisionScale, 0.35f), 0.1f, 1.0f);
     c.maxSpeedX = std::clamp(fin(c.maxSpeedX, 900.0f), 100.0f, 8000.0f);
     c.maxSpeedY = std::clamp(fin(c.maxSpeedY, 700.0f), 100.0f, 8000.0f);
     c.speedCap = std::clamp(fin(c.speedCap, 1600.0f), 200.0f, 8000.0f);
@@ -207,15 +209,12 @@ struct StickFilter {
     float y = 0.f;
 };
 
-// Deadzone, curve, invert Y, precision scale, 1-pole smoothing. Output stays in the unit disc/box.
-inline void ShapeStick(const Config& cfg, StickFilter& filter, float rawX, float rawY, float dt, bool precision,
+// Deadzone, curve, invert Y, 1-pole smoothing. Output stays in the unit disc/box.
+inline void ShapeStick(const Config& cfg, StickFilter& filter, float rawX, float rawY, float dt,
                        float& outX, float& outY) {
     float sx = 0.f, sy = 0.f;
     ApplyDeadzoneAndCurve(cfg, rawX, rawY, sx, sy);
     if (cfg.invertY) sy = -sy;
-    const float p = precision ? cfg.precisionScale : 1.0f;
-    sx *= p;
-    sy *= p;
     if (cfg.smoothingMs > 0.0f && cfg.curve != Curve::Raw && dt > 0.0f) {
         const float alpha = 1.0f - std::exp(-dt / (cfg.smoothingMs * 0.001f));
         filter.x += (sx - filter.x) * alpha;
@@ -238,9 +237,9 @@ inline bool StickActive(const Config& cfg, float rawX, float rawY) {
 }
 
 // Classic Controller scheme: shaped stick with per-axis sensitivity as a gain, clamped to the unit box.
-inline void ClassicStick(const Config& cfg, StickFilter& filter, float rawX, float rawY, float dt, bool precision,
+inline void ClassicStick(const Config& cfg, StickFilter& filter, float rawX, float rawY, float dt,
                          float& outX, float& outY) {
-    ShapeStick(cfg, filter, rawX, rawY, dt, precision, outX, outY);
+    ShapeStick(cfg, filter, rawX, rawY, dt, outX, outY);
     outX = std::clamp(outX * cfg.sensitivityX, -1.0f, 1.0f);
     outY = std::clamp(outY * cfg.sensitivityY, -1.0f, 1.0f);
 }
@@ -274,11 +273,10 @@ inline void ClampToCamera(PointerState& state, const Config& cfg) {
 // One integration step. rawStick* are raw SDL-convention stick values after the caller's axis flip for the
 // sensor-bar view (stick right moves the pointer right, which moves the bar LEFT in the camera, so the
 // caller passes -x; Y is passed as is). dt in seconds, clamped to 50 ms.
-inline void Advance(PointerState& state, const Config& cfg, float rawStickX, float rawStickY, float dt,
-                    bool precision = false) {
+inline void Advance(PointerState& state, const Config& cfg, float rawStickX, float rawStickY, float dt) {
     dt = std::clamp(dt, 0.0f, 0.05f);
     float ax = 0.f, ay = 0.f;
-    ShapeStick(cfg, state.filter, rawStickX, rawStickY, dt, precision, ax, ay);
+    ShapeStick(cfg, state.filter, rawStickX, rawStickY, dt, ax, ay);
     if (cfg.absoluteMode) {
         state.visible = true;
         state.x = CenterX(cfg) + ax * cfg.sensitivityX * (cfg.cameraMaxX - cfg.cameraMinX) * 0.5f;

@@ -34,11 +34,11 @@ inline constexpr std::array<int, 32> kCells = {
     32,33,34,35,36,5,13,6,14,29,21,22
 };
 
-inline void BuildAtlas(const AimSettings::Settings& s, Atlas& out) {
+inline void BuildAtlas(const AimSettings::Settings& s, Atlas& out, bool combat = false) {
     using A = AimSettings::Action;
     const auto action = [&](A a) { return ActionGlyph(s,a); };
     const std::array<int,32> icons = {
-        action(A::Confirm),action(A::Cancel),action(A::Jump),action(A::Evade),17,
+        action(combat ? A::LockOn : A::Confirm),action(combat ? A::Fire : A::Cancel),action(A::Jump),action(A::Evade),17,
         action(A::Pause),action(A::Minus),action(A::ButtonX),action(A::ButtonY),action(A::Confirm),
         action(A::Cancel),action(A::ButtonX),action(A::ButtonY),action(A::Evade),action(A::Jump),
         action(A::Fire),17,18,19,12,
@@ -48,18 +48,9 @@ inline void BuildAtlas(const AimSettings::Settings& s, Atlas& out) {
     out.fill(0);
     for (int frame=0;frame<32;++frame) {
         const int cell=kCells[frame], ox=(cell%8)*32, oy=(cell/8)*32;
-        // Remote A/B each have two host actions (menu and combat). Show both
-        // bindings rather than incorrectly claiming that one button does both.
-        const int second=frame==0?action(A::LockOn):frame==1?action(A::Fire):-1;
-        const bool pair=second>=0 && second!=icons[frame];
+        const int icon = icons[frame];
         for (int y=0;y<32;++y) for (int x=0;x<32;++x) {
-            int icon=icons[frame],sx=x,sy=y;
-            if (pair) {
-                if (y<8 || y>=24) continue;
-                if (x>=16) icon=second;
-                sx=(x%16)*2;sy=(y-8)*2;
-            }
-            const auto* rgba=&kGlyphPixels[s.playStationPrompts?1:0][icon][(sy*32+sx)*4];
+            const auto* rgba=&kGlyphPixels[s.playStationPrompts?1:0][icon][(y*32+x)*4];
             const int px=ox+x,py=oy+y;
             const size_t tile=((py/4)*64+px/4)*64;
             const size_t sample=((py%4)*4+px%4)*2;

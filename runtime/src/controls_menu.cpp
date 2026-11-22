@@ -93,7 +93,7 @@ InputMap::AimSource UpdatePreview(const AimSettings::Settings& s) {
         }
     } else {
         const auto config = DualAnalog::StickPointerConfig(s.aim, RuntimeConfigFile::WiiSensorBarAbove());
-        DualAnalog::Advance(g_preview.pointer, config, -g_preview.rawX, g_preview.rawY, dt, AimSettings::ActionValue(s, Action::Precision, raw) >= 0.5f);
+        DualAnalog::Advance(g_preview.pointer, config, -g_preview.rawX, g_preview.rawY, dt);
     }
     return g_preview.arbiter.active;
 }
@@ -337,8 +337,6 @@ void BuildStickShaping(ListView& v, AimSettings::Settings& s, Edit& e) {
     e.Take(v.Slider("Aim sensitivity Y", &c.sensitivityY, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityY, "Vertical gain."));
     e.Take(v.Toggle("Invert Y (aim)", &c.invertY, d.invertY, "Push up to aim down."));
     e.Take(v.Slider("Smoothing", &c.smoothingMs, 0.0f, 150.0f, 5.0f, "%.0f ms", d.smoothingMs, "Low-pass filter on the stick. 0 = off."));
-    e.Take(v.Slider("Precision scale", &c.precisionScale, 0.1f, 1.0f, 0.05f, "%.2f", d.precisionScale,
-                    "Speed factor while the Precision control is held."));
 
     v.Section("Triggers");
     e.Take(v.Slider("Trigger threshold", &c.triggerThreshold, 0.1f, 0.9f, 0.01f, "%.2f", d.triggerThreshold,
@@ -349,10 +347,10 @@ void BuildPointerAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
     v.Section("Gyro aiming");
     e.Take(v.Toggle("Enable gyro", &s.gyro.enabled, false,
         "Uses Wii pointer aiming with the right stick. Requires an SDL gyro + accelerometer controller."));
-    static const char* const activation[] = {"Always on", "Hold Precision to aim", "Hold Precision to pause"};
+    static const char* const activation[] = {"Always on", "Hold button to aim", "Hold button to pause"};
     static const char* const spaces[] = {"Player space", "Local yaw", "Local roll"};
     e.Take(v.Choice("Gyro activation", &s.gyro.activation, activation, 3, 0,
-        "Precision is remappable under bindings (default R3)."));
+        "The gyro activation button is remappable under bindings (default R3)."));
     e.Take(v.Choice("Gyro axes", &s.gyro.space, spaces, 3, 0,
         "Player space compensates for how you tilt the controller."));
     e.Take(v.Slider("Gyro sensitivity X", &s.gyro.sensitivityX, 1.f, 50.f, 0.5f, "%.1f", 12.f,
@@ -518,7 +516,7 @@ void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
     e.Take(v.Toggle("Show a note when the scheme switches", &s.switchToast, true,
                     "Brief on-screen message when Automatic changes between gamepad and mouse/keyboard."));
     if (v.Action("Modern Xbox layout", "Use recommended layout",
-                 "RT shoots, LT locks/charges, LB jumps, RB evades. A confirms and B goes back. Restores gamepad bindings and selects Automatic.")) {
+                 "RT shoots, LT locks/charges, LB evades, RB jumps. A confirms and B goes back. Restores gamepad bindings and selects Automatic.")) {
         game_ui::RequestConfirm("Modern Xbox layout", "Replace gamepad bindings with the recommended layout? Keyboard and mouse bindings are kept.", "Use layout", [] {
             auto cur = AimSettings::Get();
             cur.bindings.pad = AimSettings::DefaultBindings().bindings.pad;
@@ -527,7 +525,7 @@ void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
             AimSettings::Save();
         });
     }
-    v.Note("Recommended gamepad: RT shoots, LT locks/charges, LB jumps, RB evades. Left stick moves; right stick aims. A confirms, B goes back.\n"
+    v.Note("Recommended gamepad: RT shoots, LT locks/charges, LB evades, RB jumps. Left stick moves; right stick aims. A confirms, B goes back.\n"
            "Mouse and keyboard: WASD moves, the mouse aims, left click = shoot (B), right click = lock-on (A), Space = jump (C), Shift = evade (Z).");
     v.Section("Live input");
     DrawDeviceMonitor(v);

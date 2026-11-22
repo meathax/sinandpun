@@ -125,15 +125,15 @@ static void TestShapeAndSensitivity() {
     cfg.invertY = true;
     StickFilter filter;
     float x = 0.f, y = 0.f;
-    ShapeStick(cfg, filter, 0.f, 1.f, 0.01f, false, x, y);
+    ShapeStick(cfg, filter, 0.f, 1.f, 0.01f, x, y);
     CHECK(y < 0.f);  // inverted
     cfg.invertY = false;
-    ShapeStick(cfg, filter, 0.f, 1.f, 0.01f, true, x, y);
-    CHECK(Near(y, cfg.precisionScale));
+    ShapeStick(cfg, filter, 0.f, 1.f, 0.01f, x, y);
+    CHECK(Near(y, 1.f));
     cfg.sensitivityX = 2.f;
     cfg.sensitivityY = 0.5f;
     float cx = 0.f, cy = 0.f;
-    ClassicStick(cfg, filter, 1.f, 1.f, 0.01f, false, cx, cy);
+    ClassicStick(cfg, filter, 1.f, 1.f, 0.01f, cx, cy);
     CHECK(cx <= 1.f && cy <= 1.f && cx > cy);
     // Smoothing converges and never overshoots.
     cfg = Config{};
@@ -141,7 +141,7 @@ static void TestShapeAndSensitivity() {
     StickFilter smooth;
     float last = 0.f;
     for (int i = 0; i < 200; ++i) {
-        ShapeStick(cfg, smooth, 1.f, 0.f, 0.01f, false, x, y);
+        ShapeStick(cfg, smooth, 1.f, 0.f, 0.01f, x, y);
         CHECK(x + 1e-6f >= last && x <= 1.0001f);
         last = x;
     }

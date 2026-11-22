@@ -19,7 +19,7 @@
 namespace GyroAim {
 struct Config {
     bool enabled = false;
-    int activation = 0; // Always, hold Precision, hold Precision to pause.
+    int activation = 0; // Always, hold gyro button, hold gyro button to pause.
     int space = 0;      // Player space, local yaw, local roll.
     float sensitivityX = 12.f; // IR camera pixels per degree.
     float sensitivityY = 12.f;

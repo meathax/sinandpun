@@ -2,7 +2,7 @@
 
 // Controls state shared between the F10 settings menu and the virtual Wii Remote: aiming tunables, the
 // controller scheme, mouse options and the per-profile action bindings. Persisted to Config.toml:
-//   [input]                version = 4, scheme = "auto" | "classic" | "pointer", switch_toast = true
+//   [input]                version = 5, scheme = "auto" | "classic" | "pointer", switch_toast = true
 //                          (auto: both devices drive the Wii pointer; files written before version 2
 //                          with scheme = "pointer" - the old default - are read as "auto")
 //   [input.gamepad]        <action> = "pad:south | pad:right_trigger"        (up to 3 bindings)
@@ -29,7 +29,7 @@
 
 namespace AimSettings {
 
-inline constexpr int kSchemaVersion = 4;
+inline constexpr int kSchemaVersion = 5;
 
 // Action names follow Sin & Punishment: Star Successor (manual + StrategyWiki control tables). The Classic
 // Controller / Wii Remote+Nunchuk wire mapping is in virtual_remote.cpp.
@@ -57,7 +57,7 @@ enum class Action : size_t {
     AimRight,
     AimUp,
     AimDown,
-    Precision,   // port extra: slow the reticle while held
+    GyroModifier, // optional gyro activation button
     Recenter,    // port extra: recentre the pointer
     Count,
 };
@@ -79,9 +79,9 @@ inline constexpr std::array<ActionInfo, kActionCount> kActions = {{
     {"lock_on", "Lock-on / Charge shot", "Combat",
      "Tap to lock on; hold, then release for the charge shot. Classic ZR / Wii Remote A.",
      "pad:left_trigger", "mouse:right | key:K"},
-    {"jump", "Jump", "Combat", "Classic L / Nunchuk C.", "pad:left_shoulder",
+    {"jump", "Jump", "Combat", "Classic L / Nunchuk C.", "pad:right_shoulder",
      "key:Space | mouse:x1"},
-    {"evade", "Evade", "Combat", "Classic ZL / Nunchuk Z.", "pad:right_shoulder",
+    {"evade", "Evade", "Combat", "Classic ZL / Nunchuk Z.", "pad:left_shoulder",
      "key:Left Shift | mouse:x2"},
     {"confirm", "Menu: confirm", "Menus", "Confirm in game menus. Options UI keeps A / Enter as recovery controls.", "pad:south", "key:Return"},
     {"cancel", "Menu: cancel", "Menus", "Back in game menus. Options UI keeps B / Escape as recovery controls.", "pad:east", "key:Backspace"},
@@ -102,7 +102,7 @@ inline constexpr std::array<ActionInfo, kActionCount> kActions = {{
     {"aim_right", "Aim right", "Aiming", "", "pad:right_stick_right", "key:Right"},
     {"aim_up", "Aim up", "Aiming", "", "pad:right_stick_up", "key:Up"},
     {"aim_down", "Aim down", "Aiming", "", "pad:right_stick_down", "key:Down"},
-    {"precision", "Precision aim (hold)", "Aiming", "Slows the reticle. Port extra, not a Wii control.",
+    {"gyro_modifier", "Gyro activation button", "Aiming", "Used only by hold-to-aim or hold-to-pause gyro modes.",
      "pad:right_stick", "key:Left Ctrl"},
     {"recenter", "Recenter pointer", "Aiming", "Port extra, not a Wii control.", "pad:left_stick",
      "key:R | mouse:middle"},
@@ -148,7 +148,7 @@ inline Settings DefaultBindings(Settings s = {}) {
 inline Settings LegacyBindings() {
     Settings s = DefaultBindings();
     const std::pair<Action,const char*> pad[] = {
-        {Action::Fire,"pad:right_shoulder"},{Action::LockOn,"pad:right_trigger"},
+        {Action::Jump,"pad:left_shoulder"},{Action::Fire,"pad:right_shoulder"},{Action::LockOn,"pad:right_trigger"},
         {Action::Evade,"pad:left_trigger"},{Action::Confirm,"pad:east"},{Action::Cancel,"pad:south"},
         {Action::ButtonX,"pad:north"},{Action::ButtonY,"pad:west"}};
     for (const auto& [a,v] : pad) s.bindings.pad[static_cast<size_t>(a)] = InputMap::ParseList(v,InputMap::Profile::Gamepad);
@@ -257,7 +257,6 @@ inline void ApplyTestOverrides(Settings& s) {
         else if (k == "sensitivity_y") c.sensitivityY = f;
         else if (k == "invert_y") c.invertY = b;
         else if (k == "smoothing_ms") c.smoothingMs = f;
-        else if (k == "precision_scale") c.precisionScale = f;
         else if (k == "max_speed") { c.maxSpeedX = f; c.maxSpeedY = f * (700.0f / 900.0f); }
         else if (k == "speed_cap") c.speedCap = f;
         else if (k == "ramp_ms") c.rampSeconds = f * 0.001f;
@@ -324,7 +323,6 @@ inline void LoadFromConfig(Settings& s) {
     num("sensitivity_y", c.sensitivityY);
     flag("aim", "invert_y", c.invertY);
     num("smoothing_ms", c.smoothingMs);
-    num("precision_scale", c.precisionScale);
     num("max_speed", c.maxSpeedX);
     c.maxSpeedY = c.maxSpeedX * (700.0f / 900.0f);
     num("speed_cap", c.speedCap);
@@ -345,6 +343,15 @@ inline void LoadFromConfig(Settings& s) {
         c.dualZoneSplit == 0.5f)
         DualAnalog::ApplySweepPreset(c, DualAnalog::kSweepPresets[0]);
 
+    if (schemaVersion < 5 && c.curve == DualAnalog::Curve::PrecisionSweep && c.maxSpeedX == 3200.f &&
+        c.sensitivityX == 1.f && c.sensitivityY == 1.f && c.dualZoneSplit == 0.52f && c.trackingSpeed == 420.f) {
+        const auto defaults = DualAnalog::ModernAim();
+        c.curve = defaults.curve;
+        c.maxSpeedX = defaults.maxSpeedX;
+        c.maxSpeedY = defaults.maxSpeedY;
+        c.sensitivityX = defaults.sensitivityX;
+        c.sensitivityY = defaults.sensitivityY;
+    }
     ApplyTestOverrides(s);
 
     flag("gyro", "enabled", s.gyro.enabled);
@@ -365,12 +372,22 @@ inline void LoadFromConfig(Settings& s) {
 
     // An explicit key (even an empty string) replaces the default for that action/profile.
     for (size_t i = 0; i < kActionCount; ++i) {
-        if (const auto v = FindValue<std::string>(d, "input", "gamepad", kActions[i].key)) {
+        const char* key = schemaVersion < 5 && i == static_cast<size_t>(Action::GyroModifier)
+            ? "precision" : kActions[i].key;
+        if (const auto v = FindValue<std::string>(d, "input", "gamepad", key)) {
             s.bindings.pad[i] = InputMap::ParseList(*v, InputMap::Profile::Gamepad);
         }
-        if (const auto v = FindValue<std::string>(d, "input", "keyboard_mouse", kActions[i].key)) {
+        if (const auto v = FindValue<std::string>(d, "input", "keyboard_mouse", key)) {
             s.bindings.kbm[i] = InputMap::ParseList(*v, InputMap::Profile::KeyboardMouse);
         }
+    }
+    if (schemaVersion >= 3 && schemaVersion < 5) {
+        const auto modern = DefaultBindings();
+        auto& jump = s.bindings.pad[static_cast<size_t>(Action::Jump)];
+        auto& evade = s.bindings.pad[static_cast<size_t>(Action::Evade)];
+        if (jump == modern.bindings.pad[static_cast<size_t>(Action::Evade)] &&
+            evade == modern.bindings.pad[static_cast<size_t>(Action::Jump)])
+            std::swap(jump, evade);
     }
     if (schemaVersion < 3) {
         const auto legacy = LegacyBindings();
@@ -477,7 +494,6 @@ inline bool Save() {
     put("aim", "sensitivity_y", Float(c.sensitivityY));
     put("aim", "invert_y", boolean(c.invertY));
     put("aim", "smoothing_ms", Float(c.smoothingMs));
-    put("aim", "precision_scale", Float(c.precisionScale));
     put("aim", "pointer_mode", str(c.absoluteMode ? "absolute" : "velocity"));
     put("aim", "max_speed", Float(c.maxSpeedX));
     put("aim", "speed_cap", Float(c.speedCap));

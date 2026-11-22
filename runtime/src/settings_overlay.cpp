@@ -308,6 +308,7 @@ int g_fsrQuality = FsrQualityIndexFromConfig();
 float g_fsrSharpness = static_cast<float>(RuntimeConfigFile::FsrSharpness());
 int g_dlssMode = static_cast<int>(RuntimeConfigFile::DlssModeIndex(RuntimeConfigFile::DlssMode()));
 float g_dlssSharpness = static_cast<float>(RuntimeConfigFile::DlssSharpness());
+bool g_reflex = RuntimeConfigFile::Get().reflex.value_or(true);
 bool g_dlssMotion = RuntimeConfigFile::DlssMotionVectors(false);
 
 bool UpscalerActive() {
@@ -339,6 +340,7 @@ void ApplyUpscaler() {
         factor = RuntimeConfigFile::kDlssModes[static_cast<size_t>(g_dlssMode)].factor;
         sharpness = g_dlssSharpness;
     }
+    aurora_set_reflex(g_reflex);
     aurora_set_dlss_motion_vectors(g_dlssMotion);
     AuroraUpscaler mode = AURORA_UPSCALER_OFF;
     if (dlss) mode = AURORA_UPSCALER_DLSS;
@@ -352,6 +354,7 @@ void PersistUpscaler() {
     RuntimeConfigFile::SetFsrSharpness(static_cast<uint32_t>(std::lround(g_fsrSharpness)));
     RuntimeConfigFile::SetDlssMode(RuntimeConfigFile::kDlssModes[static_cast<size_t>(g_dlssMode)].name);
     RuntimeConfigFile::SetDlssSharpness(static_cast<uint32_t>(std::lround(g_dlssSharpness)));
+    RuntimeConfigFile::SetReflex(g_reflex);
     RuntimeConfigFile::SetDlssMotionVectors(g_dlssMotion);
 }
 
@@ -361,6 +364,7 @@ void ResetUpscaler() {
     g_fsrSharpness = static_cast<float>(RuntimeConfigFile::kDefaultFsrSharpness);
     g_dlssMode = static_cast<int>(RuntimeConfigFile::kDefaultDlssModeIndex);
     g_dlssSharpness = static_cast<float>(RuntimeConfigFile::kDefaultDlssSharpness);
+    g_reflex = true;
     g_dlssMotion = false;
     ApplyUpscaler();
     PersistUpscaler();
@@ -433,6 +437,7 @@ struct GraphicsState {
     float fsrSharpness = g_fsrSharpness;
     int dlssMode = g_dlssMode;
     float dlssSharpness = g_dlssSharpness;
+    bool reflex = g_reflex;
     bool dlssMotion = g_dlssMotion;
     bool disableCopyFilter = g_disableCopyFilter;
     bool skipUnreadyPipelines = g_skipUnreadyPipelines;
@@ -475,6 +480,7 @@ GraphicsState CurrentGraphicsState() {
         .fsrSharpness = g_fsrSharpness,
         .dlssMode = g_dlssMode,
         .dlssSharpness = g_dlssSharpness,
+        .reflex = g_reflex,
         .dlssMotion = g_dlssMotion,
         .disableCopyFilter = g_disableCopyFilter,
         .skipUnreadyPipelines = g_skipUnreadyPipelines,
@@ -516,14 +522,14 @@ DisplayState NormalizeDisplay(DisplayState s) {
     return s;
 }
 
-void ApplyDisplay(const DisplayState& next) {
+void ApplyDisplay(const DisplayState& next, bool capChanged = false) {
     if (next.windowWidth != g_applied.windowWidth || next.windowHeight != g_applied.windowHeight) {
         SDL_SetWindowSize(aurora_get_window(), static_cast<int>(next.windowWidth), static_cast<int>(next.windowHeight));
     }
     if (next.mode != g_applied.mode) {
         aurora_set_display_mode(static_cast<AuroraDisplayMode>(next.mode));
     }
-    if (next.interpolation != g_applied.interpolation) {
+    if (next.interpolation != g_applied.interpolation || capChanged) {
         GX_SYNC_INLINE();
         ApplyFrameRate(next.interpolation);
         if (aurora_get_display_mode() == AURORA_DISPLAY_MODE_EXCLUSIVE) {
@@ -563,8 +569,9 @@ void PersistDisplay(const DisplayState& s) {
 
 void ApplyGraphicsLive(GraphicsState next) {
     next.display = NormalizeDisplay(next.display);
+    const bool capChanged = g_frameRateCap != next.frameRateCap;
     g_frameRateCap = next.frameRateCap;
-    ApplyDisplay(next.display);
+    ApplyDisplay(next.display, capChanged);
 
     g_vrrMode = next.vrrMode;
     g_vrrMargin = next.vrrMargin;
@@ -591,6 +598,7 @@ void ApplyGraphicsLive(GraphicsState next) {
     g_fsrSharpness = next.fsrSharpness;
     g_dlssMode = next.dlssMode;
     g_dlssSharpness = next.dlssSharpness;
+    g_reflex = next.reflex;
     g_dlssMotion = next.dlssMotion;
     ApplyUpscaler();
 
@@ -621,6 +629,7 @@ void PersistGraphics(const GraphicsState& state) {
     RuntimeConfigFile::SetFsrSharpness(static_cast<uint32_t>(std::lround(state.fsrSharpness)));
     RuntimeConfigFile::SetDlssMode(RuntimeConfigFile::kDlssModes[static_cast<size_t>(state.dlssMode)].name);
     RuntimeConfigFile::SetDlssSharpness(static_cast<uint32_t>(std::lround(state.dlssSharpness)));
+    RuntimeConfigFile::SetReflex(state.reflex);
     RuntimeConfigFile::SetDlssMotionVectors(state.dlssMotion);
 
     SystemSettings::Values sys = SystemSettings::Get();
@@ -685,6 +694,7 @@ bool GraphicsDraftDirty() {
              std::fabs(g_graphicsDraft.fsrSharpness - g_fsrSharpness) < 1e-4f &&
              g_graphicsDraft.dlssMode == g_dlssMode &&
              std::fabs(g_graphicsDraft.dlssSharpness - g_dlssSharpness) < 1e-4f &&
+             g_graphicsDraft.reflex == g_reflex &&
              g_graphicsDraft.dlssMotion == g_dlssMotion &&
              g_graphicsDraft.disableCopyFilter == g_disableCopyFilter &&
              g_graphicsDraft.skipUnreadyPipelines == g_skipUnreadyPipelines &&
@@ -970,6 +980,8 @@ void ResetDisplayPage() {
 }
 
 void ResetGraphicsPage() {
+    g_frameRateCap = RuntimeConfigFile::kFrameRateHardCap;
+    RuntimeConfigFile::SetFrameRateCap(g_frameRateCap);
     DisplayState next = CurrentDisplay();
     next.resolution = 0.0f;
     next.interpolation = 0;
@@ -1487,6 +1499,9 @@ void BuildGraphicsPage(ListView& v) {
 
     // The built-in transform-based interpolation; it is not AMD's optical-flow FSR 3 Frame Generation (docs/FSR-NOTES.md).
     v.Section("Frame generation");
+    v.Toggle("NVIDIA Reflex", &g_graphicsDraft.reflex, true,
+             "Enable driver low-latency pacing on a supported NVIDIA GPU in Direct3D 12. Applies with graphics changes.");
+    if (g_reflex) v.Info("Reflex driver", aurora_reflex_active() ? "Active" : "Unavailable");
     static std::array<const char*, kFrameRates.size()> frameRateLabels{};
     for (size_t i = 0; i < kFrameRates.size(); ++i) {
         frameRateLabels[i] = kFrameRates[i].label;
@@ -2059,16 +2074,14 @@ void DrawFpsOverlay() {
     const FrameRateItem& frameRate = kFrameRates[static_cast<size_t>(g_frameInterpolationMode)];
     const uint32_t targetFps = frameRate.kind == RuntimeConfigFile::FrameRateKind::Fixed ? frameRate.fps : 0u;
     const double refreshRate = aurora_get_display_refresh_rate();
-    const bool interpolationInactive = IsHighFrameRateMode() && !aurora_display_shows_interpolation();
+    const bool interpolationInactive = IsHighFrameRateMode() && frameRate.kind != RuntimeConfigFile::FrameRateKind::Uncapped && !aurora_display_shows_interpolation();
     AuroraVrrStatus vrrStatus{};
     aurora_get_vrr_status(&vrrStatus);
     const bool unevenPacing =
         !g_vsync && !vrrStatus.limiterActive && !interpolationInactive && refreshRate > 0.0 && targetFps > refreshRate + 1.0;
     const bool showFrameTime = SystemSettings::Get().showFrameTime;
     static std::array<float, 120> s_frameTimes{};
-    static size_t s_frameTimeIndex = 0;
-    s_frameTimes[s_frameTimeIndex] = ImGui::GetIO().DeltaTime * 1000.0f;
-    s_frameTimeIndex = (s_frameTimeIndex + 1) % s_frameTimes.size();
+    if (showFrameTime) aurora_get_present_intervals(s_frameTimes.data(), s_frameTimes.size());
     if (!g_showFps && !showFrameTime && !unevenPacing && !interpolationInactive) {
         return;
     }
@@ -2092,7 +2105,7 @@ void DrawFpsOverlay() {
         }
     }
     if (showFrameTime) {
-        const float latest = s_frameTimes[(s_frameTimeIndex + s_frameTimes.size() - 1) % s_frameTimes.size()];
+        const float latest = s_frameTimes.back();
         std::snprintf(text, sizeof text, "Frame %.2f ms", latest);
         lines.push_back({text, game_ui::kWhite});
     }
@@ -2123,7 +2136,7 @@ void DrawFpsOverlay() {
         dl->AddLine(ImVec2(mn.x + pad, y16), ImVec2(mx.x - pad, y16), IM_COL32(255, 255, 255, 60), 1.0f);
         ImVec2 previous{};
         for (size_t i = 0; i < s_frameTimes.size(); ++i) {
-            const float ms = s_frameTimes[(s_frameTimeIndex + i) % s_frameTimes.size()];
+            const float ms = s_frameTimes[i];
             const float t = std::clamp(ms / 33.3f, 0.0f, 1.0f);
             const ImVec2 p(mn.x + pad + step * static_cast<float>(i), mx.y - pad - (h - pad * 2.0f) * t);
             if (i > 0) dl->AddLine(previous, p, ms > 20.0f ? IM_COL32(255, 150, 120, 255) : IM_COL32(150, 240, 150, 255), 1.5f);

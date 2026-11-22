@@ -4,7 +4,7 @@ Open the recomp Controls menu, then the pointer/live-preview page. Enable **Gyro
 
 - **Player space** uses gravity to compensate for controller tilt. Local yaw and local roll are also available.
 - Sensitivity X/Y is measured in pointer camera pixels per degree. Both axes can be inverted independently.
-- Choose always on, hold Precision to aim, or hold Precision to pause. Precision defaults to R3 and can be remapped.
+- Choose always on, hold the gyro button to aim, or hold the gyro button to pause. The gyro button defaults to R3 and can be remapped.
 - Recenter defaults to L3 (or R/middle mouse). This centers the pointer without changing calibration.
 - Use **Calibrate gyro**, then rest the controller on a stable surface for a few seconds. Stillness/sensor-fusion calibration also runs automatically. The calibration row reports missing sensors or missing sensor data.
 

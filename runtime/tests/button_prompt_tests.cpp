@@ -31,15 +31,18 @@ int main(int argc,char** argv) {
     ButtonPrompts::BuildAtlas(s,xbox);
     CHECK(TileEquals(xbox,9,0,0)); // Classic A = modern host A (south).
     CHECK(TileEquals(xbox,10,0,1));
-    CHECK(TileEquals(xbox,25,0,9));CHECK(TileEquals(xbox,26,0,16));
-    CHECK(TileEquals(xbox,27,0,10));CHECK(TileEquals(xbox,28,0,15));
+    CHECK(TileEquals(xbox,25,0,10));CHECK(TileEquals(xbox,26,0,16));
+    CHECK(TileEquals(xbox,27,0,9));CHECK(TileEquals(xbox,28,0,15));
     CHECK(TileEquals(xbox,31,0,6));
+    CHECK(TileEquals(xbox,0,0,0) && TileEquals(xbox,1,0,1));
+    ButtonPrompts::BuildAtlas(s,remap,true);
+    CHECK(TileEquals(remap,0,0,15) && TileEquals(remap,1,0,16));
     s.playStationPrompts=true;
     ButtonPrompts::BuildAtlas(s,ps);
     CHECK(ps!=xbox);CHECK(TileEquals(ps,9,1,0));CHECK(TileEquals(ps,10,1,1));
     s.bindings.pad[static_cast<size_t>(A::Confirm)]={InputMap::PadButton(2)};
     ButtonPrompts::BuildAtlas(s,remap);
-    CHECK(TileEquals(remap,9,1,2));CHECK(TileEquals(remap,26,1,16));
+    CHECK(TileEquals(remap,0,1,2));CHECK(TileEquals(remap,9,1,2));CHECK(TileEquals(remap,26,1,16));
     s.bindings.pad[static_cast<size_t>(A::Confirm)]={};
     ButtonPrompts::BuildAtlas(s,unbound);
     CHECK(TileEquals(unbound,9,1,20));

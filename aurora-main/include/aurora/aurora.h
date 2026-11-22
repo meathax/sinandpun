@@ -258,6 +258,8 @@ typedef struct {
 void aurora_get_dlss_status(AuroraDlssStatus* status);
 // The game has no velocity buffer: true uses motion vectors estimated from the images (optical flow), false sends zero
 // vectors (DLSS then rejects history by itself). Takes effect on the next frame.
+bool aurora_reflex_active(void);
+void aurora_set_reflex(bool enabled);
 void aurora_set_dlss_motion_vectors(bool enabled);
 // Saves the final game image (upscaled, before the overlay is drawn) of the next presented frame as a PNG.
 void aurora_capture_present_image(const char* pngPath);

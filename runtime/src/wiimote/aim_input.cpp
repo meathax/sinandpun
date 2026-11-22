@@ -423,7 +423,7 @@ void UpdateWindowState(bool inputBlocked) {
     const auto settings = AimSettings::Get();
     const AimSettings::MouseConfig mouse = settings.mouse;
     const auto raw = Sample();
-    const bool precision = AimSettings::ActionValue(settings, AimSettings::Action::Precision, raw) > 0.5f;
+    const bool gyroButton = AimSettings::ActionValue(settings, AimSettings::Action::GyroModifier, raw) > 0.5f;
     SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
     const SDL_JoystickID id = pad ? SDL_GetGamepadID(pad) : 0;
     {
@@ -451,7 +451,7 @@ void UpdateWindowState(bool inputBlocked) {
         g.gyroConfig = settings.gyro;
         g.gyroBlocked = inputBlocked || !g.focused;
         g.gyroActive = settings.gyro.activation == 0 ||
-            (settings.gyro.activation == 1 ? precision : !precision);
+            (settings.gyro.activation == 1 ? gyroButton : !gyroButton);
         if (g.gyroBlocked || !g.gyroActive || g.capturing) g.gyro.Clear();
     }
     SDL_Window* window = aurora_get_window();

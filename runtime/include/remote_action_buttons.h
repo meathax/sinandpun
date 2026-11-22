@@ -5,7 +5,7 @@ namespace RemoteActions {
 struct Buttons {
     uint16_t core = 0;
     uint8_t classic4 = 0, classic5 = 0;
-    bool c = false, z = false, precision = false, recenter = false;
+    bool c = false, z = false, recenter = false;
     float lt = 0, rt = 0;
 };
 
@@ -38,7 +38,7 @@ inline Buttons Resolve(const AimSettings::Settings& s, const InputMap::RawSample
         core(down(A::DpadUp),0x0800);core(down(A::DpadDown),0x0400);
         core(down(A::DpadLeft),0x0100);core(down(A::DpadRight),0x0200);
     }
-    out.precision=down(A::Precision);out.recenter=down(A::Recenter);
+    out.recenter=down(A::Recenter);
     return out;
 }
 }

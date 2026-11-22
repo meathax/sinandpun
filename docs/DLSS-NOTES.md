@@ -4,6 +4,12 @@ Status: The Windows game and release probes run DLSS Super Resolution and DLAA o
 not add one (section 4). NVIDIA Frame Generation (DLSS-G) is **not** implemented and not feasible in this renderer
 (section 7); the built-in interpolation is the frame generation on offer.
 
+The Windows ready and release packages include the pinned Streamline DLSS, DLSS-G,
+Reflex and PCL plugins and their NGX runtimes. D3D12 enables the Super Resolution
+and DLAA paths. NVIDIA Reflex uses the driver NVAPI interface for low-latency
+sleep and frame markers. Its Graphics toggle reports the live driver state.
+The presence of DLSS-G files alone does not connect the presentation chain.
+
 ## 1. What exists
 
 | Piece | Where |

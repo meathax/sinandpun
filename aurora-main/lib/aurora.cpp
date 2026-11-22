@@ -22,6 +22,7 @@
 #include "webgpu/gpu.hpp"
 #include "webgpu/gpu_prof.hpp"
 #include "webgpu/dlss.hpp"
+#include "webgpu/reflex.hpp"
 #include "webgpu/metalfx.hpp"
 #include "webgpu/upscale.hpp"
 #include <webgpu/webgpu_cpp.h>
@@ -593,6 +594,7 @@ bool begin_frame_window() noexcept {
     }
   }
 
+  reflex::begin();
   imgui::new_frame(window::get_window_size());
 #endif
   return true;
@@ -615,7 +617,7 @@ bool begin_frame_gx() noexcept {
 
 bool begin_frame() noexcept { return begin_frame_window() && begin_frame_gx(); }
 
-void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
+void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept {
   ZoneScoped;
 #ifdef AURORA_ENABLE_GX
   gx::flush_texture_destructions();
@@ -675,7 +677,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
   const auto sealedAt = gfx::presentation::now_nanos();
   const bool black = video::is_black();
   const float brightness = video::brightness();
-  gfx::end_frame([black, brightness, metalfxEnabled, integerPresentation, sampler,
+  gfx::end_frame([reflexFrame, black, brightness, metalfxEnabled, integerPresentation, sampler,
                   rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport,
                   presentSource, displayCopy = std::move(displayCopy), pixelPerfectGui, schedule, sealedAt,
                   imguiDrawData = std::move(imguiDrawData)](
@@ -685,6 +687,9 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
     const bool blockingPresent = presentMode == wgpu::PresentMode::Fifo || presentMode == wgpu::PresentMode::FifoRelaxed;
     if (replay.nativeUncapped) gfx::presentation::request_native_surface();
     const auto present = [&](wgpu::CommandEncoder& encoder, bool finalPresent, bool show) {
+      using M = reflex::Marker;
+      const bool extra = replay.scenePresentOnly || !finalPresent;
+      reflex::mark(reflexFrame, extra ? M::ExtraSubmitStart : M::SubmitStart);
       const uint64_t phaseStart = gfx::presentation::now_nanos();
       uint64_t acquireNanos=0, submitNanos=0, presentNanos=0;
       if (show && blockingPresent) {
@@ -869,6 +874,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
         g_queue.Submit(1, &buffer);
         submitNanos=gfx::presentation::now_nanos()-start;
       }
+      reflex::mark(reflexFrame, extra ? M::ExtraSubmitEnd : M::SubmitEnd);
       webgpu::upscale::capture_after_submit();
 
       if (g_metalfxPendingOutput) {
@@ -887,7 +893,9 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
 
           if (window::is_presentable()) {
             const uint64_t presentStart = gfx::presentation::now_nanos();
+            reflex::mark(reflexFrame, extra ? M::ExtraPresentStart : M::PresentStart);
             status = presentSurface.Present();
+            reflex::mark(reflexFrame, extra ? M::ExtraPresentEnd : M::PresentEnd);
             presentNanos=gfx::presentation::now_nanos()-presentStart;
             surfaceWaitNanos += presentNanos;
           }
@@ -1035,7 +1043,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
 
 void end_frame() noexcept {
 #ifdef AURORA_ENABLE_GX
-  end_frame_gx(imgui::freeze());
+  end_frame_gx(imgui::freeze(), reflex::end());
 #endif
 }
 } // namespace
@@ -1043,6 +1051,7 @@ void end_frame() noexcept {
 
 struct AuroraImguiFrame {
   aurora::imgui::DrawData drawData;
+  uint64_t reflexFrame;
 };
 
 // C API bindings
@@ -1064,7 +1073,7 @@ bool aurora_begin_frame_gx() { return aurora::begin_frame_gx(); }
 
 AuroraImguiFrame* aurora_end_frame_window() {
 #ifdef AURORA_ENABLE_GX
-  return new AuroraImguiFrame{aurora::imgui::freeze()};
+  return new AuroraImguiFrame{aurora::imgui::freeze(), aurora::reflex::end()};
 #else
   return nullptr;
 #endif
@@ -1074,7 +1083,7 @@ void aurora_release_imgui_frame(AuroraImguiFrame* frame) { delete frame; }
 
 void aurora_end_frame_gx(AuroraImguiFrame* frame) {
   std::unique_ptr<AuroraImguiFrame> owned{frame};
-  aurora::end_frame_gx(owned ? std::move(owned->drawData) : aurora::imgui::DrawData{});
+  aurora::end_frame_gx(owned ? std::move(owned->drawData) : aurora::imgui::DrawData{}, owned ? owned->reflexFrame : 0);
 }
 
 SDL_Window* aurora_get_window() { return aurora::window::get_sdl_window(); }
@@ -1193,6 +1202,19 @@ void aurora_get_dlss_status(AuroraDlssStatus* status) {
 #else
   status->state = AURORA_DLSS_UNAVAILABLE;
   std::snprintf(status->reason, sizeof status->reason, "%s", "graphics are disabled in this build");
+#endif
+}
+
+bool aurora_reflex_active() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::reflex::active();
+#else
+  return false;
+#endif
+}
+void aurora_set_reflex(bool enabled) {
+#ifdef AURORA_ENABLE_GX
+  aurora::reflex::request(enabled);
 #endif
 }
 

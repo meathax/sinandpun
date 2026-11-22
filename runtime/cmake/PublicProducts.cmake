@@ -251,6 +251,13 @@ function(mkw_configure_product target)
         target_link_libraries(${target} PRIVATE mkw::libco ${CMAKE_DL_LIBS})
     endif()
     if(MKW_PLATFORM_WINDOWS)
+        set(streamline_bin "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../../third_party/nvidia/streamline/bin/x64")
+        if(EXISTS "${streamline_bin}/sl.interposer.dll")
+            foreach(plugin sl.interposer sl.common sl.dlss nvngx_dlss sl.dlss_g nvngx_dlssg sl.reflex sl.pcl)
+                add_custom_command(TARGET ${target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${streamline_bin}/${plugin}.dll" "$<TARGET_FILE_DIR:${target}>" VERBATIM)
+            endforeach()
+        endif()
         foreach(runtime_dll libc++.dll libunwind.dll)
             execute_process(
                 COMMAND "${CMAKE_CXX_COMPILER}" "--print-file-name=${runtime_dll}"

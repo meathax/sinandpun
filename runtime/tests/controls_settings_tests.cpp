@@ -37,6 +37,10 @@ static void TestDefaults() {
     const Settings s = DefaultBindings();
     CHECK(s.schemeMode == SchemeMode::Auto);
     CHECK(s.switchToast);
+    const auto stick = DualAnalog::StickPointerConfig(s.aim, false);
+    CHECK(stick.cameraMinX == 287.f && stick.cameraMaxX == 736.f);
+    CHECK(s.aim.curve == DualAnalog::Curve::SCurve && s.aim.radialDeadzone == 0.12f);
+    CHECK(s.aim.maxSpeedX == 1100.f && s.aim.sensitivityX == 0.8f && s.aim.sensitivityY == 0.8f);
     CHECK(!s.playStationPrompts);
     for (size_t i = 0; i < kActionCount; ++i) {
         // Every action has a gamepad default; keyboard defaults may be empty only for the d-pad actions.
@@ -51,8 +55,8 @@ static void TestDefaults() {
     auto pad = [&](Action a) { return InputMap::FormatList(s.bindings.pad[static_cast<size_t>(a)]); };
     CHECK(pad(Action::Fire) == "pad:right_trigger");
     CHECK(pad(Action::LockOn) == "pad:left_trigger");
-    CHECK(pad(Action::Jump) == "pad:left_shoulder");
-    CHECK(pad(Action::Evade) == "pad:right_shoulder");
+    CHECK(pad(Action::Jump) == "pad:right_shoulder");
+    CHECK(pad(Action::Evade) == "pad:left_shoulder");
     CHECK(pad(Action::Confirm) == "pad:south" && pad(Action::Cancel) == "pad:east");
     CHECK(pad(Action::Pause) == "pad:start" && pad(Action::Minus) == "pad:back" && pad(Action::Home) == "pad:guide");
     auto kbm = [&](Action a) { return InputMap::FormatList(s.bindings.kbm[static_cast<size_t>(a)]); };
@@ -136,7 +140,7 @@ int main() {
     CHECK(custom.bindings.kbm==AimSettings::DefaultBindings().bindings.kbm);
     WriteConfig("[input]\nversion = 3\nscheme = \"auto\"\n[aim]\ncurve = \"linear\"\n"
                 "max_speed = 900.0\nspeed_cap = 1600.0\nramp_ms = 120.0\ndual_zone_split = 0.5\n");
-    CHECK(Load().aim.curve == DualAnalog::Curve::PrecisionSweep);
+    CHECK(Load().aim.curve == DualAnalog::Curve::SCurve);
     auto stored=AimSettings::DefaultBindings();
     DualAnalog::ApplySweepPreset(stored.aim, DualAnalog::kSweepPresets[2]);
     stored.aim.trackingSpeed = 325.f;

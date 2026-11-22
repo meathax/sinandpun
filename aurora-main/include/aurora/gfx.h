@@ -51,6 +51,7 @@ typedef struct {
 const AuroraStats* aurora_get_stats();
 float aurora_get_fps();
 void aurora_get_present_timing(AuroraPresentTiming* timing);
+void aurora_get_present_intervals(float* milliseconds, uint32_t count);
 
 // Interpolation health: the per-frame fields describe the last frame, the counters accumulate
 // since it was configured.

@@ -48,7 +48,7 @@ if (Test-Path -LiteralPath $achievementNotices) {
     Copy-Item (Join-Path $achievementNotices "*.txt") $noticesDir -Force
 }
 Get-ChildItem $src -File -Filter "*.dll" | ForEach-Object {
-    Copy-Item $_.FullName $dst -Force
+    if (!$NoDlss -or $_.Name -notmatch "^(sl\.|nvngx_)") { Copy-Item $_.FullName $dst -Force }
 }
 Copy-Item (Join-Path $root "LICENSE") $dst -Force
 Copy-Item (Join-Path $root "recomplauncher.json") $dst -Force
@@ -59,12 +59,12 @@ $dlssDir = Join-Path $root "third_party\nvidia\streamline"
 if (-not $NoDlss) {
     $dllSrc = Join-Path $dlssDir "bin\x64"
     if (Test-Path (Join-Path $dllSrc "sl.interposer.dll")) {
-        foreach ($f in "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "nvngx_dlss.dll") {
+        foreach ($f in "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "nvngx_dlss.dll", "sl.dlss_g.dll", "nvngx_dlssg.dll", "sl.reflex.dll", "sl.pcl.dll") {
             $p = Join-Path $dllSrc $f
             if (Test-Path $p) { Copy-Item $p $dst -Force } else { Write-Warning "DLSS: missing $f in $dllSrc" }
         }
         New-Item -ItemType Directory -Force (Join-Path $dst "licenses") | Out-Null
-        foreach ($f in "nvngx_dlss.license.txt", "..\..\license.txt", "..\..\3rd-party-licenses.md") {
+        foreach ($f in "reflex.license.txt", "nvngx_dlss.license.txt", "..\..\license.txt", "..\..\3rd-party-licenses.md") {
             $p = Join-Path $dllSrc $f
             if (Test-Path $p) { Copy-Item $p (Join-Path $dst ("licenses\nvidia-" + (Split-Path $f -Leaf))) -Force }
         }

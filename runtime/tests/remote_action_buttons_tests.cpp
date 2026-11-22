@@ -19,10 +19,10 @@ int main() {
         raw={};raw.padAxes[4]=1;
         auto lock=RemoteActions::Resolve(settings,raw,scheme,true);
         CHECK(scheme==S::Pointer ? lock.core==0x0008 : lock.classic5==0x04);
-        raw={};raw.padButtons[9]=true;
+        raw={};raw.padButtons[10]=true;
         auto jump=RemoteActions::Resolve(settings,raw,scheme,true);
         CHECK(scheme==S::Pointer ? jump.c : jump.classic4==0x20);
-        raw={};raw.padButtons[10]=true;
+        raw={};raw.padButtons[9]=true;
         auto evade=RemoteActions::Resolve(settings,raw,scheme,true);
         CHECK(scheme==S::Pointer ? evade.z : evade.classic5==0x80);
         raw={};raw.mouseButtons=1;
