@@ -1,21 +1,10 @@
 # AMD FSR in the Sin PC port
 
-## Scope (honest)
+## Windows release
 
-| Generation | What it is | Runs on this machine (RTX 4090)? | Status here |
-|---|---|---|---|
-| FSR 1.0 spatial (EASU + RCAS) | Single-frame edge-adaptive upscale + sharpen, no motion data | Yes (any GPU/backend Dawn supports) | **Implemented** (WGSL render passes, Dawn D3D12/Vulkan) |
-| FSR 2.x / 3.1 temporal upscaler | Needs per-pixel motion vectors, depth, jitter, exposure, reset flag | Yes (vendor independent) | **Not implemented**; interface + jitter helpers only (Stage 2 below) |
-| FSR 3 Frame Generation | Optical-flow FG, needs HUD-less backbuffer + swapchain replacement | Yes (3.1.x) | **Not feasible with Dawn** (Stage 3); built-in generator stays, labelled "Frame generation" |
-| FSR 4 / 4.1 ML upscaler | ML model, AMD-signed binary via the FFX API | **No** | Not exposed. Documented only |
+The Graphics menu offers FSR 1 spatial upscaling and AMD temporal FSR on Direct3D 12. Temporal mode loads the signed loader and upscaler from AMD FSR SDK 2.4 beside the executable. The SDK selects FSR Upscaling 4.1.2 on compatible AMD hardware and FidelityFX Super Resolution 3.1.6 on the RTX 4090. The existing config value for temporal mode is `fsr3`. The presentation log reports which path ran. Frame generation is a separate feature.
 
-FSR 4 evidence: the cloned FidelityFX SDK 2.4.0 ("Redstone", `third_party/amd/FidelityFX-SDK`) lists
-"AMD FSR Upscaling (ML-Upscaler) 4.1.2"; `Kits/FidelityFX/docs/techniques/super-resolution-ml.md` line 50: "requires
-integration using the AMD FSR API and use of the signed binary distribution", line 347: "FSR4 requires an AMD 7000 series
-discrete GPU or AMD 9000 series GPU or later" (INT8 models on RX 6000/7000 and Ryzen iGPUs, FP8 on RX 9000). The machine is an
-RTX 4090 (`nvidia-smi`: driver 621.14), so it cannot run and cannot be tested. It also needs a closed binary driving a native
-D3D12/Vulkan queue, i.e. the same Dawn interop problem as DLSS. No UI row is shown; if wanted later, detect AMD via the Dawn
-adapter vendor id 0x1002 and only then offer it.
+Before configuring a Windows release build, run `tools/fetch_graphics_sdks.ps1`. After building, run `tools/update_ready.ps1` and `tools/package_recomplauncher.ps1 -Version <version>`. The packager checks the vendor runtime and license files against pinned SHA-256 values.
 
 ## Stage 1: FSR 1.0 spatial
 
@@ -61,32 +50,16 @@ sub-1x internal rendering of the stash/partial-copy paths (see Risks).
 
 `[video]` keys (tolerant parsing, case/space/`_`/`-` ignored, `fsr`/`ultra quality` aliases; invalid values warn and are ignored):
 `upscaler = off | fsr1 | fsr3 | dlss`, `fsr_quality = native | ultra_quality | quality | balanced | performance | ultra_performance`,
-`fsr_sharpness = 0..100`. `fsr3` currently behaves as `fsr1`; `dlss` is left to the DLSS integration (the UI index maps to off until it
-adds an entry). Graphics tab: new "Upscaling" section (Upscaler, FSR quality, FSR sharpness, Internal/Output resolution info
-rows) between Quality and the renamed "Frame generation" section; "Resolution scale" is greyed while an upscaler is active.
-The selector arrays (`kUpscalerLabels`, `kUpscalerConfigNames`, `ApplyUpscaler`) in `settings_overlay.cpp` are the single place to
-append DLSS. Changes apply live (`aurora_set_upscaler`), persist to Config.toml, and reset with the Graphics page reset.
+`fsr_sharpness = 0..100`. Changes apply live (`aurora_set_upscaler`), persist to Config.toml, and reset with the Graphics page reset.
 
 Measurement: `SIN_PERF_LOG=1` adds
 `[perf-upscale] upscaler=fsr1 active=fsr1 factor=1.50 sharpness=80% sharpened=1 internal=1280x720 output=1920x1080 scale=1.500`.
 `SIN_SCREENSHOT=<file.png>` (`SIN_SCREENSHOT_DELAY` s, default 30) saves the final upscaled game image (before the overlay);
 there was no in-engine screenshot path before. Note it is the game layer at viewport size, without ImGui.
 
-## Stage 2: FSR 3.x temporal upscaler (stub)
+## Temporal upscaling
 
-SDK 2.4.0 FSR 3.1.6 upscaler: 10 compute passes (prepare_inputs, luma_pyramid, shading_change_pyramid, shading_change,
-prepare_reactivity, luma_instability, accumulate, rcas, autogen_reactive, debug), 1,321 lines of pass shaders plus ~4.5k lines of
-fsr3/fsr3upscaler headers and 1k lines of SPD. A WGSL/Dawn port avoids D3D12 interop and is the preferred route, but it is
-multi-day work, needs WGSL replacements for SPD's `globallycoherent` counter and wave ops (multi-pass mip chain), read-write storage
-textures (Dawn feature `readonly_and_readwrite_storage_textures`), and can only be validated against the SDK's DX12 sample. More
-importantly the inputs do not exist yet: no motion-vector target, no jittered projection, no exposure. I did not start a port I could
-not validate. What exists: `upscale.hpp` defines `TemporalInputs` / `TemporalUpscaler` and `jitter_phase_count` /
-`halton_jitter` (identical to `ffxFsr3UpscalerGetJitterPhaseCount/GetJitterOffset`). The DLSS agent had no velocity/jitter code in
-the tree when I looked (only `tools/dlss_probe`). Needed from it:
-(a) a jittered projection hook in the GX transform path (offset from `halton_jitter`, in render pixels, applied to perspective draws only,
-HUD/ortho draws unjittered), (b) an RG16F velocity target at render resolution (frame_interpolation already matches per-draw
-prev/cur transforms, which is the natural source), (c) a sampleable depth target (`g_depthBuffer` exists; `depthInverted`/near/far/fov
-must be exported), (d) a reset flag on scene cuts, (e) frame time. Until then `fsr3` runs the spatial path.
+The renderer snapshots EFB depth before the display copy clears it. It maps the copy rectangle into a forward-depth input, estimates pixel motion from successive frames, and supplies the viewport jitter and elapsed frame time to the AMD dispatch. A separate Direct3D 12 queue shares textures and fences with Dawn. The game falls back to spatial upscaling if temporal dispatch is unavailable.
 
 ## Stage 3: frame generation
 

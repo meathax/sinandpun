@@ -239,10 +239,15 @@ PassSnapshotEntry& acquire_pass_snapshot(uint32_t width, uint32_t height, bool w
   return entry;
 }
 
-void snapshot_current_pass_color(webgpu::TextureWithSampler& output) {
+void snapshot_current_pass_color(webgpu::TextureWithSampler& output, wgpu::TextureView& depth) {
   auto& pass = g_recorder.passes()[g_recorder.currentRenderPass];
   const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
-  auto& entry = acquire_pass_snapshot(size.width, size.height, true, false, false);
+  const auto mode = webgpu::upscale::settings().mode;
+  const bool captureDepth = (mode == AURORA_UPSCALER_FSR3 || mode == AURORA_UPSCALER_DLSS) &&
+      pass.copySourceDepthView && !pass.snapshotDepthDst && tex_copy_conv::snapshot_depth_supported();
+  auto& entry = acquire_pass_snapshot(size.width, size.height, true, captureDepth, false);
+  depth = captureDepth ? entry.depth.view : wgpu::TextureView{};
+  if (captureDepth) pass.snapshotDepthDst = depth;
   AURORA_ASSERT(!pass.snapshotColorDst, "Pixel-perfect GUI snapshot collided with another color consumer");
   pass.snapshotColorDst = entry.color.texture;
   output = entry.color;
@@ -1168,7 +1173,7 @@ bool note_projection_draw(bool orthographic) noexcept {
       previous.snapshotColorDst) {
     return false;
   }
-  snapshot_current_pass_color(frame.hudBackground);
+  snapshot_current_pass_color(frame.hudBackground, frame.hudDepth);
   previous.discardable = false;
   enqueue_pass(frame, g_recorder.currentRenderPass);
   resume_efb_pass_loading(previous);
@@ -1185,7 +1190,7 @@ void capture_pixel_perfect_gui_scene(const ClipRect& source, const wgpu::Extent3
   }
   auto& frame = current_frame_packet();
   frame.displayHud = {};
-  const auto& pass = current_render_passes()[g_recorder.currentRenderPass];
+  auto& pass = current_render_passes()[g_recorder.currentRenderPass];
   const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
   const bool fullDestination = source.x == 0 && source.y == 0 && source.width > 0 && source.height > 0 &&
       static_cast<uint32_t>(source.width) <= size.width && static_cast<uint32_t>(source.height) <= size.height &&
@@ -1198,7 +1203,18 @@ void capture_pixel_perfect_gui_scene(const ClipRect& source, const wgpu::Extent3
                (command.type != CommandType::Draw || command.data.draw.presentationPipeline);
       });
   if (fullDestination && identityFilter && independent) {
-    frame.displayHud = {frame.hudBackground, &pass};
+    frame.displayHud = {frame.hudBackground, &pass, frame.hudDepth};
+  }
+  const auto mode = webgpu::upscale::settings().mode;
+  if ((mode == AURORA_UPSCALER_FSR3 || mode == AURORA_UPSCALER_DLSS) && pass.copySourceDepthView &&
+      tex_copy_conv::snapshot_depth_supported()) {
+    if (!pass.snapshotDepthDst) {
+      auto& snapshot = acquire_pass_snapshot(size.width, size.height, false, true, false);
+      pass.snapshotDepthDst = snapshot.depth.view;
+    }
+    frame.displayHud.temporalDepth = pass.snapshotDepthDst;
+    frame.displayHud.depthRect = {float(source.x), float(source.y), float(source.width)/destination.width,
+                                  float(source.height)/destination.height};
   }
   if (static const bool trace = std::getenv("SIN_HUD_TRACE") != nullptr; trace) {
     const unsigned flags = fullDestination | (identityFilter << 1) | (terminalHud << 2) | (independent << 3);

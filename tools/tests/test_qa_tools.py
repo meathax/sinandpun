@@ -103,8 +103,11 @@ class ReleaseAuditTests(unittest.TestCase):
         (self.package / "modules").mkdir(parents=True)
         self.modules.mkdir(parents=True)
 
-        (self.source / "WiiCompiled.exe").write_bytes(b"executable")
-        (self.package / "WiiCompiled.exe").write_bytes(b"executable")
+        (self.source / "WiiCompiled.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
+        (self.package / "WiiCompiled.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
+        for asset in ("dsp_coef.bin", "initial_pipeline_cache.db"):
+            (self.source / asset).write_bytes(b"asset")
+            (self.package / asset).write_bytes(b"asset")
         (self.source / "runtime.dll").write_bytes(b"dll")
         (self.package / "runtime.dll").write_bytes(b"dll")
         (self.source / "wii_bootstrap" / "boot.bin").write_bytes(b"boot")
@@ -146,11 +149,12 @@ class ReleaseAuditTests(unittest.TestCase):
             self.source, self.package, self.modules, require_launcher_clean=True)
         self.assertTrue(any("disc-derived" in error for error in report["errors"]))
 
-    def test_launcher_package_generates_modules_at_setup(self):
+    def test_launcher_package_requires_graphics_runtime_after_removing_modules(self):
         shutil.rmtree(self.package / "modules")
         report = release_audit.audit(
             self.source, self.package, self.modules, require_launcher_clean=True)
-        self.assertEqual(report["errors"], [])
+        self.assertTrue(report["errors"])
+        self.assertTrue(all("missing or incorrect graphics runtime file" in error for error in report["errors"]))
 
 
 if __name__ == "__main__":

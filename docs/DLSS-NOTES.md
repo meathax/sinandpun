@@ -1,8 +1,6 @@
 # NVIDIA DLSS (Super Resolution, DLAA) and frame generation - notes
 
-Status: DLSS Super Resolution and DLAA are implemented and were validated on an RTX 4090 (driver 621.14) with
-standalone probes and a synthetic scene; the in-game path has only been compiled (`clang++ -fsyntax-only`), not run - the
-lead owns the game instance. **The quality limit is motion vectors**: the game has no velocity buffer and this stage does
+Status: The Windows game and release probes run DLSS Super Resolution and DLAA on Direct3D 12. **The quality limit is motion vectors**: the game has no velocity buffer and this stage does
 not add one (section 4). NVIDIA Frame Generation (DLSS-G) is **not** implemented and not feasible in this renderer
 (section 7); the built-in interpolation is the frame generation on offer.
 
@@ -55,6 +53,8 @@ graphics_api = "d3d12"       # DLSS needs the Direct3D 12 backend ("auto" picks 
   (flip the jitter sign given to DLSS; +1 is verified correct, see section 6).
 
 ## 2. How DLSS runs inside aurora / Dawn (question A1, A2)
+
+The Windows release applies the selected NVIDIA mode's scale ratio to the actual Wii display copy. At a 1280×720 viewport, the game can produce a 1216×622 display copy. DLAA processes that image at 1216×622, then the presentation pass fits it to the viewport. Performance reconstructs a 608×311 copy to 1216×622. Ultra Performance uses three output pixels per input pixel along each axis.
 
 Facts established with the probes (all on this machine, RTX 4090, driver 621.14, Dawn D3D12 prebuilt of the game tree):
 
@@ -169,10 +169,7 @@ uniform per draw filled at seal time like the interpolated uniform copies, a ver
 2. **EFB copies / post effects**: the EFB->texture copy and the resolve passes copy colour only; a velocity attachment
    would have to be copied/cleared in lock-step (`gfx::resolve_pass_into`, `tex_copy_conv`), and the final XFB copy must also
    resolve depth + velocity next to colour so they are consistent with the colour DLSS sees.
-3. **Depth**: DLSS wants depth; today a constant 0.5 is bound (it only affects disocclusion handling). Real depth = copy the EFB
-   depth at `copy_disp` time (the depth buffer is cleared right after).
-4. It touches the generated-shader hot path and every pipeline/blend-state key. It needs in-game validation and was
-   deliberately not attempted blind.
+3. **Depth** comes from the EFB snapshot associated with the display copy. With a separated HUD, the captured background depth is preferred. Frames without captured depth use the neutral plane.
 
 Until then the practical advice is: **DLAA and Quality are good for static / slow content, Performance and below look
 like a strong spatial upscaler with temporal AA in motion; try "Estimated motion vectors" only as an experiment.**
@@ -185,13 +182,7 @@ like a strong spatial upscaler with temporal AA in motion; try "Estimated motion
 * Redistribution (section 1c, 2): allowed as object code inside an application that has "material additional
   functionality", flow-down of terms at least as protective as NVIDIA's, the usual notices, no stand-alone distribution of
   the SDK, no implication of NVIDIA endorsement.
-* **Section 4e: you may not use the SDK in a way that makes it subject to an open-source license.** This project is GPL-3.
-  Dynamically loading NVIDIA's DLLs that are *shipped next to* (not linked into, not part of) the GPL program is the usual
-  way to keep that boundary, but it is a legal judgement, not a technical one: **do not commit the NVIDIA DLLs to the GPL
-  repository and do not put them in public GPL release archives**. `third_party/nvidia/` is gitignored and
-  `tools/update_ready.ps1` copies the DLLs only into the local `ready\` folder (or the user fetches them with
-  `-FetchDlss`). The game starts and runs without them. This is not legal advice; check the licence if you plan to
-  publish builds that contain the DLLs.
+* The Windows release includes four separately licensed NVIDIA DLLs and their notices. The release packager verifies the SDK file hashes before creating the archive. The binaries remain outside the GPL source tree.
 * DLSS needs an NVIDIA RTX GPU (Turing or newer), Windows 10 2004+, driver 512.15+ (the tested driver is 621.14).
   Streamline checks the signatures of its plug-ins; the app checks `sl.interposer.dll` with `WinVerifyTrust`. No
   over-the-air downloads (`eLoadDownloadedPlugins` is not set).

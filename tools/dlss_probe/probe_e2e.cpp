@@ -207,7 +207,7 @@ static double psnr(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b,
 }
 
 static int testFlow(SceneRenderer& scene) {
-    printf("== motion flow accuracy (320x180 render, previous minus current, render pixels)\n");
+    printf("== motion flow accuracy (640x360 render, previous minus current, render pixels)\n");
     const uint32_t W = 640, H = 360;
     dlss::MotionFlow flow;
     if (!flow.init(g_device) || !flow.resize(W, H)) { printf("flow init failed\n"); return 2; }
@@ -233,10 +233,10 @@ static int testFlow(SceneRenderer& scene) {
         std::vector<float> ex, ey;
         for (uint32_t y = 100; y < H - 100; y += 3)
             for (uint32_t x = 100; x < W - 100; x += 3) { ex.push_back(half2f(h[(size_t(y) * W + x) * 2])); ey.push_back(half2f(h[(size_t(y) * W + x) * 2 + 1])); }
-        std::sort(ex.begin(), ex.end()); std::sort(ey.begin(), ey.end());
-        const float mx = ex[ex.size() / 2], my = ey[ey.size() / 2];
         size_t good = 0;
         for (size_t i = 0; i < ex.size(); ++i) good += (std::abs(ex[i] - t[0]) < 0.25f && std::abs(ey[i] - t[1]) < 0.25f);
+        std::sort(ex.begin(), ex.end()); std::sort(ey.begin(), ey.end());
+        const float mx = ex[ex.size() / 2], my = ey[ey.size() / 2];
         const double frac = double(good) / double(ex.size());
         printf("  shift (%6.2f,%6.2f) jitter (%5.2f,%5.2f)->(%5.2f,%5.2f): median (%7.3f,%7.3f)  within 0.25px: %5.1f%%\n", t[0], t[1], t[2], t[3], t[4], t[5], mx, my, frac * 100);
         if (frac < 0.5 && std::abs(t[0]) < 60) ++bad;
@@ -277,19 +277,19 @@ int main(int argc, char** argv) {
     int rc = testFlow(scene);
 
     char full[MAX_PATH];
-    GetFullPathNameA("third_party/nvidia/streamline/bin/x64", MAX_PATH, full, nullptr);
-    dlss::set_log([](int level, const char* msg) { if (level >= 1 || strstr(msg, "DLSS")) printf("  [dlss %d] %s\n", level, msg); });
+    GetFullPathNameA("ready", MAX_PATH, full, nullptr);
+    dlss::set_log([](int level, const char* msg) { if (level >= 1 || strstr(msg, "DLSS") || strstr(msg, "FSR")) printf("  [dlss %d] %s\n", level, msg); });
     dlss::start(g_device, ainfo, wgpu::BackendType::D3D12, sharing, full);
     for (int i = 0; i < 200 && dlss::status().state == dlss::State::Probing; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     auto st = dlss::status();
     printf("== DLSS status: state=%d version='%s' reason='%s'\n", (int)st.state, st.version.c_str(), st.reason.c_str());
-    if (st.state != dlss::State::Ready) return 4;
+    if (modeArg == "fsr" ? !dlss::fsr_ready() : st.state != dlss::State::Ready) return 4;
 
     const float vxEnv = getenv("DLSS_VX") ? (float)atof(getenv("DLSS_VX")) : 3.7f, vyEnv = getenv("DLSS_VY") ? (float)atof(getenv("DLSS_VY")) : -2.2f;
     const uint32_t OW = getenv("DLSS_OW") ? (uint32_t)atoi(getenv("DLSS_OW")) : 1920, OH = getenv("DLSS_OH") ? (uint32_t)atoi(getenv("DLSS_OH")) : 1080;
     const float scaleF = dlss::mode_scale_factor(mode);
     const uint32_t RW = uint32_t(std::lround(OW / scaleF)) + (getenv("DLSS_RWADJ") ? atoi(getenv("DLSS_RWADJ")) : 0), RH = uint32_t(std::lround(OH / scaleF)) + (getenv("DLSS_RWADJ") ? atoi(getenv("DLSS_RWADJ")) : 0);
-    printf("== DLSS %s %s: %ux%u -> %ux%u, %d frames\n", dlss::mode_name(mode), noMotion ? "(zero motion vectors)" : "(flow motion vectors)", RW, RH, OW, OH, frames);
+    printf("== %s %s %s: %ux%u -> %ux%u, %d frames\n", modeArg == "fsr" ? "FSR" : "DLSS", dlss::mode_name(mode), noMotion ? "(zero motion vectors)" : "(flow motion vectors)", RW, RH, OW, OH, frames);
     dlss::set_motion_vectors_enabled(!noMotion);
     if (getenv("DLSS_TRUEMV")) dlss::debug_constant_motion(true, vxEnv / scaleF, vyEnv / scaleF);
     dlss::set_jitter_enabled(true, RW, OW);
@@ -343,6 +343,7 @@ int main(int argc, char** argv) {
         auto enc = g_device.CreateCommandEncoder();
         scene.draw(enc, low.CreateView(), curRW, curRH, OW, OH, jx, jy, shx, shy);       // jittered render, what the game would produce
         dlss::DispatchParams dp;
+        dp.fsr = modeArg == "fsr";
         dp.color = low.CreateView();
         dp.renderWidth = curRW; dp.renderHeight = curRH; dp.outputWidth = OW; dp.outputHeight = OH;
         dp.mode = curMode; dp.sharpness = 0.f; dp.reset = f == 0;
@@ -370,7 +371,7 @@ int main(int argc, char** argv) {
             const double pd = psnr(outPix, gtPix, OW, OH, 16), pb = psnr(basePix, gtPix, OW, OH, 16);
             sumDlss += pd; sumBase += pb; ++counted;
             if (f == frames - 1) {
-                printf("  frame %d: DLSS %.2f dB, bilinear %.2f dB\n", f, pd, pb);
+                printf("  frame %d: %s %.2f dB, bilinear %.2f dB\n", f, modeArg == "fsr" ? "FSR" : "DLSS", pd, pb);
                 if (const char* dump = getenv("DLSS_DUMP")) {
                     const char* names[3] = {"gt", "dlss", "bilinear"};
                     const std::vector<uint8_t>* v[3] = {&gtPix, &outPix, &basePix};
@@ -393,7 +394,7 @@ int main(int argc, char** argv) {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - benchStart).count();
         printf("BENCH %s %ux%u -> %ux%u: %.2f ms/frame (scene render + flow + DLSS, %d frames, GPU-bound)\n", dlss::mode_name(mode), RW, RH, OW, OH, ms / frames, frames);
     }
-    if (counted) printf("RESULT %s%s: mean PSNR over last %d frames: DLSS %.2f dB, bilinear low-res %.2f dB\n", dlss::mode_name(mode), noMotion ? " (no motion)" : "", counted, sumDlss / counted, sumBase / counted);
+    if (counted) printf("RESULT %s%s: mean PSNR over last %d frames: %.2f dB, bilinear low-res %.2f dB\n", dlss::mode_name(mode), noMotion ? " (no motion)" : "", counted, sumDlss / counted, sumBase / counted);
     dlss::shutdown();
     return rc;
 }

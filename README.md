@@ -17,7 +17,7 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 
 - **Modern aiming.** Use a mouse or right stick to aim while moving with the left stick or WASD. Controllers with a supported motion sensor can use [calibrated gyro aiming](docs/GYRO-AIMING.md).
 - **Remappable controls.** Configure gamepad and keyboard/mouse bindings in-game. The port supports Wii Remote + Nunchuk and Classic Controller input schemes.
-- **High-resolution rendering.** Render at window size or choose an internal resolution multiplier. FSR 1 is available for spatial upscaling, with [optional NVIDIA DLSS](docs/DLSS-NOTES.md) on supported RTX systems.
+- **High-resolution rendering.** Render at window size or choose an internal resolution multiplier. The Windows release includes AMD temporal FSR, FSR 1 spatial upscaling, NVIDIA DLSS and DLAA on RTX systems, and 4× MSAA. See the [FSR notes](docs/FSR-NOTES.md) and [DLSS notes](docs/DLSS-NOTES.md).
 - **Readable HUD.** Eligible Wii HUD and text draws are rendered over the upscaled scene at output resolution using the original textures and blending. Integer presentation can keep display pixels evenly sized when the source fits the selected aspect ratio.
 - **Flexible frame pacing.** Choose original 60 Hz, match-display, or interpolated presentation. Variable refresh rate is available on compatible displays.
 - **In-game settings.** Open the game's **Options** from the title or pause menu. Display changes offer a Keep/Revert prompt.

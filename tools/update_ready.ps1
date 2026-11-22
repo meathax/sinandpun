@@ -15,6 +15,7 @@ param(
 # Usage (repo root): powershell -File tools\update_ready.ps1
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
+if ($FetchDlss) { & "$PSScriptRoot/fetch_graphics_sdks.ps1" }
 $src = Join-Path $root $Source
 $dst = Join-Path $root $Target
 $exe = Join-Path $src "WiiCompiled.exe"
@@ -55,32 +56,6 @@ $codecNotices = New-Item -ItemType Directory -Force (Join-Path $dst "disc_codec_
 Copy-Item (Join-Path $root "third_party\disc_codecs\*.txt") $codecNotices -Force
 
 $dlssDir = Join-Path $root "third_party\nvidia\streamline"
-if ($FetchDlss -and -not (Test-Path (Join-Path $dlssDir "bin\x64\sl.interposer.dll"))) {
-    # Official release zip (the binaries are not in the git repository since SL 2.7.32). 2.14.16 = the version this
-    # integration was tested with (DLSS 310.9.16 inside). Only the pieces the game needs are kept.
-    $slVersion = "v2.14.16"
-    $zip = Join-Path $env:TEMP "streamline-sdk-$slVersion.zip"
-    $tmp = Join-Path $env:TEMP "streamline-sdk-$slVersion"
-    Invoke-WebRequest "https://github.com/NVIDIA-RTX/Streamline/releases/download/$slVersion/streamline-sdk-$slVersion.zip" -OutFile $zip -UseBasicParsing
-    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-    Expand-Archive $zip $tmp -Force
-    $sdk = if (Test-Path (Join-Path $tmp "bin\x64")) { $tmp } else { (Get-ChildItem $tmp -Directory | Select-Object -First 1).FullName }
-    if (-not (Test-Path (Join-Path $sdk "bin\x64\sl.interposer.dll"))) { throw "unexpected Streamline SDK layout in $tmp" }
-    New-Item -ItemType Directory -Force (Join-Path $dlssDir "bin\x64"), (Join-Path $dlssDir "docs") | Out-Null
-    Copy-Item (Join-Path $sdk "include") $dlssDir -Recurse -Force
-    foreach ($f in "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.dlss_g.dll", "sl.pcl.dll", "sl.reflex.dll",
-                   "nvngx_dlss.dll", "nvngx_dlssg.dll", "nvngx_dlss.license.txt", "reflex.license.txt") {
-        $s = Join-Path $sdk "bin\x64\$f"
-        if (Test-Path $s) { Copy-Item $s (Join-Path $dlssDir "bin\x64") -Force }
-    }
-    foreach ($f in "license.txt", "3rd-party-licenses.md", "README.md") { Copy-Item (Join-Path $sdk $f) $dlssDir -Force -ErrorAction SilentlyContinue }
-    foreach ($f in "ProgrammingGuide.md", "ProgrammingGuideDLSS.md", "ProgrammingGuideDLSS_G.md", "ProgrammingGuideManualHooking.md") {
-        Copy-Item (Join-Path $sdk "docs\$f") (Join-Path $dlssDir "docs") -Force -ErrorAction SilentlyContinue
-    }
-    Copy-Item (Join-Path $dlssDir "bin\x64\nvngx_dlss.license.txt") (Join-Path $dlssDir "NVIDIA-RTX-SDKs-LICENSE.txt") -Force -ErrorAction SilentlyContinue
-    Remove-Item $tmp, $zip -Recurse -Force
-    "fetched the Streamline SDK $slVersion into $dlssDir"
-}
 if (-not $NoDlss) {
     $dllSrc = Join-Path $dlssDir "bin\x64"
     if (Test-Path (Join-Path $dllSrc "sl.interposer.dll")) {
@@ -98,6 +73,15 @@ if (-not $NoDlss) {
         "NVIDIA DLSS DLLs not staged ($dllSrc); the in-game DLSS option will report them as missing (run with -FetchDlss)"
     }
 }
+$amd = Join-Path $root "third_party/amd"
+$fsr = Join-Path $amd "FidelityFX-SDK"
+foreach ($name in "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll") {
+    Copy-Item -LiteralPath (Join-Path $fsr "Kits/FidelityFX/signedbin/$name") -Destination $dst -Force -ErrorAction Stop
+}
+New-Item -ItemType Directory -Force (Join-Path $dst "licenses") | Out-Null
+Copy-Item "$fsr/docs/license.md" "$dst/licenses/amd-fidelityfx-sdk.md" -Force -ErrorAction Stop
+Copy-Item "$fsr/3rdpartynotice.md" "$dst/licenses/amd-3rdpartynotice.md" -Force -ErrorAction Stop
+Copy-Item "$amd/FidelityFX-FSR/license.txt" "$dst/licenses/amd-fsr1.txt" -Force -ErrorAction Stop
 if (Test-Path (Join-Path $src "wii_bootstrap")) {
     Copy-Item (Join-Path $src "wii_bootstrap") $dst -Recurse -Force
 }

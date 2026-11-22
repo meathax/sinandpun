@@ -2,6 +2,7 @@
 
 #include <webgpu/webgpu_cpp.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -51,6 +52,7 @@ void start(const wgpu::Device& device, const wgpu::AdapterInfo& adapterInfo, wgp
 Status status();
 // Cheap (one atomic load); true once start() finished and DLSS can run.
 bool ready() noexcept;
+bool fsr_ready() noexcept;
 // Releases Streamline and the second device. Call before the Dawn device is destroyed.
 void shutdown() noexcept;
 
@@ -72,6 +74,10 @@ struct DispatchParams {
   uint32_t outputWidth = 0, outputHeight = 0;
   Mode mode = Mode::Quality;
   float sharpness = 0.f;     // 0..1, post-DLSS contrast-adaptive sharpening (0 = off)
+  wgpu::TextureView depth;
+  std::array<float,4> depthRect{};
+  bool reversedDepth = false;
+  bool fsr = false;
   bool reset = false;        // drop temporal history (scene cut, mode change, ...)
 };
 

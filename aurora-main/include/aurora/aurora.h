@@ -207,8 +207,7 @@ bool aurora_is_metalfx_spatial_supported();
 AuroraMetalFXStatus aurora_get_metalfx_status();
 
 // Single upscaler selector shared by FSR and DLSS. Only OFF and FSR1 are implemented in aurora itself;
-// FSR3 and DLSS are reserved so config/UI code has one enum (requesting an unimplemented one behaves like
-// FSR1 at the same scale, see aurora_get_upscale_info().active).
+// FSR3 selects the AMD temporal provider. Both temporal modes fall back to spatial scaling when unavailable.
 typedef enum {
   AURORA_UPSCALER_OFF = 0,
   AURORA_UPSCALER_FSR1 = 1,

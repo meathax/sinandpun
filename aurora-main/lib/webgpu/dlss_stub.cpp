@@ -58,6 +58,7 @@ Status status() {
   return s;
 }
 
+bool fsr_ready() noexcept { return false; }
 bool ready() noexcept { return false; }
 void shutdown() noexcept {}
 void advance_jitter(bool) noexcept {}

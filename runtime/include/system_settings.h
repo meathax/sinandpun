@@ -2,7 +2,7 @@
 
 // Persisted options of the in-game options menu that have no home in runtime_config.h:
 //   [video]  scaling_filter = "bilinear" | "area" | "integer"   (live)
-//            msaa = 1 | 2 | 4 | 8                   (restart; AuroraConfig.msaa)
+//            msaa = 1 | 4                   (restart; AuroraConfig.msaa)
 //            anisotropy = 1 | 2 | 4 | 8 | 16        (restart; AuroraConfig.maxTextureAnisotropy)
 //   [system] config_version = 1
 //            startup_cover = "auto" | "skip" | "button"   (next launch)
@@ -32,7 +32,7 @@ inline constexpr std::array<const char*, 3> kScalingFilterKeys = {"bilinear", "a
 inline constexpr std::array<const char*, 3> kScalingFilterLabels = {
     "Bilinear (sharper)", "Area (smoother)", "Integer (upscaler off)"};
 
-inline constexpr std::array<int, 4> kMsaaChoices = {1, 2, 4, 8};
+inline constexpr std::array<int, 2> kMsaaChoices = {1, 4};
 inline constexpr std::array<int, 5> kAnisotropyChoices = {1, 2, 4, 8, 16};
 
 struct Values {
@@ -53,7 +53,7 @@ inline int NearestChoice(int value, const int* choices, size_t count) {
 
 inline void Sanitize(Values& v) {
     v.scalingFilter = std::clamp(v.scalingFilter, 0, static_cast<int>(kScalingFilterKeys.size()) - 1);
-    v.msaa = NearestChoice(v.msaa, kMsaaChoices.data(), kMsaaChoices.size());
+    v.msaa = v.msaa > 1 ? 4 : 1;
     v.anisotropy = NearestChoice(v.anisotropy, kAnisotropyChoices.data(), kAnisotropyChoices.size());
 }
 

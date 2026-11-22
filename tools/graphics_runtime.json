@@ -1,0 +1,14 @@
+{
+  "amd_fidelityfx_loader_dx12.dll": "e2191d3c0828be45eb8affd4e3ec0378f2293adc345b772a7170edcf3b021ecb",
+  "amd_fidelityfx_upscaler_dx12.dll": "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace",
+  "licenses/amd-3rdpartynotice.md": "24961cc093fd3ae7dc0dce807ab46d5a11912a528a9342ece7874bf667a6cfb6",
+  "licenses/amd-fidelityfx-sdk.md": "faeb8ef30681785235183e6393c920ad070955c2d2cae6c4b3a91b6a712767b7",
+  "licenses/amd-fsr1.txt": "84bb6af6a570cc2d737b1d530534139592c89f5a9114e4c6aabf0fb8e7762375",
+  "licenses/nvidia-3rd-party-licenses.md": "cb251639994465f31d2178c16acedf1ff4f9cef1c370a09782ed36d4c86c1dca",
+  "licenses/nvidia-license.txt": "7b6f23e7d6f3ad6292f9308d2b42cdc3d82ae4e9b2abb55f230279d83bedd43d",
+  "licenses/nvidia-nvngx_dlss.license.txt": "3027f23ca5a46dd9cb8183fbd522983a86f64d7daac5982912bf9f214671f294",
+  "nvngx_dlss.dll": "d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e",
+  "sl.common.dll": "38eea3b4209afc455636ea372b5933d65fcc13becec6c84d101dcfc4d8648f75",
+  "sl.dlss.dll": "18871eea87c90345da97d8109faa81ea7d5840e8d99b51b55b0e46cfa177f84e",
+  "sl.interposer.dll": "b1d7395aebd7b9722841d64dcf7433680020b6a8e421f851c16d5ba0c2182edf"
+}

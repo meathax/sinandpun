@@ -216,6 +216,7 @@ struct FramePacket {
   std::deque<FrameOp> ops;
   std::deque<TextureUpload> textureUploads;
   webgpu::TextureWithSampler hudBackground;
+  wgpu::TextureView hudDepth;
   const RenderPass* hudCandidate = nullptr;
   PixelPerfectGuiPresent displayHud;
 #ifdef AURORA_GFX_DEBUG_GROUPS

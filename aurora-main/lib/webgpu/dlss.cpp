@@ -28,6 +28,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include <chrono>
+#define PLATFORM_WINDOWS 1
+#include <ffx_api_loader.h>
+#include <dx12/ffx_api_dx12.h>
+#include <ffx_upscale.h>
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
@@ -194,6 +199,9 @@ struct Runtime {
   wgpu::SharedFence dawnFence; // `fence` imported into Dawn
   uint64_t signaled = 0;
   uint32_t frameIndex = 0;
+  HMODULE fsrModule = nullptr;
+  ffxFunctions ffx{};
+  std::atomic<bool> fsrAvailable{false};
   bool slLoaded = false;
   bool dlssFeature = false;
   ~Runtime() {
@@ -279,13 +287,7 @@ const char* sl_result_text(sl::Result r) {
   }
 }
 
-void init_thread_main(uint32_t vendorId, uint32_t deviceId, bool backendOk, bool sharingOk) {
-  using Fn1 = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
-  using Fn2 = HRESULT(WINAPI*)(UINT, REFIID, void**);
-  if (!backendOk) return set_state(State::Unavailable, "DLSS needs the Direct3D 12 graphics backend");
-  if (vendorId != 0x10DE) return set_state(State::Unavailable, "NVIDIA RTX GPU and nvngx_dlss.dll required");
-  if (!sharingOk) return set_state(State::Unavailable, "the GPU device lacks Direct3D 12 resource sharing support");
-
+void init_streamline(uint32_t vendorId, uint32_t deviceId, LUID adapterLuid) {
   const std::wstring& dir = g_rt.dllDir;
   std::string missing;
   for (const wchar_t* name : {L"sl.interposer.dll", L"sl.common.dll", L"sl.dlss.dll", L"nvngx_dlss.dll"}) {
@@ -326,6 +328,33 @@ void init_thread_main(uint32_t vendorId, uint32_t deviceId, bool backendOk, bool
   }
   g_rt.slLoaded = true;
 
+  if (const auto r = slSetD3DDevice(g_rt.device.Get()); r != sl::Result::eOk) {
+    return set_state(State::Failed, "slSetD3DDevice failed");
+  }
+  LUID luid = adapterLuid;
+  sl::AdapterInfo sai{};
+  sai.deviceLUID = reinterpret_cast<uint8_t*>(&luid);
+  sai.deviceLUIDSizeInBytes = sizeof(LUID);
+  if (const auto r = slIsFeatureSupported(sl::kFeatureDLSS, sai); r != sl::Result::eOk) {
+    return set_state(State::Unavailable, sl_result_text(r));
+  }
+  g_rt.dlssFeature = true;
+
+  sl::FeatureVersion fv{};
+  slGetFeatureVersion(sl::kFeatureDLSS, fv);
+  char version[96];
+  snprintf(version, sizeof version, "Streamline %u.%u.%u / DLSS %u.%u.%u", fv.versionSL.major, fv.versionSL.minor,
+           fv.versionSL.build, fv.versionNGX.major, fv.versionNGX.minor, fv.versionNGX.build);
+  logf(0, "DLSS available: %s on adapter %04x:%04x", version, vendorId, deviceId);
+  set_state(State::Ready, {}, version);
+}
+
+void init_thread_main(uint32_t vendorId, uint32_t deviceId, bool backendOk, bool sharingOk) {
+  using Fn1 = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+  using Fn2 = HRESULT(WINAPI*)(UINT, REFIID, void**);
+  if (!backendOk) return set_state(State::Unavailable, "DLSS needs the Direct3D 12 graphics backend");
+  if (!sharingOk) return set_state(State::Unavailable, "the GPU device lacks Direct3D 12 resource sharing support");
+
   const HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
   const HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
   const auto createFactory = dxgi ? reinterpret_cast<Fn2>(reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory2"))) : nullptr;
@@ -349,18 +378,6 @@ void init_thread_main(uint32_t vendorId, uint32_t deviceId, bool backendOk, bool
                           reinterpret_cast<void**>(g_rt.device.GetAddressOf())))) {
     return set_state(State::Failed, "second Direct3D 12 device creation failed");
   }
-  if (const auto r = slSetD3DDevice(g_rt.device.Get()); r != sl::Result::eOk) {
-    return set_state(State::Failed, "slSetD3DDevice failed");
-  }
-  LUID luid = desc.AdapterLuid;
-  sl::AdapterInfo sai{};
-  sai.deviceLUID = reinterpret_cast<uint8_t*>(&luid);
-  sai.deviceLUIDSizeInBytes = sizeof(LUID);
-  if (const auto r = slIsFeatureSupported(sl::kFeatureDLSS, sai); r != sl::Result::eOk) {
-    return set_state(State::Unavailable, sl_result_text(r));
-  }
-  g_rt.dlssFeature = true;
-
   D3D12_COMMAND_QUEUE_DESC qd{};
   qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
   if (FAILED(g_rt.device->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(g_rt.queue.GetAddressOf()))) ||
@@ -378,13 +395,13 @@ void init_thread_main(uint32_t vendorId, uint32_t deviceId, bool backendOk, bool
   }
   g_rt.list->Close();
 
-  sl::FeatureVersion fv{};
-  slGetFeatureVersion(sl::kFeatureDLSS, fv);
-  char version[96];
-  snprintf(version, sizeof version, "Streamline %u.%u.%u / DLSS %u.%u.%u", fv.versionSL.major, fv.versionSL.minor,
-           fv.versionSL.build, fv.versionNGX.major, fv.versionNGX.minor, fv.versionNGX.build);
-  logf(0, "DLSS available: %s on adapter %04x:%04x", version, vendorId, deviceId);
-  set_state(State::Ready, {}, version);
+  g_rt.fsrModule = LoadLibraryExW((g_rt.dllDir + L"\\amd_fidelityfx_loader_dx12.dll").c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+  if (g_rt.fsrModule) {
+    ffxLoadFunctions(&g_rt.ffx, g_rt.fsrModule);
+    g_rt.fsrAvailable.store(g_rt.ffx.CreateContext && g_rt.ffx.DestroyContext && g_rt.ffx.Dispatch);
+  }
+  if (vendorId == 0x10DE) init_streamline(vendorId, deviceId, desc.AdapterLuid);
+  else set_state(State::Unavailable, "DLSS requires an NVIDIA RTX GPU");
 }
 
 // ---- Dawn side pipelines ---------------------------------------------------------------------------------------
@@ -402,6 +419,21 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let d = vec2<i32>(textureDimensions(srcT));
     let c = textureLoad(srcT, clamp(vec2<i32>(pos.xy), vec2<i32>(0), d - vec2<i32>(1)), 0);
     return vec4<f32>(c.rgb, 1.0);
+}
+)"sv;
+
+constexpr std::string_view kDepthShader = R"(
+@group(0) @binding(0) var src: texture_2d<f32>;
+struct Mapping { rect: vec4f, convention: vec4f };
+@group(0) @binding(1) var<uniform> mapping: Mapping;
+@vertex fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4f {
+    var q = array<vec2f,3>(vec2f(-1,1), vec2f(-1,-3), vec2f(3,1));
+    return vec4f(q[idx], 0, 1);
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) f32 {
+    let xy = vec2i(mapping.rect.xy + p.xy * mapping.rect.zw);
+    let z = textureLoad(src, clamp(xy, vec2i(0), vec2i(textureDimensions(src))-1), 0).r;
+    return select(z, 1.0-z, mapping.convention.x > 0.0);
 }
 )"sv;
 
@@ -444,6 +476,9 @@ struct DawnPipelines {
   bool built = false;
   bool failed = false;
   wgpu::BindGroupLayout blitLayout, casLayout;
+  wgpu::BindGroupLayout depthLayout;
+  wgpu::Buffer depthUniform;
+  wgpu::RenderPipeline depthCopy;
   wgpu::RenderPipeline blit;
   wgpu::RenderPipeline cas;
   wgpu::Buffer casUniform;
@@ -492,12 +527,21 @@ bool ensure_pipelines() {
   g_pipes.blit = make_pipeline(make_module(kBlitShader, "dlss blit"), g_pipes.blitLayout, wgpu::TextureFormat::RGBA8Unorm, "dlss input blit");
   g_pipes.cas = make_pipeline(make_module(kCasShader, "dlss cas"), g_pipes.casLayout, wgpu::TextureFormat::RGBA8Unorm, "dlss sharpen");
   const wgpu::BufferDescriptor ub{.label = "dlss cas uniform", .usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst, .size = 16};
+  auto depthEntries = casEntries;
+  depthEntries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
+  const wgpu::BindGroupLayoutDescriptor depthLayout{.entryCount = depthEntries.size(), .entries = depthEntries.data()};
+  g_pipes.depthLayout = g_rt.dawn.CreateBindGroupLayout(&depthLayout);
+  auto depthUniform = ub;
+  depthUniform.size = 32;
+  g_pipes.depthUniform = g_rt.dawn.CreateBuffer(&depthUniform);
+  g_pipes.depthCopy = make_pipeline(make_module(kDepthShader, "Temporal depth"), g_pipes.depthLayout,
+                                    wgpu::TextureFormat::R32Float, "Temporal scene depth");
   g_pipes.casUniform = g_rt.dawn.CreateBuffer(&ub);
   const wgpu::SamplerDescriptor sd{.label = "dlss output sampler", .addressModeU = wgpu::AddressMode::ClampToEdge,
                                    .addressModeV = wgpu::AddressMode::ClampToEdge, .addressModeW = wgpu::AddressMode::ClampToEdge,
                                    .magFilter = wgpu::FilterMode::Linear, .minFilter = wgpu::FilterMode::Linear};
   g_pipes.sampler = g_rt.dawn.CreateSampler(&sd);
-  if (!g_pipes.blit || !g_pipes.cas || !g_pipes.casUniform || !g_pipes.sampler) {
+  if (!g_pipes.depthCopy || !g_pipes.depthUniform || !g_pipes.blit || !g_pipes.cas || !g_pipes.casUniform || !g_pipes.sampler) {
     g_pipes.failed = true;
     log(2, "DLSS: Dawn pipeline creation failed");
     return false;
@@ -602,11 +646,13 @@ struct Instance {
   uint32_t rw = 0, rh = 0, ow = 0, oh = 0; // ow/oh: the DLSS output size actually used (see create_instance)
   uint32_t reqOw = 0, reqOh = 0; // output size the caller asked for
   Mode mode = Mode::Off;
+  ffxContext fsrContext{};
+  std::chrono::steady_clock::time_point lastFrame{};
   SharedTex color, depth, mv, out;
   wgpu::Texture sharpTex;
   wgpu::TextureView sharpView;
   MotionFlow flow;
-  bool depthCleared = false;
+  bool hadSceneDepth = false;
   bool needReset = true;
   bool optionsSet = false;
   float prevJitter[2] = {0.f, 0.f};
@@ -618,6 +664,7 @@ std::unique_ptr<Instance> g_instance;
 struct ConfigKey {
   uint32_t rw = 0, rh = 0, ow = 0, oh = 0;
   Mode mode = Mode::Off;
+  bool fsr = false;
   bool operator==(const ConfigKey&) const = default;
 };
 bool g_failed = false;       // the current configuration failed; retried when the configuration changes
@@ -641,7 +688,8 @@ void destroy_instance() {
     std::vector<FenceWait> ignore;
     end_access(g_instance->out, ignore);
   }
-  if (g_rt.slLoaded) slFreeResources(sl::kFeatureDLSS, kViewport);
+  if (g_instance->fsrContext) g_rt.ffx.DestroyContext(&g_instance->fsrContext, nullptr);
+  else if (g_rt.slLoaded) slFreeResources(sl::kFeatureDLSS, kViewport);
   g_instance.reset();
 }
 
@@ -661,7 +709,7 @@ bool create_instance(const DispatchParams& p) {
   // difference between the window code and DLSS would reject the frame. Look for a nearby output size DLSS accepts for this
   // render size; the present blit resamples the sub-percent difference.
   uint32_t aow = p.outputWidth, aoh = p.outputHeight;
-  {
+  if (!p.fsr) {
     sl::DLSSOptions probe{};
     probe.mode = sl_mode(p.mode);
     const auto fits = [&](uint32_t w, uint32_t h) {
@@ -723,6 +771,19 @@ bool create_instance(const DispatchParams& p) {
   inst->sharpTex = g_rt.dawn.CreateTexture(&sd);
   inst->sharpView = inst->sharpTex.CreateView();
 
+  if (p.fsr) {
+    ffxCreateBackendDX12Desc backend{{FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12}, g_rt.device.Get()};
+    ffxCreateContextDescUpscale desc{};
+    desc.header = {FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, &backend.header};
+    desc.maxRenderSize = {inst->rw, inst->rh};
+    desc.maxUpscaleSize = {inst->ow, inst->oh};
+    if (g_rt.ffx.CreateContext(&inst->fsrContext, &desc.header, nullptr) != 0) return false;
+    ffxQueryGetProviderVersion provider{{FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION}};
+    if (g_rt.ffx.Query && g_rt.ffx.Query(&inst->fsrContext, &provider.header) == 0 && provider.versionName)
+      logf(0, "AMD FSR provider: %s", provider.versionName);
+    g_instance = std::move(inst);
+    return true;
+  }
   sl::DLSSOptions opt{};
   opt.mode = sl_mode(p.mode);
   opt.outputWidth = aow;
@@ -762,26 +823,33 @@ sl::float4x4 identity4() {
   return m;
 }
 
-// Runs DLSS on the second device: waits for Dawn's fences, records tags + evaluate, executes, signals.
-bool run_dlss(Instance& inst, const DispatchParams& p, const std::vector<FenceWait>& waits) {
-  for (const auto& w : inst.outReadWaits) g_rt.queue->Wait(w.fence.Get(), w.value);
-  inst.outReadWaits.clear();
-  for (const auto& w : waits) g_rt.queue->Wait(w.fence.Get(), w.value);
+bool record_fsr(Instance& inst, const DispatchParams& p) {
+  ffxDispatchDescUpscale desc{};
+  desc.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
+  desc.commandList = g_rt.list.Get();
+  desc.color = ffxApiGetResourceDX12(inst.color.resource.Get(), FFX_API_RESOURCE_STATE_COMMON);
+  desc.depth = ffxApiGetResourceDX12(inst.depth.resource.Get(), FFX_API_RESOURCE_STATE_COMMON);
+  desc.motionVectors = ffxApiGetResourceDX12(inst.mv.resource.Get(), FFX_API_RESOURCE_STATE_COMMON);
+  desc.output = ffxApiGetResourceDX12(inst.out.resource.Get(), FFX_API_RESOURCE_STATE_COMMON);
+  current_jitter(desc.jitterOffset.x, desc.jitterOffset.y);
+  desc.motionVectorScale = {1, 1};
+  desc.renderSize = {inst.rw, inst.rh};
+  desc.upscaleSize = {inst.ow, inst.oh};
+  const auto now = std::chrono::steady_clock::now();
+  desc.reset = p.reset || inst.needReset;
+  desc.frameTimeDelta = desc.reset ? 16.67f : std::chrono::duration<float, std::milli>(now - inst.lastFrame).count();
+  inst.lastFrame = now;
+  desc.preExposure = 1;
+  desc.cameraNear = 0.1f;
+  desc.cameraFar = 1000;
+  desc.cameraFovAngleVertical = 1;
+  desc.viewSpaceToMetersFactor = 1;
+  return g_rt.ffx.Dispatch(&inst.fsrContext, &desc.header) == 0;
+}
 
-  const uint32_t slot = g_rt.frameIndex % 3;
-  if (g_rt.fence->GetCompletedValue() < g_rt.allocatorFence[slot]) {
-    const HANDLE e = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    g_rt.fence->SetEventOnCompletion(g_rt.allocatorFence[slot], e);
-    WaitForSingleObject(e, 2000);
-    CloseHandle(e);
-  }
-  g_rt.allocator[slot]->Reset();
-  g_rt.list->Reset(g_rt.allocator[slot].Get(), nullptr);
-
+bool record_dlss(Instance& inst, const DispatchParams& p, uint32_t frameIndex) {
   sl::FrameToken* token = nullptr;
-  const uint32_t frameIndex = g_rt.frameIndex++;
   if (slGetNewFrameToken(token, &frameIndex) != sl::Result::eOk || !token) {
-    g_rt.list->Close();
     return false;
   }
   float jx = 0.f, jy = 0.f;
@@ -829,6 +897,27 @@ bool run_dlss(Instance& inst, const DispatchParams& p, const std::vector<FenceWa
   ok = ok && slSetTagForFrame(*token, kViewport, tags, 4, g_rt.list.Get()) == sl::Result::eOk;
   const sl::BaseStructure* inputs[] = {&kViewport};
   ok = ok && slEvaluateFeature(sl::kFeatureDLSS, *token, inputs, 1, g_rt.list.Get()) == sl::Result::eOk;
+  return ok;
+}
+
+// Runs DLSS on the second device: waits for Dawn's fences, records tags + evaluate, executes, signals.
+bool run_dlss(Instance& inst, const DispatchParams& p, const std::vector<FenceWait>& waits) {
+  for (const auto& w : inst.outReadWaits) g_rt.queue->Wait(w.fence.Get(), w.value);
+  inst.outReadWaits.clear();
+  for (const auto& w : waits) g_rt.queue->Wait(w.fence.Get(), w.value);
+
+  const uint32_t slot = g_rt.frameIndex % 3;
+  if (g_rt.fence->GetCompletedValue() < g_rt.allocatorFence[slot]) {
+    const HANDLE e = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_rt.fence->SetEventOnCompletion(g_rt.allocatorFence[slot], e);
+    WaitForSingleObject(e, 2000);
+    CloseHandle(e);
+  }
+  g_rt.allocator[slot]->Reset();
+  g_rt.list->Reset(g_rt.allocator[slot].Get(), nullptr);
+
+  const uint32_t frameIndex = g_rt.frameIndex++;
+  const bool ok = p.fsr ? record_fsr(inst, p) : record_dlss(inst, p, frameIndex);
   g_rt.list->Close();
   if (!ok) return false;
   ID3D12CommandList* lists[] = {g_rt.list.Get()};
@@ -870,6 +959,8 @@ void start(const wgpu::Device& device, const wgpu::AdapterInfo& adapterInfo, wgp
   });
 }
 
+bool fsr_ready() noexcept { return g_rt.fsrAvailable.load(); }
+
 bool ready() noexcept { return g_rt.state.load(std::memory_order_acquire) == State::Ready; }
 
 Status status() {
@@ -896,6 +987,10 @@ void shutdown() noexcept {
     slShutdown();
     g_rt.slLoaded = false;
   }
+  g_rt.fsrAvailable.store(false);
+  if (g_rt.fsrModule) FreeLibrary(g_rt.fsrModule);
+  g_rt.fsrModule = nullptr;
+  g_failed = false;
   g_rt.device.Reset();
   g_rt.dawn = {};
   g_rt.dawnQueue = {};
@@ -903,8 +998,8 @@ void shutdown() noexcept {
 }
 
 bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& output) {
-  if (g_rt.state.load(std::memory_order_acquire) != State::Ready) return false;
-  g_currentKey = ConfigKey{p.renderWidth, p.renderHeight, p.outputWidth, p.outputHeight, p.mode};
+  if (p.fsr ? !fsr_ready() : !ready()) return false;
+  g_currentKey = ConfigKey{p.renderWidth, p.renderHeight, p.outputWidth, p.outputHeight, p.mode, p.fsr};
   if (g_failed && g_failedKey == g_currentKey) return false;
   g_failed = false;
   if (p.mode == Mode::Off || p.renderWidth == 0 || p.renderHeight == 0 || p.outputWidth < p.renderWidth ||
@@ -930,7 +1025,7 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
   }
   bool reset = p.reset;
   if (!g_instance || g_instance->rw != p.renderWidth || g_instance->rh != p.renderHeight ||
-      g_instance->reqOw != p.outputWidth || g_instance->reqOh != p.outputHeight || g_instance->mode != p.mode) {
+      g_instance->reqOw != p.outputWidth || g_instance->reqOh != p.outputHeight || g_instance->mode != p.mode || (g_instance->fsrContext != nullptr) != p.fsr) {
     destroy_instance();
     if (!create_instance(p)) {
       fail_current("could not create the DLSS resources (see the messages above)");
@@ -944,8 +1039,10 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
     inst.flow.invalidate_history();
   }
 
+  if (static_cast<bool>(p.depth) != inst.hadSceneDepth) inst.needReset = true;
+  inst.hadSceneDepth = static_cast<bool>(p.depth);
   if (!begin_access(inst.color, true) || !begin_access(inst.mv, true) ||
-      (!inst.depthCleared && !begin_access(inst.depth, false))) {
+      !begin_access(inst.depth, true)) {
     fail_current("Dawn BeginAccess failed");
     return false;
   }
@@ -963,16 +1060,27 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
     pass.Draw(3);
     pass.End();
   }
-  if (!inst.depthCleared) {
+  {
     const wgpu::RenderPassColorAttachment attachment{.view = inst.depth.view, .loadOp = wgpu::LoadOp::Clear,
                                                      .storeOp = wgpu::StoreOp::Store, .clearValue = {0.5, 0, 0, 0}};
     const wgpu::RenderPassDescriptor rd{.label = "DLSS depth init", .colorAttachmentCount = 1, .colorAttachments = &attachment};
-    encoder.BeginRenderPass(&rd).End();
+    auto pass = encoder.BeginRenderPass(&rd);
+    if (p.depth) {
+      const float mapping[8]{p.depthRect[0], p.depthRect[1], p.depthRect[2], p.depthRect[3], p.reversedDepth ? 1.f : 0.f};
+      g_rt.dawnQueue.WriteBuffer(g_pipes.depthUniform, 0, mapping, sizeof mapping);
+      const std::array entries{wgpu::BindGroupEntry{.binding=0, .textureView=p.depth},
+                               wgpu::BindGroupEntry{.binding=1, .buffer=g_pipes.depthUniform, .size=sizeof mapping}};
+      const wgpu::BindGroupDescriptor bind{.layout=g_pipes.depthLayout, .entryCount=entries.size(), .entries=entries.data()};
+      pass.SetPipeline(g_pipes.depthCopy);
+      pass.SetBindGroup(0, g_rt.dawn.CreateBindGroup(&bind));
+      pass.Draw(3);
+    }
+    pass.End();
   }
   float jx = 0.f, jy = 0.f;
   current_jitter(jx, jy);
   const bool constantMotion = g_constantMotion.load();
-  const bool estimateMotion = g_motionEnabled.load();
+  const bool estimateMotion = p.fsr || g_motionEnabled.load();
   if (constantMotion || !estimateMotion) {
     // test hook: every pixel moves by the same known vector
     const wgpu::RenderPassColorAttachment attachment{.view = inst.mv.view, .loadOp = wgpu::LoadOp::Clear,
@@ -981,7 +1089,18 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
                                                                     constantMotion ? g_constantMotionY.load() : 0.0f,
                                                                     0, 0}};
     const wgpu::RenderPassDescriptor rd{.label = "DLSS constant motion", .colorAttachmentCount = 1, .colorAttachments = &attachment};
-    encoder.BeginRenderPass(&rd).End();
+    auto pass = encoder.BeginRenderPass(&rd);
+    if (p.depth) {
+      const float mapping[8]{p.depthRect[0], p.depthRect[1], p.depthRect[2], p.depthRect[3], p.reversedDepth ? 1.f : 0.f};
+      g_rt.dawnQueue.WriteBuffer(g_pipes.depthUniform, 0, mapping, sizeof mapping);
+      const std::array entries{wgpu::BindGroupEntry{.binding=0, .textureView=p.depth},
+                               wgpu::BindGroupEntry{.binding=1, .buffer=g_pipes.depthUniform, .size=sizeof mapping}};
+      const wgpu::BindGroupDescriptor bind{.layout=g_pipes.depthLayout, .entryCount=entries.size(), .entries=entries.data()};
+      pass.SetPipeline(g_pipes.depthCopy);
+      pass.SetBindGroup(0, g_rt.dawn.CreateBindGroup(&bind));
+      pass.Draw(3);
+    }
+    pass.End();
     inst.flow.invalidate_history();
   } else {
     inst.flow.encode(encoder, inst.color.view, inst.mv.view, inst.needReset, jx - inst.prevJitter[0],
@@ -998,14 +1117,11 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
   std::vector<FenceWait> waits;
   end_access(inst.color, waits);
   end_access(inst.mv, waits);
-  if (!inst.depthCleared) {
-    end_access(inst.depth, waits);
-    inst.depthCleared = true;
-  }
+  end_access(inst.depth, waits);
 
   // 2. DLSS on the second device.
   if (!run_dlss(inst, p, waits)) {
-    fail_current("slEvaluateFeature failed");
+    fail_current(p.fsr ? "AMD FSR dispatch failed" : "slEvaluateFeature failed");
     return false;
   }
 

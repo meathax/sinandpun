@@ -501,8 +501,7 @@ Settings settings() noexcept {
 
 float resolution_divisor() noexcept {
   const auto s = settings();
-  // FSR3 / DLSS are not implemented in aurora; they request the same internal scale as FSR1 and run the
-  // FSR1 path until a temporal backend exists.
+  // Spatial fallback preserves the internal size requested by a temporal upscaler.
   return s.mode == AURORA_UPSCALER_OFF ? 1.f : std::max(s.scaleFactor, 1.f);
 }
 

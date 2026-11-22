@@ -259,10 +259,11 @@ void LimitResolutionForFrameRate() {
 // ---- upscaler (video.upscaler / fsr_quality / fsr_sharpness; docs/FSR-NOTES.md) -------------------------
 // One selector for every upscaler. Index 0 = off, 1 = FSR 1 (spatial); further upscalers (DLSS, FSR 3) append
 // a label and a config name here and a branch in ApplyUpscaler().
-constexpr std::array<const char*, 3> kUpscalerLabels = {"Off", "FSR 1 (spatial)", "NVIDIA DLSS"};
-constexpr std::array<const char*, 3> kUpscalerConfigNames = {"off", "fsr1", "dlss"};
+constexpr std::array<const char*, 4> kUpscalerLabels = {"Off", "FSR 1 (spatial)", "AMD FSR (temporal, DX12)", "NVIDIA DLSS"};
+constexpr std::array<const char*, 4> kUpscalerConfigNames = {"off", "fsr1", "fsr3", "dlss"};
 constexpr int kUpscalerFsr1 = 1;
-constexpr int kUpscalerDlss = 2;
+constexpr int kUpscalerTemporal = 2;
+constexpr int kUpscalerDlss = 3;
 // Same order as RuntimeConfigFile::kDlssModes (docs/DLSS-NOTES.md).
 constexpr std::array<const char*, RuntimeConfigFile::kDlssModes.size()> kDlssModeLabels = {
     "Ultra Performance (33%)", "Performance (50%)", "Balanced (58%)", "Quality (67%)", "DLAA (100%, anti-aliasing)"};
@@ -276,8 +277,7 @@ int UpscalerIndexFromConfig() {
     for (size_t i = 0; i < kUpscalerConfigNames.size(); ++i) {
         if (name == kUpscalerConfigNames[i]) return static_cast<int>(i);
     }
-    // fsr3 has no temporal backend yet: it runs the spatial path at the same scale (docs/FSR-NOTES.md).
-    return name == "fsr3" ? kUpscalerFsr1 : 0;
+    return 0;
 }
 
 int FsrQualityIndexFromConfig() {
@@ -296,13 +296,13 @@ float g_dlssSharpness = static_cast<float>(RuntimeConfigFile::DlssSharpness());
 bool g_dlssMotion = RuntimeConfigFile::DlssMotionVectors(false);
 
 bool UpscalerActive() {
-    return (g_upscaler == kUpscalerFsr1 && g_fsrQuality > 0) || g_upscaler == kUpscalerDlss;
+    return ((g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal) && g_fsrQuality > 0) || g_upscaler == kUpscalerDlss;
 }
 
 // Live apply: the scale factor changes the internal render size, which aurora re-evaluates at the next frame.
 void ApplyUpscaler() {
     GX_SYNC_INLINE();
-    const bool fsr = g_upscaler == kUpscalerFsr1;
+    const bool fsr = g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal;
     const bool dlss = g_upscaler == kUpscalerDlss;
     float factor = fsr ? RuntimeConfigFile::kFsrQualities[static_cast<size_t>(g_fsrQuality)].factor : 1.0f;
     float sharpness = g_fsrSharpness;
@@ -312,8 +312,10 @@ void ApplyUpscaler() {
         sharpness = g_dlssSharpness;
     }
     aurora_set_dlss_motion_vectors(g_dlssMotion);
-    aurora_set_upscaler(dlss ? AURORA_UPSCALER_DLSS : (fsr ? AURORA_UPSCALER_FSR1 : AURORA_UPSCALER_OFF), factor,
-                        sharpness / 100.0f);
+    AuroraUpscaler mode = AURORA_UPSCALER_OFF;
+    if (dlss) mode = AURORA_UPSCALER_DLSS;
+    if (fsr && g_fsrQuality > 0) mode = g_upscaler == kUpscalerTemporal ? AURORA_UPSCALER_FSR3 : AURORA_UPSCALER_FSR1;
+    aurora_set_upscaler(mode, factor, sharpness / 100.0f);
 }
 
 void PersistUpscaler() {
@@ -1089,7 +1091,7 @@ struct QualityPreset {
     int msaa;
     int anisotropy;
 };
-constexpr std::array<QualityPreset, 4> kPresets = {{{1.0f, 1, 2}, {1.0f, 1, 16}, {2.0f, 2, 16}, {4.0f, 4, 16}}};
+constexpr std::array<QualityPreset, 4> kPresets = {{{1.0f, 1, 2}, {1.0f, 1, 16}, {2.0f, 4, 16}, {4.0f, 4, 16}}};
 constexpr std::array<const char*, 5> kPresetNames = {"Low", "Medium", "High", "Ultra", "Custom"};
 
 int DetectPreset(float resolution, int msaa, int anisotropy) {
@@ -1121,7 +1123,7 @@ void BuildUpscalingSection(ListView& v) {
                                   : (dlssStatus.reason[0] != '\0' ? std::string(dlssStatus.reason)
                                                                   : std::string("NVIDIA RTX GPU and nvngx_dlss.dll required")));
     }
-    if (g_graphicsDraft.upscaler == kUpscalerFsr1) {
+    if (g_graphicsDraft.upscaler == kUpscalerFsr1 || g_graphicsDraft.upscaler == kUpscalerTemporal) {
         int quality = g_graphicsDraft.fsrQuality;
         if (v.Choice("FSR quality", &quality, kFsrQualityLabels.data(), static_cast<int>(kFsrQualityLabels.size()),
                      kDefaultFsrQualityIndex,
@@ -1142,7 +1144,7 @@ void BuildUpscalingSection(ListView& v) {
                                         : ResolutionText(window.native_fb_width, window.native_fb_height);
         v.Info("Internal resolution", internal);
         v.Info("Output resolution", output);
-        v.Note(live ? "FSR 1 is running." : "FSR 1 is selected but not running (Native quality, or the window is not larger than the internal size).");
+        v.Note(info.active == AURORA_UPSCALER_FSR3 ? "AMD temporal FSR is running." : live ? "Spatial upscaling is running." : "FSR 1 is selected but not running (Native quality, or the window is not larger than the internal size).");
     }
     if (g_graphicsDraft.upscaler == kUpscalerDlss) {
         int mode = g_graphicsDraft.dlssMode;
@@ -1184,7 +1186,7 @@ void BuildUpscalingSection(ListView& v) {
 void BuildGraphicsPage(ListView& v) {
     DisplayState next = g_graphicsDraft.display;
     const bool draftUpscalerActive =
-        (g_graphicsDraft.upscaler == kUpscalerFsr1 && g_graphicsDraft.fsrQuality > 0) ||
+        ((g_graphicsDraft.upscaler == kUpscalerFsr1 || g_graphicsDraft.upscaler == kUpscalerTemporal) && g_graphicsDraft.fsrQuality > 0) ||
         g_graphicsDraft.upscaler == kUpscalerDlss;
 
     v.Note("A green star marks the recommended value of a row.");
@@ -1220,12 +1222,12 @@ void BuildGraphicsPage(ListView& v) {
         next.resolution = kResolutions[static_cast<size_t>(resolutionIndex)].scale;
     }
 
-    static constexpr const char* kMsaaLabels[] = {"Off", "2x", "4x", "8x"};
+    static constexpr const char* kMsaaLabels[] = {"Off", "4x"};
     int msaaIndex = 0;
     for (size_t i = 0; i < SystemSettings::kMsaaChoices.size(); ++i) {
         if (SystemSettings::kMsaaChoices[i] == g_graphicsDraft.msaa) msaaIndex = static_cast<int>(i);
     }
-    if (v.Choice("Anti-aliasing (MSAA)", &msaaIndex, kMsaaLabels, 4, 0,
+    if (v.Choice("Anti-aliasing (MSAA)", &msaaIndex, kMsaaLabels, static_cast<int>(SystemSettings::kMsaaChoices.size()), 0,
                  "Off is the safest. Higher values cost GPU time and are untested with every effect.",
                  game_ui::kRowRestart, "Off") & kChanged) {
         g_graphicsDraft.msaa = SystemSettings::kMsaaChoices[static_cast<size_t>(msaaIndex)];

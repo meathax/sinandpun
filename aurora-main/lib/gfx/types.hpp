@@ -22,6 +22,9 @@ namespace detail { struct RenderPass; }
 struct PixelPerfectGuiPresent {
   webgpu::TextureWithSampler background;
   const detail::RenderPass* pass = nullptr;
+  wgpu::TextureView depth;
+  wgpu::TextureView temporalDepth;
+  std::array<float,4> depthRect{};
 };
 using BindGroupRef = HashType;
 using PipelineRef = HashType;

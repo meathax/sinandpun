@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import mmap
 import sys
 from pathlib import Path
 
@@ -50,6 +51,7 @@ def audit(source, package, modules, require_launcher_clean=False):
         errors.append("stale or missing runtime DLLs: " + ", ".join(missing_dlls))
     optional_dlls = {
         "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.dlss_g.dll",
+        "amd_fidelityfx_upscaler_dx12.dll", "amd_fidelityfx_loader_dx12.dll",
         "sl.pcl.dll", "sl.reflex.dll", "nvngx_dlss.dll", "nvngx_dlssg.dll",
     }
     extra_dlls = sorted(
@@ -107,6 +109,17 @@ def audit(source, package, modules, require_launcher_clean=False):
             errors.append(f"recomplauncher.json is invalid JSON: {error}")
 
     if require_launcher_clean:
+        if package_exe.is_file():
+            # These diagnostics are emitted only by the native SDK dispatch code.
+            if package_exe.stat().st_size:
+                with package_exe.open("rb") as exe, mmap.mmap(exe.fileno(), 0, access=mmap.ACCESS_READ) as image:
+                    if image.find(b"AMD FSR provider: %s") < 0 or image.find(b"slEvaluateFeature") < 0:
+                        errors.append("release executable lacks the native FSR or DLSS backend")
+        graphics = json.loads((ROOT / "tools/graphics_runtime.json").read_text())
+        for name, expected in graphics.items():
+            path = package / name
+            if not path.is_file() or sha256(path).lower() != expected:
+                errors.append(f"missing or incorrect graphics runtime file: {name}")
         mutable = [name for name in ("UserData", "recompdata", "portable.txt")
                    if (package / name).exists()]
         if mutable:

@@ -33,7 +33,7 @@ public:
   // the vectors into `target` (RG16Float, RenderAttachment). With reset (or no history) the target is cleared to
   // zero motion and only the luma pyramid is built.
   // `correction` is the change of the sub-pixel jitter between the previous and this frame (jitterCurrent -
-  // jitterPrevious, render pixels): the previous pyramid is resampled by it first so the vectors are jitter-free.
+  // jitterPrevious, render pixels): the output pass removes it from the measured displacement.
   // The parameters go through queue writes, so submit the encoder before the next encode() call.
   bool encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color, const wgpu::TextureView& target,
               bool reset, float correctionX = 0.f, float correctionY = 0.f);
@@ -49,8 +49,7 @@ private:
     int32_t radius, patch;
     uint32_t hasPredictor, subPixel;
     float lambda;
-    float zeroX, zeroY;
-    uint32_t pad[3];
+    uint32_t padding;
   };
 
   wgpu::Device m_device;
@@ -61,22 +60,18 @@ private:
   uint32_t m_width = 0, m_height = 0;
   uint32_t m_parity = 0;
 
-  wgpu::BindGroupLayout m_lumaLayout, m_downLayout, m_flowLayout, m_mvLayout, m_warpLayout;
-  wgpu::ComputePipeline m_lumaPipeline, m_downPipeline, m_flowPipeline, m_warpPipeline;
+  wgpu::BindGroupLayout m_lumaLayout, m_downLayout, m_flowLayout, m_mvLayout;
+  wgpu::ComputePipeline m_lumaPipeline, m_downPipeline, m_flowPipeline;
   wgpu::RenderPipeline m_mvPipeline;
 
   uint32_t m_levelW[kLevels]{}, m_levelH[kLevels]{};
   wgpu::Texture m_luma[2][kLevels];
   wgpu::TextureView m_lumaView[2][kLevels];
-  wgpu::Texture m_warp[kLevels];
-  wgpu::TextureView m_warpView[kLevels];
-  wgpu::BindGroup m_warpGroup[2][kLevels];
   wgpu::Texture m_flow[kLevels];
   wgpu::TextureView m_flowView[kLevels];
   wgpu::Texture m_dummy;
   wgpu::TextureView m_dummyView;
   wgpu::Buffer m_params[kLevels];
-  LevelParams m_levelParams[kLevels]{};
   wgpu::BindGroup m_downGroup[2][kLevels - 1];
   wgpu::BindGroup m_flowGroup[2][kLevels];
   wgpu::BindGroup m_mvGroup;

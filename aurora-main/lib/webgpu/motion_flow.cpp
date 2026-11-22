@@ -14,33 +14,20 @@ namespace {
 constexpr std::string_view kLumaShader = R"(
 @group(0) @binding(0) var srcT: texture_2d<f32>;
 @group(0) @binding(1) var dstT: texture_storage_2d<r32float, write>;
-struct W { dims: vec2<u32>, radius: i32, pr: i32, hasPred: u32, subPix: u32, lambda: f32, zx: f32, zy: f32 };
-@group(0) @binding(2) var<uniform> w: W;
-
-// Previous-frame luma resampled by the known sub-pixel jitter change (bilinear), so that the search below only has to
-// find real motion: a pixel that did not move matches at zero offset.
-@compute @workgroup_size(8, 8)
-fn warp(@builtin(global_invocation_id) id: vec3<u32>) {
-    let d = textureDimensions(dstT);
-    if (id.x >= d.x || id.y >= d.y) { return; }
-    let hi = vec2<i32>(textureDimensions(srcT)) - vec2<i32>(1);
-    let q = vec2<f32>(id.xy) + vec2<f32>(w.zx, w.zy);
-    let f0 = floor(q);
-    let a = q - f0;
-    let i = vec2<i32>(f0);
-    let t00 = textureLoad(srcT, clamp(i, vec2<i32>(0), hi), 0).r;
-    let t10 = textureLoad(srcT, clamp(i + vec2<i32>(1, 0), vec2<i32>(0), hi), 0).r;
-    let t01 = textureLoad(srcT, clamp(i + vec2<i32>(0, 1), vec2<i32>(0), hi), 0).r;
-    let t11 = textureLoad(srcT, clamp(i + vec2<i32>(1, 1), vec2<i32>(0), hi), 0).r;
-    textureStore(dstT, id.xy, vec4<f32>(mix(mix(t00, t10, a.x), mix(t01, t11, a.x), a.y), 0.0, 0.0, 1.0));
-}
-
 @compute @workgroup_size(8, 8)
 fn luma(@builtin(global_invocation_id) id: vec3<u32>) {
     let d = textureDimensions(dstT);
     if (id.x >= d.x || id.y >= d.y) { return; }
     let s = vec2<i32>(textureDimensions(srcT));
-    let c = textureLoad(srcT, clamp(vec2<i32>(id.xy), vec2<i32>(0), s - vec2<i32>(1)), 0).rgb;
+    // Band-limit luma before fitting subpixel motion to sampled edges.
+    var c = vec3f(0);
+    let kernel = array<f32,5>(1,4,6,4,1);
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            let xy = clamp(vec2i(id.xy) + vec2i(x,y), vec2i(0), s-1);
+            c += textureLoad(srcT, xy, 0).rgb * kernel[x+2] * kernel[y+2] / 256.0;
+        }
+    }
     textureStore(dstT, id.xy, vec4<f32>(dot(c, vec3<f32>(0.299, 0.587, 0.114)), 0.0, 0.0, 1.0));
 }
 
@@ -67,8 +54,7 @@ struct P {
     hasPred: u32,
     subPix: u32,
     lambda: f32,
-    zx: f32,
-    zy: f32,
+
 };
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var curT: texture_2d<f32>;
@@ -81,7 +67,7 @@ fn ld(t: texture_2d<f32>, q: vec2<i32>) -> f32 {
     return textureLoad(t, clamp(q, vec2<i32>(0), hi), 0).r;
 }
 
-var<private> cp: array<f32, 25>;
+var<private> cp: array<f32, 49>;
 
 // Sum of absolute luma differences between the current patch (cached in cp) and the previous frame displaced by o.
 fn sad(pc: vec2<i32>, o: vec2<i32>) -> f32 {
@@ -89,7 +75,7 @@ fn sad(pc: vec2<i32>, o: vec2<i32>) -> f32 {
     var k = 0;
     for (var y = -p.pr; y <= p.pr; y++) {
         for (var x = -p.pr; x <= p.pr; x++) {
-            s += abs(cp[k] - ld(prevT, pc + o + vec2<i32>(x, y)));
+            s += abs(cp[k] - ld(prevT, pc + o + vec2<i32>(x, y) * 3));
             k++;
         }
     }
@@ -110,25 +96,29 @@ fn ldf(t: texture_2d<f32>, q: vec2<f32>) -> f32 {
 // no usable gradient in both directions (flat areas, single edges) and keeps the integer vector there.
 fn refine(pc: vec2<i32>, d0: vec2<f32>) -> vec2<f32> {
     var d = d0;
-    for (var it = 0; it < 3; it++) {
+    for (var it = 0; it < 4; it++) {
         var axx = 0.0; var axy = 0.0; var ayy = 0.0; var bx = 0.0; var by = 0.0;
-        var k = 0;
-        for (var y = -p.pr; y <= p.pr; y++) {
-            for (var x = -p.pr; x <= p.pr; x++) {
-                let q = vec2<f32>(pc + vec2<i32>(x, y)) + d;
+
+        for (var y = -12; y <= 12; y += 4) {
+            for (var x = -12; x <= 12; x += 4) {
+                let mid = vec2<f32>(pc + vec2<i32>(x, y));
+                let q = mid + 0.5*d;
+                let cur = mid - 0.5*d;
                 let i1 = ldf(prevT, q);
-                let gx = 0.5 * (ldf(prevT, q + vec2<f32>(1.0, 0.0)) - ldf(prevT, q - vec2<f32>(1.0, 0.0)));
-                let gy = 0.5 * (ldf(prevT, q + vec2<f32>(0.0, 1.0)) - ldf(prevT, q - vec2<f32>(0.0, 1.0)));
-                let e = cp[k] - i1;
-                axx += gx * gx; axy += gx * gy; ayy += gy * gy;
-                bx += gx * e; by += gy * e;
-                k++;
+                let gx = 0.25 * (ldf(prevT, q + vec2f(1,0)) - ldf(prevT, q - vec2f(1,0)) + ldf(curT, cur + vec2f(1,0)) - ldf(curT, cur - vec2f(1,0)));
+                let gy = 0.25 * (ldf(prevT, q + vec2f(0,1)) - ldf(prevT, q - vec2f(0,1)) + ldf(curT, cur + vec2f(0,1)) - ldf(curT, cur - vec2f(0,1)));
+                let e = ldf(curT, cur) - i1;
+                // Avoid letting a single high-contrast, aliased line dominate a patch.
+                let weight = 1.0 / (1.0 + 900.0 * (gx*gx + gy*gy + e*e));
+                axx += weight * gx * gx; axy += weight * gx * gy; ayy += weight * gy * gy;
+                bx += weight * gx * e; by += weight * gy * e;
+
             }
         }
         let det = axx * ayy - axy * axy;
         let tr = axx + ayy;
         // well-conditioned: enough energy and both eigenvalues clearly non-zero
-        if (tr < 0.02 || det < 0.02 * tr * tr * 0.25) { break; }
+        if (tr < 0.00002 || det < 0.0001 * tr * tr) { break; }
         let delta = vec2<f32>(ayy * bx - axy * by, axx * by - axy * bx) / det;
         d = d + clamp(delta, vec2<f32>(-1.0), vec2<f32>(1.0));
     }
@@ -143,19 +133,38 @@ fn parab(a: f32, b: f32, c: f32) -> f32 {
 
 @compute @workgroup_size(8, 8)
 fn flow(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x >= p.dims.x || id.y >= p.dims.y) { return; }
-    let pc = vec2<i32>(id.xy);
+    let pixels = select(1u, 2u, p.subPix == 2u);
+    let origin = id.xy * pixels;
+    if (any(origin >= p.dims)) { return; }
+    let pc = vec2i(min(origin + pixels/2u, p.dims-1u));
     var k = 0;
     for (var y = -p.pr; y <= p.pr; y++) {
         for (var x = -p.pr; x <= p.pr; x++) {
-            cp[k] = ld(curT, pc + vec2<i32>(x, y));
+            cp[k] = ld(curT, pc + vec2<i32>(x, y) * 3);
             k++;
         }
     }
+    var predicted = vec2f(0);
     var base = vec2<i32>(0, 0);
     if (p.hasPred != 0u) {
         let pd = vec2<i32>(textureDimensions(predT));
-        let pf = textureLoad(predT, clamp(vec2<i32>(id.xy / 2u), vec2<i32>(0), pd - vec2<i32>(1)), 0).xy * 2.0;
+        // Use the locally dominant coarse displacement so an ambiguous patch cannot
+        // seed a large, incorrect search offset in all four of its children.
+        let center = pc / 2;
+        var values = array<vec2f,5>();
+        let offsets = array<vec2i,5>(vec2i(0), vec2i(-1,0), vec2i(1,0), vec2i(0,-1), vec2i(0,1));
+        for (var i = 0; i < 5; i++) {
+            values[i] = textureLoad(predT, clamp(center + offsets[i], vec2i(0), pd-1), 0).xy * 2.0;
+        }
+        for (var i = 0; i < 3; i++) {
+            for (var j = i+1; j < 5; j++) {
+                let lo = min(values[i], values[j]);
+                values[j] = max(values[i], values[j]);
+                values[i] = lo;
+            }
+        }
+        let pf = values[2];
+        predicted = pf;
         base = vec2<i32>(round(pf));
     }
     var bestCost = 1e30;
@@ -167,16 +176,14 @@ fn flow(@builtin(global_invocation_id) id: vec3<u32>) {
             if (c < bestCost) { bestCost = c; best = o; }
         }
     }
-    // No motion (the previous pyramid is already jitter-aligned) unless a displacement is clearly better: noisy vectors
+    // Prefer a small displacement in ambiguous regions: noisy vectors
     // are far more harmful to a temporal upscaler than a missing small one.
     let c0 = sad(pc, vec2<i32>(0, 0));
-    var still = false;
     if (c0 <= bestCost * 1.25 + 0.06) {
         best = vec2<i32>(0, 0);
-        still = true;
     }
     var f = vec2<f32>(best);
-    if (p.subPix != 0u && !still) {
+    if (p.subPix != 0u && c0 > 0.00001) {
         let cb = sad(pc, best);
         let xm = sad(pc, best - vec2<i32>(1, 0));
         let xp = sad(pc, best + vec2<i32>(1, 0));
@@ -184,9 +191,17 @@ fn flow(@builtin(global_invocation_id) id: vec3<u32>) {
         let yp = sad(pc, best + vec2<i32>(0, 1));
         f = f + vec2<f32>(parab(xm, cb, xp), parab(ym, cb, yp));
         let r = refine(pc, f);
-        if (length(r - f) < 1.0) { f = r; }
+        if (length(r - f) < 1.5) { f = r; }
     }
-    textureStore(outT, id.xy, vec4<f32>(f, 0.0, 0.0));
+    if (p.hasPred != 0u && distance(predicted, f) < 1.25 && c0 > 0.001) {
+        f = mix(predicted, f, 0.8);
+    }
+    for (var y = 0u; y < pixels; y++) {
+        for (var x = 0u; x < pixels; x++) {
+            let dst = origin + vec2u(x,y);
+            if (all(dst < p.dims)) { textureStore(outT, dst, vec4f(f,0,0)); }
+        }
+    }
 }
 )"sv;
 
@@ -201,18 +216,15 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(q[idx], 0.0, 1.0);
 }
 
-@fragment
-fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let d = vec2<i32>(textureDimensions(flowT));
-    let c = vec2<i32>(pos.xy);
-    // Large median (5 x 5 taps, stride 2 = 9 x 9 pixel window): per-pixel vectors are noisy (aperture problem, aliasing)
-    // and a temporal upscaler trusts them completely, so only the locally dominant motion is passed on.
+fn local_motion(c: vec2i, stride: i32) -> vec2f {
+    let d = vec2i(textureDimensions(flowT));
+    // Reject isolated vectors at edges using the component medians of a 5 x 5 neighborhood.
     var vx: array<f32, 25>;
     var vy: array<f32, 25>;
     var n = 0;
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
-            let f = textureLoad(flowT, clamp(c + vec2<i32>(x, y) * 2, vec2<i32>(0), d - vec2<i32>(1)), 0).xy;
+            let f = textureLoad(flowT, clamp(c + vec2<i32>(x, y) * stride, vec2<i32>(0), d - vec2<i32>(1)), 0).xy;
             vx[n] = f.x;
             vy[n] = f.y;
             n++;
@@ -228,7 +240,17 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         let tx = vx[i]; vx[i] = vx[mi]; vx[mi] = tx;
         let ty = vy[i]; vy[i] = vy[mj]; vy[mj] = ty;
     }
-    return vec4<f32>(vec2<f32>(vx[12], vy[12]) + corr.v.xy, 0.0, 0.0);
+    return vec2f(vx[12], vy[12]);
+}
+
+@fragment
+fn fs_main(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+    let c = vec2i(pos.xy);
+    let local = local_motion(c, 3);
+    let region = local_motion(c, 14);
+    // Share the better-conditioned regional estimate only across similar motion.
+    let agreement = 1.0 - smoothstep(0.5, 2.5, distance(local, region));
+    return vec4f(mix(local, region, agreement * 0.85) + corr.v.xy, 0, 0);
 }
 )"sv;
 
@@ -304,12 +326,6 @@ bool MotionFlow::init(const wgpu::Device& device) {
                              wgpu::BindGroupLayoutEntry{.binding = 1,
                                                         .visibility = wgpu::ShaderStage::Fragment,
                                                         .buffer = wgpu::BufferBindingLayout{.type = wgpu::BufferBindingType::Uniform}}};
-  const std::array warpEntries{texEntry(0, wgpu::ShaderStage::Compute, wgpu::TextureSampleType::UnfilterableFloat),
-                               storeEntry(1, wgpu::TextureFormat::R32Float),
-                               wgpu::BindGroupLayoutEntry{.binding = 2,
-                                                          .visibility = wgpu::ShaderStage::Compute,
-                                                          .buffer = wgpu::BufferBindingLayout{.type = wgpu::BufferBindingType::Uniform}}};
-  m_warpLayout = makeLayout(warpEntries, "dlss flow warp layout");
   m_lumaLayout = makeLayout(lumaEntries, "dlss flow luma layout");
   m_downLayout = makeLayout(downEntries, "dlss flow down layout");
   m_flowLayout = makeLayout(flowEntries, "dlss flow layout");
@@ -335,7 +351,6 @@ bool MotionFlow::init(const wgpu::Device& device) {
   m_lumaPipeline = makeCompute("dlss flow luma", m_lumaLayout, lumaModule, "luma");
   m_downPipeline = makeCompute("dlss flow down", m_downLayout, lumaModule, "down");
   m_flowPipeline = makeCompute("dlss flow search", m_flowLayout, flowModule, "flow");
-  m_warpPipeline = makeCompute("dlss flow warp", m_warpLayout, lumaModule, "warp");
   const std::array colorTargets{
       wgpu::ColorTargetState{.format = wgpu::TextureFormat::RG16Float, .writeMask = wgpu::ColorWriteMask::All}};
   const wgpu::FragmentState fragment{
@@ -353,7 +368,7 @@ bool MotionFlow::init(const wgpu::Device& device) {
       .fragment = &fragment,
   };
   m_mvPipeline = device.CreateRenderPipeline(&mvDescriptor);
-  if (!m_lumaPipeline || !m_downPipeline || !m_flowPipeline || !m_warpPipeline || !m_mvPipeline) {
+  if (!m_lumaPipeline || !m_downPipeline || !m_flowPipeline || !m_mvPipeline) {
     m_failed = true;
     log(2, "motion flow: pipeline creation failed");
     return false;
@@ -386,8 +401,6 @@ bool MotionFlow::resize(uint32_t width, uint32_t height) {
   for (uint32_t l = 0; l < kLevels; ++l) {
     m_flow[l] = make_texture(m_device, m_levelW[l], m_levelH[l], wgpu::TextureFormat::RGBA16Float, "dlss flow");
     m_flowView[l] = m_flow[l].CreateView();
-    m_warp[l] = make_texture(m_device, m_levelW[l], m_levelH[l], wgpu::TextureFormat::R32Float, "dlss flow warped previous");
-    m_warpView[l] = m_warp[l].CreateView();
   }
   m_dummy = make_texture(m_device, 1, 1, wgpu::TextureFormat::RGBA16Float, "dlss flow dummy");
   m_dummyView = m_dummy.CreateView();
@@ -395,13 +408,13 @@ bool MotionFlow::resize(uint32_t width, uint32_t height) {
   // search radius per level: wide at the coarsest, small refinements below (reach ~ 6*8 + 2*4 + 2*2 + 1 px)
   const int32_t radius[kLevels] = {1, 2, 2, 6};
   for (uint32_t l = 0; l < kLevels; ++l) {
-    m_levelParams[l] = LevelParams{m_levelW[l], m_levelH[l], radius[l], 2, l == kLevels - 1 ? 0u : 1u, l == 0 ? 1u : 0u,
-                                   0.003f, 0.f, 0.f, {0, 0, 0}};
+    const LevelParams params{m_levelW[l], m_levelH[l], radius[l], l == 0 ? 2 : 3, l == kLevels - 1 ? 0u : 1u, l == 0 ? 2u : 1u,
+                                   0.003f, 0u};
     const wgpu::BufferDescriptor bd{.label = "dlss flow params",
                                     .usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst,
                                     .size = sizeof(LevelParams)};
     m_params[l] = m_device.CreateBuffer(&bd);
-    m_queue.WriteBuffer(m_params[l], 0, &m_levelParams[l], sizeof(LevelParams));
+    m_queue.WriteBuffer(m_params[l], 0, &params, sizeof(params));
   }
   for (uint32_t par = 0; par < 2; ++par) {
     for (uint32_t l = 0; l + 1 < kLevels; ++l) {
@@ -411,15 +424,10 @@ bool MotionFlow::resize(uint32_t width, uint32_t height) {
       m_downGroup[par][l] = m_device.CreateBindGroup(&d);
     }
     for (uint32_t l = 0; l < kLevels; ++l) {
-      const std::array warpBinds{wgpu::BindGroupEntry{.binding = 0, .textureView = m_lumaView[1 - par][l]},
-                                 wgpu::BindGroupEntry{.binding = 1, .textureView = m_warpView[l]},
-                                 wgpu::BindGroupEntry{.binding = 2, .buffer = m_params[l], .size = sizeof(LevelParams)}};
-      const wgpu::BindGroupDescriptor wd{.layout = m_warpLayout, .entryCount = warpBinds.size(), .entries = warpBinds.data()};
-      m_warpGroup[par][l] = m_device.CreateBindGroup(&wd);
       const std::array entries{
           wgpu::BindGroupEntry{.binding = 0, .buffer = m_params[l], .size = sizeof(LevelParams)},
           wgpu::BindGroupEntry{.binding = 1, .textureView = m_lumaView[par][l]},
-          wgpu::BindGroupEntry{.binding = 2, .textureView = m_warpView[l]},
+          wgpu::BindGroupEntry{.binding = 2, .textureView = m_lumaView[1 - par][l]},
           wgpu::BindGroupEntry{.binding = 3, .textureView = l + 1 < kLevels ? m_flowView[l + 1] : m_dummyView},
           wgpu::BindGroupEntry{.binding = 4, .textureView = m_flowView[l]},
       };
@@ -468,27 +476,16 @@ bool MotionFlow::encode(const wgpu::CommandEncoder& encoder, const wgpu::Texture
 
   const bool haveFlow = m_haveHistory && !reset;
   if (haveFlow) {
-    // A pixel without real motion matches the previous frame at -(jitter change): resample the previous pyramid by
-    // that known offset (per level scaled by 2^-l) so the search below only measures real motion.
-    for (uint32_t l = 0; l < kLevels; ++l) {
-      m_levelParams[l].zeroX = -correctionX / static_cast<float>(1u << l);
-      m_levelParams[l].zeroY = -correctionY / static_cast<float>(1u << l);
-      m_queue.WriteBuffer(m_params[l], 0, &m_levelParams[l], sizeof(LevelParams));
-    }
-    for (uint32_t l = 0; l < kLevels; ++l) {
-      const wgpu::ComputePassDescriptor pd{.label = "dlss flow warp"};
-      auto pass = encoder.BeginComputePass(&pd);
-      pass.SetPipeline(m_warpPipeline);
-      pass.SetBindGroup(0, m_warpGroup[cur][l]);
-      pass.DispatchWorkgroups(groups(m_levelW[l]), groups(m_levelH[l]), 1);
-      pass.End();
-    }
+    // Measure displacement between the original samples, then remove camera jitter in pixel units.
+    const float correction[4]{correctionX, correctionY, 0, 0};
+    m_queue.WriteBuffer(m_mvParams, 0, correction, sizeof correction);
     for (int l = static_cast<int>(kLevels) - 1; l >= 0; --l) {
       const wgpu::ComputePassDescriptor pd{.label = "dlss flow search"};
       auto pass = encoder.BeginComputePass(&pd);
       pass.SetPipeline(m_flowPipeline);
       pass.SetBindGroup(0, m_flowGroup[cur][l]);
-      pass.DispatchWorkgroups(groups(m_levelW[l]), groups(m_levelH[l]), 1);
+      const uint32_t tile = l == 0 ? 2u : 1u;
+      pass.DispatchWorkgroups(groups((m_levelW[l]+tile-1)/tile), groups((m_levelH[l]+tile-1)/tile), 1);
       pass.End();
     }
   }

@@ -118,8 +118,13 @@ DlssPresentState g_dlss;
 
 // Window-size side of the upscaler selection: internal resolution divisor, and DLAA's native-resolution lock. Also
 // called when DLSS becomes ready, which happens asynchronously after start-up.
+bool temporal_ready(AuroraUpscaler mode) {
+  return (mode == AURORA_UPSCALER_FSR3 && webgpu::dlss::fsr_ready()) ||
+         (mode == AURORA_UPSCALER_DLSS && webgpu::dlss::ready());
+}
+
 void sync_upscale_window() {
-  const bool jitter = webgpu::upscale::settings().mode == AURORA_UPSCALER_DLSS && webgpu::dlss::ready();
+  const bool jitter = temporal_ready(webgpu::upscale::settings().mode);
   if (!jitter) {
     webgpu::dlss::set_jitter_enabled(false, 0, 0);
   }
@@ -127,9 +132,9 @@ void sync_upscale_window() {
 }
 
 webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgpu::TextureWithSampler& source,
-                                      const webgpu::Viewport& viewport, bool separateHud) {
+                                      const webgpu::Viewport& viewport, bool separateHud, const gfx::PixelPerfectGuiPresent& hud) {
   const auto settings = webgpu::upscale::settings();
-  if (settings.mode != AURORA_UPSCALER_DLSS || !webgpu::dlss::ready() || !source.view) {
+  if (!temporal_ready(settings.mode) || !source.view) {
     g_dlss.wasActive = false;
     webgpu::dlss::set_jitter_enabled(false, 0, 0);
     return {};
@@ -137,15 +142,26 @@ webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgp
   const uint32_t outW = std::max(1u, static_cast<uint32_t>(std::lround(std::max(viewport.width, 1.f))));
   const uint32_t outH = std::max(1u, static_cast<uint32_t>(std::lround(std::max(viewport.height, 1.f))));
   webgpu::dlss::DispatchParams params;
+  params.fsr = settings.mode == AURORA_UPSCALER_FSR3;
   params.color = source.view;
+  params.depth = separateHud && hud.depth ? hud.depth : hud.temporalDepth;
+  params.depthRect = hud.depthRect;
+  params.reversedDepth = gx::UseReversedZ;
   params.renderWidth = source.size.width;
   params.renderHeight = source.size.height;
   params.outputWidth = outW;
   params.outputHeight = outH;
   params.mode = webgpu::dlss::mode_for_scale_factor(settings.scaleFactor);
+  // The Wii can crop the EFB before presentation. Preserve the selected DLSS
+  // ratio on that image, then fit the completed image to the viewport.
+  if (!params.fsr) {
+    const float ratio = webgpu::dlss::mode_scale_factor(params.mode);
+    params.outputWidth = static_cast<uint32_t>(std::lround(params.renderWidth * ratio));
+    params.outputHeight = static_cast<uint32_t>(std::lround(params.renderHeight * ratio));
+  }
   params.sharpness = settings.sharpness;
   params.reset = !g_dlss.wasActive || g_dlss.hadSeparateHud != separateHud;
-  webgpu::dlss::set_jitter_enabled(true, params.renderWidth, outW);
+  webgpu::dlss::set_jitter_enabled(true, params.renderWidth, params.outputWidth);
   if (!webgpu::dlss::dispatch(encoder, params, g_dlss.output)) {
     g_dlss.wasActive = false;
     webgpu::dlss::set_jitter_enabled(false, 0, 0);
@@ -162,7 +178,7 @@ webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgp
     g_dlss.bindGroup = webgpu::create_copy_bind_group(g_dlss.image);
     g_dlss.boundView = g_dlss.output.view;
   }
-  webgpu::upscale::note_present(params.renderWidth, params.renderHeight, outW, outH, AURORA_UPSCALER_DLSS,
+  webgpu::upscale::note_present(params.renderWidth, params.renderHeight, outW, outH, settings.mode,
                                 settings.sharpness > 0.01f);
   return {g_dlss.bindGroup, &g_dlss.image};
 }
@@ -730,7 +746,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
           const auto scene = replayHud ? gfx::prepare_presentation_hud_scene(encoder, pixelPerfectGui) : presentSource;
           const webgpu::TextureWithSampler* gameImage = nullptr;
           bool fsrOutput = false;
-          auto fsr = dlss_dispatch(encoder, scene, viewport, replayHud);
+          auto fsr = dlss_dispatch(encoder, scene, viewport, replayHud, pixelPerfectGui);
           if (!fsr.bindGroup) {
             fsr = webgpu::upscale::fsr1_dispatch(encoder, scene, viewport);
             fsrOutput = fsr.image != nullptr;
