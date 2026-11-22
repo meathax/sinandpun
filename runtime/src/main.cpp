@@ -1378,6 +1378,7 @@ bool WritePreparedConfiguration(const std::filesystem::path& dvdRoot, std::strin
     const auto marker = RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile;
     std::ofstream output(marker, std::ios::trunc);
     output << "R2VE01\n" << RuntimeConfigFile::PathToUtf8(dvdRoot) << '\n';
+    output.close();
     if (!output) {
         error = "Could not write the setup marker " + RuntimeConfigFile::PathToUtf8(marker);
         return false;
@@ -1437,11 +1438,6 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
         // Folder setup must derive the same images as disc import; release archives
         // cannot provide prelinked images from somebody else's copy of the game.
         const auto modules = ManagedGameDirectory() / "modules";
-        std::filesystem::remove(RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile, ec);
-        if (ec) {
-            std::cerr << "[prepare] Could not invalidate setup marker: " << ec.message() << '\n';
-            return EXIT_FAILURE;
-        }
         try {
             const auto read = [](const std::filesystem::path& path) {
                 std::ifstream input(path, std::ios::binary);
@@ -1449,23 +1445,28 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
                 return std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
             };
             const auto sel = read(absoluteGamePath / "files" / "gs2.sel");
-            std::filesystem::create_directories(modules);
+            std::array<std::vector<uint8_t>, DiscImport::kModuleCount> images;
             for (int index = 0; index < DiscImport::kModuleCount; ++index) {
                 char name[16];
                 std::snprintf(name, sizeof name, "stg%02d", index);
-                std::vector<uint8_t> image;
                 if (!DiscImport::BuildModuleImage(
                         read(absoluteGamePath / "files" / (std::string(name) + ".rso")),
-                        sel, DiscImport::kModuleBase, image, error)) {
+                        sel, DiscImport::kModuleBase, images[index], error)) {
                     throw std::runtime_error(std::string(name) + ": " + error);
                 }
+                std::cout << "progress " << (0.8 + 0.02 * index) << " Preparing " << name << std::endl;
+            }
+            std::filesystem::create_directories(modules);
+            std::filesystem::remove(RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile);
+            for (int index = 0; index < DiscImport::kModuleCount; ++index) {
+                const std::string name = "stg0" + std::to_string(index);
+                const auto& image = images[index];
                 std::ofstream output(modules / (std::string(name) + ".bin"),
                                      std::ios::binary | std::ios::trunc);
                 output.write(reinterpret_cast<const char*>(image.data()),
                              static_cast<std::streamsize>(image.size()));
                 output.close();
                 if (!output) throw std::runtime_error(std::string("Cannot write module ") + name);
-                std::cout << "progress " << (0.8 + 0.02 * index) << " Preparing " << name << std::endl;
             }
         } catch (const std::exception& failure) {
             std::cerr << "[prepare] " << failure.what() << '\n';

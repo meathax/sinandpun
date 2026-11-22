@@ -18,6 +18,7 @@ namespace DiscImport {
 
 inline constexpr const char* kGameId = "R2VE01";
 inline constexpr uint32_t kModuleBase = 0x97DC0000u;  // reserved MEM2 window the stage modules are linked at
+inline constexpr uint32_t kModuleWindowSize = 0x200000u;
 inline constexpr int kModuleCount = 8;
 
 struct Progress {

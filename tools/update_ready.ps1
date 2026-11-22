@@ -4,6 +4,7 @@ param(
     [switch]$FetchDlss,                   # download the NVIDIA Streamline / DLSS SDK release (263 MB zip) into third_party\nvidia first
     [switch]$NoDlss                       # do not copy the NVIDIA DLSS DLLs
 )
+$ErrorActionPreference = 'Stop'
 # Refreshes the self-contained, ready-to-play folder `ready\` from the current build.
 #   * copies the exe, runtime DLLs, pipeline cache, wii_bootstrap and the prelinked stage modules (modules\stgNN.bin)
 #   * NEVER overwrites ready\UserData (settings and saves) once it exists; Config.toml is only created the first time
@@ -21,10 +22,26 @@ $dst = Join-Path $root $Target
 $exe = Join-Path $src "WiiCompiled.exe"
 if (-not (Test-Path $exe)) { throw "no exe at $exe - build first" }
 $runtimeAssets = @("dsp_coef.bin", "initial_pipeline_cache.db")
-foreach ($asset in $runtimeAssets) {
+foreach ($asset in ($runtimeAssets + @("SDL3.dll", "webgpu_dawn.dll"))) {
     if (-not (Test-Path -LiteralPath (Join-Path $src $asset) -PathType Leaf)) {
         throw "missing runtime asset in build: $asset"
     }
+}
+$bootstrap = Join-Path $src "wii_bootstrap"
+if (-not (Test-Path -LiteralPath $bootstrap -PathType Container)) {
+    throw "missing Wii bootstrap directory in build: $bootstrap"
+}
+$amd = Join-Path $root "third_party/amd"
+$fsr = Join-Path $amd "FidelityFX-SDK"
+$amdFiles = @{
+    "$fsr/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll" = "amd_fidelityfx_loader_dx12.dll"
+    "$fsr/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll" = "amd_fidelityfx_upscaler_dx12.dll"
+    "$fsr/docs/license.md" = "licenses/amd-fidelityfx-sdk.md"
+    "$fsr/3rdpartynotice.md" = "licenses/amd-3rdpartynotice.md"
+    "$amd/FidelityFX-FSR/license.txt" = "licenses/amd-fsr1.txt"
+}
+foreach ($path in $amdFiles.Keys) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing AMD runtime asset: $path" }
 }
 if (Get-Process WiiCompiled -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $dst "WiiCompiled.exe") }) {
     throw "the game in $Target is running; close it first"
@@ -33,11 +50,11 @@ $moduleNames = 0..7 | ForEach-Object { "stg0$_.bin" }
 $moduleSources = @{}
 foreach ($moduleName in $moduleNames) {
     $modulePath = Join-Path "$root\build\modules" $moduleName
-    if (-not (Test-Path $modulePath)) { throw "missing linked stage module: $modulePath" }
+    if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) { throw "missing linked stage module: $modulePath" }
     $moduleSources[$moduleName] = $modulePath
 }
 New-Item -ItemType Directory -Force $dst | Out-Null
-Remove-Item (Join-Path $dst "*.dll") -Force -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath $dst -File -Filter "*.dll" | Remove-Item -Force
 Copy-Item $exe (Join-Path $dst "WiiCompiled.exe") -Force
 foreach ($asset in $runtimeAssets) {
     Copy-Item -LiteralPath (Join-Path $src $asset) -Destination $dst -Force
@@ -73,18 +90,11 @@ if (-not $NoDlss) {
         "NVIDIA DLSS DLLs not staged ($dllSrc); the in-game DLSS option will report them as missing (run with -FetchDlss)"
     }
 }
-$amd = Join-Path $root "third_party/amd"
-$fsr = Join-Path $amd "FidelityFX-SDK"
-foreach ($name in "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll") {
-    Copy-Item -LiteralPath (Join-Path $fsr "Kits/FidelityFX/signedbin/$name") -Destination $dst -Force -ErrorAction Stop
-}
 New-Item -ItemType Directory -Force (Join-Path $dst "licenses") | Out-Null
-Copy-Item "$fsr/docs/license.md" "$dst/licenses/amd-fidelityfx-sdk.md" -Force -ErrorAction Stop
-Copy-Item "$fsr/3rdpartynotice.md" "$dst/licenses/amd-3rdpartynotice.md" -Force -ErrorAction Stop
-Copy-Item "$amd/FidelityFX-FSR/license.txt" "$dst/licenses/amd-fsr1.txt" -Force -ErrorAction Stop
-if (Test-Path (Join-Path $src "wii_bootstrap")) {
-    Copy-Item (Join-Path $src "wii_bootstrap") $dst -Recurse -Force
+foreach ($path in $amdFiles.Keys) {
+    Copy-Item -LiteralPath $path -Destination (Join-Path $dst $amdFiles[$path]) -Force
 }
+Copy-Item -LiteralPath $bootstrap -Destination $dst -Recurse -Force
 New-Item -ItemType Directory -Force (Join-Path $dst "modules") | Out-Null
 Remove-Item (Join-Path $dst "modules\stg0?.bin") -Force -ErrorAction SilentlyContinue
 foreach ($moduleName in $moduleNames) {
@@ -131,8 +141,9 @@ cd /d "%~dp0"
 start "" "%~dp0WiiCompiled.exe"
 "@ | Set-Content (Join-Path $dst "Play.bat") -Encoding ASCII
 
-$commit = (git rev-parse --short HEAD) 2>$null
-$dirty = if ((git status --short) 2>$null) { " (+uncommitted changes)" } else { "" }
+$commit = (git -c core.fsmonitor=false rev-parse --short HEAD) 2>$null
+if ($LASTEXITCODE -ne 0) { throw "could not determine the source commit" }
+$dirty = if ((git -c core.fsmonitor=false status --short --untracked-files=no) 2>$null) { " (+uncommitted tracked changes)" } else { "" }
 $hash = (Get-FileHash (Join-Path $dst "WiiCompiled.exe") -Algorithm SHA256).Hash
 @"
 Sin & Punishment: Star Successor - recomp (ready to play / test)

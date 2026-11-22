@@ -79,10 +79,15 @@ void updateMode() {
 }
 void attach(void* nativeDevice) {
     std::unique_lock lock(lifetime);
+    if (driver || !nativeDevice) return;
     driver = LoadLibraryExW(L"nvapi64.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!driver) return;
     const auto query = reinterpret_cast<Query>(GetProcAddress(driver, "nvapi_QueryInterface"));
-    if (!query) return;
+    if (!query) {
+        FreeLibrary(driver);
+        driver = nullptr;
+        return;
+    }
     // Public NVIDIA nvapi_interface.h IDs. The driver DLL stays on the user's system.
     const auto init = reinterpret_cast<decltype(&NvAPI_Initialize)>(query(0x0150e828));
     setMode = reinterpret_cast<decltype(setMode)>(query(0xac1ca9e0));
@@ -90,7 +95,11 @@ void attach(void* nativeDevice) {
     setMarker = reinterpret_cast<decltype(setMarker)>(query(0xd9984c05));
     getStatus = reinterpret_cast<decltype(getStatus)>(query(0xaef96ca1));
     const auto quit = reinterpret_cast<decltype(unload)>(query(0xd22bdd7e));
-    if (!init || !setMode || !sleepFrame || !setMarker || !quit || init() != NVAPI_OK) return;
+    if (!init || !setMode || !sleepFrame || !setMarker || !quit || init() != NVAPI_OK) {
+        FreeLibrary(driver);
+        driver = nullptr;
+        return;
+    }
     unload = quit;
     device = static_cast<IUnknown*>(nativeDevice);
     device->AddRef();
@@ -128,6 +137,7 @@ void mark(uint64_t frame, Marker type) {
 }
 void begin() {
     if (!active()) return;
+    uint64_t frame;
     {
         std::shared_lock lock(lifetime);
         if (!device || !active()) return;
@@ -136,18 +146,17 @@ void begin() {
             std::fprintf(stderr, "[reflex] sleep failed: %d\n", int(error));
             return;
         }
+        frame = ++sequence;
+        producer.store(frame);
+        if (frame == 120 && getStatus) {
+            NV_GET_SLEEP_STATUS_PARAMS state{};
+            state.version = NV_GET_SLEEP_STATUS_PARAMS_VER;
+            if (getStatus(device, &state) == NVAPI_OK)
+                std::fprintf(stderr, "[reflex] driver readback lowLatency=%d gameSleep=%d\n",
+                             int(state.bLowLatencyMode), int(state.bUseGameSleep));
+        }
     }
-    const uint64_t frame = ++sequence;
-    producer.store(frame);
     mark(frame, Marker::SimulationStart);
-    if (frame == 120 && getStatus) {
-        std::shared_lock lock(lifetime);
-        NV_GET_SLEEP_STATUS_PARAMS state{};
-        state.version = NV_GET_SLEEP_STATUS_PARAMS_VER;
-        if (device && getStatus(device, &state) == NVAPI_OK)
-            std::fprintf(stderr, "[reflex] driver readback lowLatency=%d gameSleep=%d\n",
-                         int(state.bLowLatencyMode), int(state.bUseGameSleep));
-    }
     if (frame == 1) std::fprintf(stderr, "[reflex] first driver sleep completed\n");
 }
 uint64_t end() {

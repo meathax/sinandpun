@@ -559,7 +559,7 @@ void WriteFile(const fs::path& path, const void* data, size_t size, Progress& pr
     fs::create_directories(path.parent_path());
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
-    out.flush();
+    out.close();
     if (!out) throw ImportError("Writing to disk failed (is the disk full?): " + path.filename().string());
     progress.done += size;
 }
@@ -581,11 +581,17 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
                   const fs::path& requestedKeyFile) {
     const auto started = std::chrono::steady_clock::now();
     const fs::path staging = fs::path(gameDir).concat(".importing");
+    const fs::path lockPath = fs::path(gameDir).concat(".import.lock");
+    std::unique_ptr<void, decltype(&CloseHandle)> lock(nullptr, CloseHandle);
+    bool ownsStaging = false;
     auto cleanup = [&] {
+        if (!ownsStaging) return;
         std::error_code ec;
         fs::remove_all(staging, ec);
     };
     try {
+        summary = {};
+        error.clear();
         progress.done = 0;
         progress.total = 1;
         progress.SetStage("Reading disc image");
@@ -672,8 +678,9 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         progress.total = bytes + kModuleProgressWeight;
 
         std::error_code ec;
-        fs::create_directories(gameDir.parent_path(), ec);
-        const auto space = fs::space(gameDir.parent_path(), ec);
+        const fs::path parent = fs::absolute(gameDir).parent_path();
+        fs::create_directories(parent);
+        const auto space = fs::space(parent, ec);
         const uint64_t required = bytes + kModuleProgressWeight + kSpaceMargin;
         if (!ec && space.available < required) {
             char text[200];
@@ -682,7 +689,18 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
             throw ImportError(text);
         }
 
-        cleanup();
+        const HANDLE handle = CreateFileW(lockPath.c_str(), GENERIC_WRITE | DELETE, 0, nullptr,
+                                          OPEN_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            const DWORD failure = GetLastError();
+            if (failure == ERROR_SHARING_VIOLATION) throw ImportError("Another import is using this game folder.");
+            throw fs::filesystem_error("Could not lock game folder", lockPath,
+                                       std::error_code(failure, std::system_category()));
+        }
+        lock.reset(handle);
+        fs::remove_all(staging);
+        fs::create_directory(staging);
+        ownsStaging = true;
         progress.SetStage("Extracting game files");
         WriteFile(staging / "sys" / "boot.bin", bootBin, sizeof bootBin, progress);
         WriteFile(staging / "sys" / "bi2.bin", bi2.data(), bi2.size(), progress);
@@ -709,6 +727,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
                 progress.done += n;
             }
             out.close();
+            if (!out) throw ImportError("Writing to disk failed (is the disk full?): " + target.filename().string());
             ++summary.files;
         }
 
@@ -736,6 +755,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         progress.done = progress.total.load();
 
         progress.SetStage("Finishing");
+        if (progress.cancel.load(std::memory_order_relaxed)) throw ImportCancelled{};
         const auto previous = fs::path(gameDir).concat(".previous");
         const auto moveDirectory = [](const fs::path& from, const fs::path& to) {
             DWORD failure = ERROR_SUCCESS;
@@ -900,42 +920,41 @@ bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<ui
         }
 
         // Layout: file-backed sections first, then bss; 32-byte aligned.
-        uint32_t addr = base;
+        uint64_t addr = base;
+        const uint64_t limit = std::min(uint64_t(base) + kModuleWindowSize, uint64_t{1} << 32);
         std::map<uint32_t, uint32_t> secAddr;
-        for (uint32_t i = 0; i < m.secs.size(); ++i) {
-            RsoSection& s = m.secs[i];
-            if (s.size && s.off) {
-                addr = (addr + 31) & ~31u;
-                secAddr[i] = s.addr = addr;
+        for (const bool fileBacked : {true, false}) {
+            for (uint32_t i = 0; i < m.secs.size(); ++i) {
+                RsoSection& s = m.secs[i];
+                if (!s.size || (s.off != 0) != fileBacked) continue;
+                if (fileBacked && uint64_t(s.off) + s.size > rsoBytes.size()) {
+                    throw std::runtime_error("section extends past end of file");
+                }
+                addr = (addr + 31) & ~uint64_t{31};
+                if (addr + s.size > limit) throw std::runtime_error("section exceeds stage module window");
+                secAddr[i] = s.addr = static_cast<uint32_t>(addr);
                 addr += s.size;
             }
         }
-        for (uint32_t i = 0; i < m.secs.size(); ++i) {
-            RsoSection& s = m.secs[i];
-            if (s.size && !s.off) {
-                addr = (addr + 31) & ~31u;
-                secAddr[i] = s.addr = addr;
-                addr += s.size;
-            }
-        }
-        const uint32_t end = addr;
-        img.assign(end - base, 0);
+        img.assign(addr - base, 0);
         for (const RsoSection& s : m.secs) {
             if (s.size && s.off) {
-                if (uint64_t(s.off) + s.size > rsoBytes.size()) throw std::runtime_error("section extends past end of file");
                 std::memcpy(&img[s.addr - base], &rsoBytes[s.off], s.size);
             }
         }
 
-        auto locate = [&](uint32_t fo) -> uint32_t {
+        auto locate = [&](uint32_t fo, uint32_t ty) -> uint32_t {
+            const uint32_t width = ty == R_ADDR16_LO || ty == R_ADDR16_HI || ty == R_ADDR16_HA ? 2 : 4;
             for (const RsoSection& s : m.secs) {
-                if (s.size && s.off && s.off <= fo && fo < s.off + s.size) return s.addr + fo - s.off;
+                if (s.off && s.off <= fo && uint64_t(fo) + width <= uint64_t(s.off) + s.size) {
+                    return s.addr + (fo - s.off);
+                }
             }
             throw std::runtime_error("relocation outside sections");
         };
 
         std::vector<std::pair<uint32_t, uint32_t>> stubs;  // (target, stub address), insertion order
-        const uint32_t stubBase = (end + 31) & ~31u;
+        const uint64_t stubBase = (addr + 31) & ~uint64_t{31};
         auto putU32 = [&](size_t o, uint32_t v) {
             img[o] = uint8_t(v >> 24);
             img[o + 1] = uint8_t(v >> 16);
@@ -946,7 +965,9 @@ bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<ui
             for (const auto& s : stubs) {
                 if (s.first == target) return s.second;
             }
-            const uint32_t at = stubBase + 16 * uint32_t(stubs.size());
+            const uint64_t next = stubBase + 16 * stubs.size();
+            if (next + 16 > limit) throw std::runtime_error("branch stub exceeds stage module window");
+            const uint32_t at = static_cast<uint32_t>(next);
             stubs.emplace_back(target, at);
             const size_t need = size_t(at) + 16 - base;
             if (img.size() < need) img.resize(need, 0);
@@ -986,10 +1007,10 @@ bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<ui
             const uint32_t sid = r.idt >> 8;
             const auto it = secAddr.find(sid);
             if (it == secAddr.end()) {
-                apply(locate(r.off), kPoison + r.tgt, ty);
+                apply(locate(r.off, ty), kPoison + r.tgt, ty);
                 continue;
             }
-            apply(locate(r.off), it->second + r.tgt, ty);
+            apply(locate(r.off, ty), it->second + r.tgt, ty);
         }
         for (const Reloc& r : m.erel) {
             const uint32_t ty = r.idt & 0xFF;
@@ -1002,7 +1023,7 @@ bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<ui
                 unresolved[name] = true;
                 continue;
             }
-            apply(locate(r.off), it->second, ty);
+            apply(locate(r.off, ty), it->second, ty);
         }
         if (unresolvedOut) *unresolvedOut = static_cast<int>(unresolved.size());
         return true;

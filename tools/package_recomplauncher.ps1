@@ -28,6 +28,13 @@ foreach ($required in @("WiiCompiled.exe", "recomplauncher.json", "LICENSE", "wi
         throw "release source is missing $required; refresh it with tools\update_ready.ps1 first"
     }
 }
+$graphicsNotices = @("amd-3rdpartynotice.md", "amd-fidelityfx-sdk.md", "amd-fsr1.txt",
+    "nvidia-3rd-party-licenses.md", "nvidia-license.txt", "nvidia-nvngx_dlss.license.txt", "nvidia-reflex.license.txt")
+foreach ($notice in $graphicsNotices) {
+    if (-not (Test-Path -LiteralPath (Join-Path $sourcePath "licenses/$notice") -PathType Leaf)) {
+        throw "release source is missing graphics notice: $notice"
+    }
+}
 
 New-Item -ItemType Directory -Force $outputPath | Out-Null
 if (Test-Path $stagePath) {
@@ -48,6 +55,9 @@ Get-ChildItem $sourcePath -Force | Where-Object {
     Copy-Item $_.FullName $stagePath -Recurse -Force
 }
 New-Item -ItemType Directory (Join-Path $stagePath "licenses") | Out-Null
+foreach ($notice in $graphicsNotices) {
+    Copy-Item -LiteralPath (Join-Path $sourcePath "licenses/$notice") -Destination (Join-Path $stagePath "licenses")
+}
 foreach ($file in $graphicsFiles) {
     Copy-Item -LiteralPath (Join-Path $sourcePath $file.Name) -Destination (Join-Path $stagePath $file.Name)
 }
