@@ -35,9 +35,32 @@ and a timeout; the captured press is suppressed before returning to the list.
 
 Controls > Overview > Modern Xbox layout restores the recommended gamepad
 profile and Automatic input scheme without changing keyboard/mouse bindings.
-Automatic uses Classic for a gamepad and Remote+Nunchuk for mouse/keyboard.
-The legacy Pointer mode necessarily shares Remote A between confirm/lock and
-Remote B between cancel/fire; Classic separates menu and combat buttons.
+Automatic drives the Wii Remote pointer from either the gamepad or the mouse.
+Legacy Classic Controller remains available under Overview. In pointer mode,
+Remote A serves both confirm and lock, and Remote B serves both cancel and fire.
+
+### Right-stick aiming
+
+Start with **Controls > Gamepad > Balanced**. Make small stick movements to
+track a target, push toward the rim to cross the screen, and release to park
+the reticle. Holding right-stick click reduces speed across the whole range.
+
+| Preset | Tracking gain (camera px/s) | Sweep begins at usable travel | Full-stick speed (camera px/s) |
+| --- | ---: | ---: | ---: |
+| Balanced | 420 | 52% | 3,200 |
+| Sharpshooter | 260 | 65% | 2,400 |
+| Arcade rush | 600 | 42% | 5,200 |
+
+**Tracking speed** sets the gain inside the sweep threshold. At 10% usable
+travel, Balanced moves 42 camera pixels per second. Above the threshold a
+quadratic term adds speed progressively. **Full-stick speed** adjusts the peak
+independently while it exceeds the tracking gain. Each preset responds immediately
+to direction changes. Speed cap, timed boost and smoothing remain available for
+custom tuning. Version 4 upgrades the original Automatic aim defaults to Balanced.
+
+The radial calibration follows [Hypersect’s analog-stick analysis](https://blog.hypersect.com/interpreting-analog-sticks/).
+Independent deadzone and full-input controls also appear in [Halo Infinite’s controller settings](https://support.halowaypoint.com/hc/en-us/articles/4407649252116-Guide-to-Halo-Infinite-Game-Settings).
+The preset values are tuned for this game's pointer.
 
 Version 3 upgrades only completely unchanged legacy profiles. A customized
 profile is retained as a unit to avoid introducing conflicts. An untouched
