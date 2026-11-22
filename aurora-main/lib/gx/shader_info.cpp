@@ -1,3 +1,4 @@
+#include <aurora/gfx.h>
 #include "shader_info.hpp"
 
 #include "../gfx/recording.hpp"
@@ -398,6 +399,7 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
   }
   if (config.fogType != GX_FOG_NONE) {
     info.usesFog = true;
+    info.projectedCaustics = config.projectedCaustics;
     info.uniformSize += sizeof(Fog);
   }
 	if (info.usesZTexture) {
@@ -408,6 +410,8 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     info.uniformSize += MaxIndTexMtxs * sizeof(Mat2x4<float>);
   }
   info.uniformSize += info.sampledTextures.count() * sizeof(Vec4<float>);
+  info.sceneShading = config.probeMaterials || config.combatLight || config.contactShadow;
+  if (info.sceneShading) info.uniformSize += sizeof(AuroraSceneLight);
   info.uniformSize = gfx::align_uniform(info.uniformSize);
   if (info.uniformSize > MaxUniformSize) {
     Log.fatal("Uniform size exceeds maximum: {} > {}", info.uniformSize, MaxUniformSize);
@@ -520,6 +524,8 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     }
     fog.rangeK[2][2] = fog.rangeK[2][1];
     fog.rangeK[2][3] = fog.rangeK[2][1];
+    // GX fog blends RGB only. Its unused alpha carries the phase in the recorded draw.
+    if (info.projectedCaustics) fog.color[3] = water_phase();
     buf.append(fog);
   }
 	if (info.usesZTexture) {
@@ -543,6 +549,11 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
       continue;
     }
     buf.append(texture_size_bias(get_texture(static_cast<GXTexMapID>(i))));
+  }
+  if (info.sceneShading) {
+    AuroraSceneLight scene;
+    aurora_read_scene_light(&scene);
+    buf.append(scene);
   }
 }
 

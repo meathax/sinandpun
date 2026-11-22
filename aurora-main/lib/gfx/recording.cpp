@@ -1,4 +1,25 @@
 #include "recording.hpp"
+#include <atomic>
+#include <aurora/gfx.h>
+
+static std::atomic<AuroraRtCameraProvider> s_cameraProvider{nullptr};
+extern "C" void aurora_set_rt_camera_provider(AuroraRtCameraProvider provider) { s_cameraProvider.store(provider); }
+
+static std::atomic<bool> s_ambientOcclusion{false};
+static std::atomic<bool> s_globalIllumination{false};
+static std::atomic<bool> s_rayTracedGi{false};
+static std::atomic<bool> s_retainCulledGi{false};
+static std::atomic<bool> s_strongBounce{true};
+extern "C" bool aurora_ambient_occlusion_enabled() { return s_ambientOcclusion.load(std::memory_order_relaxed); }
+extern "C" bool aurora_global_illumination_enabled() { return s_globalIllumination.load(std::memory_order_relaxed); }
+extern "C" bool aurora_ray_traced_gi_enabled() { return s_rayTracedGi.load(std::memory_order_relaxed); }
+extern "C" bool aurora_retain_culled_gi_enabled() { return s_retainCulledGi.load(std::memory_order_relaxed); }
+extern "C" bool aurora_strong_bounce_enabled() { return s_strongBounce.load(std::memory_order_relaxed); }
+extern "C" void aurora_set_ambient_occlusion(bool enabled) { s_ambientOcclusion.store(enabled); }
+extern "C" void aurora_set_global_illumination(bool enabled) { s_globalIllumination.store(enabled); }
+extern "C" void aurora_set_ray_traced_gi(bool enabled) { s_rayTracedGi.store(enabled); }
+extern "C" void aurora_set_retain_culled_gi(bool enabled) { s_retainCulledGi.store(enabled); }
+extern "C" void aurora_set_strong_bounce(bool enabled) { s_strongBounce.store(enabled); }
 
 #include "encoding.hpp"
 #include "color_peek.hpp"
@@ -21,6 +42,7 @@
 #endif
 #include "../window.hpp"
 #include "../webgpu/upscale.hpp"
+#include "../webgpu/rtgi_history.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -46,6 +68,14 @@ struct FrameRecorder {
   FramePacket* packet = nullptr;
   size_t frameSlot = 0;
   uint32_t currentRenderPass = UINT32_MAX;
+  // Select the dominant opaque pass before handing it to the asynchronous encoder.
+  // Previous-frame geometry counts let us recognize it without revisiting sealed passes.
+  unsigned giLastPeak = 0, giPeak = 0;
+  uint32_t giLastPass = UINT32_MAX, giPeakPass = UINT32_MAX;
+  bool giScheduled = false;
+  bool giCameraSampled = false;
+  webgpu::rtgi::Camera giCamera;
+  webgpu::rtgi::GeometryHistory giHistory;
   uint32_t drawCallCount = 0;
   uint32_t mergedDrawCallCount = 0;
   bool inOffscreen = false;
@@ -243,7 +273,7 @@ void snapshot_current_pass_color(webgpu::TextureWithSampler& output, wgpu::Textu
   auto& pass = g_recorder.passes()[g_recorder.currentRenderPass];
   const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
   const auto mode = webgpu::upscale::settings().mode;
-  const bool captureDepth = (mode == AURORA_UPSCALER_FSR3 || mode == AURORA_UPSCALER_DLSS) &&
+  const bool captureDepth = (aurora_ambient_occlusion_enabled() || mode == AURORA_UPSCALER_FSR3 || mode == AURORA_UPSCALER_DLSS) &&
       pass.copySourceDepthView && !pass.snapshotDepthDst && tex_copy_conv::snapshot_depth_supported();
   auto& entry = acquire_pass_snapshot(size.width, size.height, true, captureDepth, false);
   depth = captureDepth ? entry.depth.view : wgpu::TextureView{};
@@ -586,6 +616,40 @@ void enqueue_op(FramePacket& frame, uint32_t opIndex) {
 }
 
 void enqueue_pass(FramePacket& frame, uint32_t passIndex) {
+  auto& pass = frame.renderPasses[passIndex];
+  if (pass.giGeometry && pass.copySourceTexture && pass.copySourceDepthView &&
+      tex_copy_conv::snapshot_depth_supported()) {
+    if (pass.giGeometry >= g_recorder.giPeak) {
+      g_recorder.giPeak = pass.giGeometry;
+      g_recorder.giPeakPass = passIndex;
+    }
+    const bool matches = passIndex == g_recorder.giLastPass &&
+                         pass.giGeometry >= std::max(1u, g_recorder.giLastPeak / 2);
+    const bool substantial = pass.giGeometry >= std::max(4u, g_recorder.giLastPeak);
+    if (!g_recorder.giScheduled && (matches || substantial)) {
+      const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
+      pass.giDepth = acquire_pass_snapshot(size.width, size.height, false, true, false).depth;
+      if (!pass.giTriangles.empty() && g_recorder.giCameraSampled) {
+        const auto liveCount = pass.giTriangles.size();
+        pass.giRetainedCount = g_recorder.giHistory.extend(pass.giTriangles, g_recorder.giCamera,
+                                                           pass.giProjection, pass.giScreenCenter);
+        if (pass.giRetainedCount && webgpu::upscale::culled_comparison_pending()) {
+          pass.giUnretained.assign(pass.giTriangles.begin(), pass.giTriangles.begin()+liveCount);
+          webgpu::rtgi::build_bvh(pass.giUnretained, pass.giUnretainedNodes);
+          Log.info("RTGI comparison uses {} live and {} retained triangles", liveCount, pass.giRetainedCount);
+        }
+      }
+      pass.giNodes.swap(frame.giNodeScratch);
+      webgpu::rtgi::build_bvh(pass.giTriangles, pass.giNodes);
+      pass.discardable = false;
+      g_recorder.giScheduled = true;
+    }
+  }
+  if (pass.giNodes.empty()) {
+    pass.giTriangles.clear();
+    if (pass.giTriangles.capacity() > frame.giTriangleScratch.capacity())
+      pass.giTriangles.swap(frame.giTriangleScratch);
+  }
   seal_pass(frame, passIndex);
   const auto opIndex = static_cast<uint32_t>(frame.ops.size());
   frame.ops.emplace_back(capture_frame_op(frame, FrameOpType::RenderPass, passIndex));
@@ -600,6 +664,14 @@ void begin_recording(FramePacket& packet, size_t frameSlot) {
   if (g_recorder.normalRequested && webgpu::enable_normal_buffer()) {
     g_recorder.normalRequested = false;
   }
+  g_recorder.giLastPeak = g_recorder.giPeak;
+  g_recorder.giLastPass = g_recorder.giPeakPass;
+  g_recorder.giPeak = 0;
+  g_recorder.giPeakPass = UINT32_MAX;
+  g_recorder.giScheduled = false;
+  g_recorder.giCameraSampled = false;
+  g_recorder.giCamera = {};
+  if (!aurora_ray_traced_gi_enabled() || !aurora_retain_culled_gi_enabled()) g_recorder.giHistory.clear();
   g_recorder.packet = &packet;
   g_recorder.frameSlot = frameSlot;
   g_passSnapshotPools[frameSlot].used = 0;
@@ -1135,12 +1207,49 @@ bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out) {
   return true;
 }
 
+std::vector<webgpu::rtgi::Triangle>* ray_trace_geometry() noexcept {
+  if (!aurora_ray_traced_gi_enabled() || !g_recorder.active() || g_recorder.inOffscreen ||
+      g_recorder.giScheduled || g_recorder.currentRenderPass == UINT32_MAX) return nullptr;
+  if (aurora_retain_culled_gi_enabled() && !g_recorder.giCameraSampled) {
+    g_recorder.giCameraSampled = true;
+    if (const auto provider = s_cameraProvider.load(); provider &&
+        !provider(g_recorder.giCamera.view.data(), &g_recorder.giCamera.scene))
+      g_recorder.giCamera = {};
+  }
+  auto& frame = current_frame_packet();
+  auto& triangles = frame.renderPasses[g_recorder.currentRenderPass].giTriangles;
+  if (triangles.empty() && triangles.capacity() < frame.giTriangleScratch.capacity())
+    triangles.swap(frame.giTriangleScratch);
+  return &triangles;
+}
+
 bool note_projection_draw(bool orthographic) noexcept {
   if (!g_recorder.active() || g_recorder.inOffscreen || g_recorder.currentRenderPass == UINT32_MAX) {
     return false;
   }
 
   auto& frame = current_frame_packet();
+  if (!orthographic && (aurora_global_illumination_enabled() || aurora_ray_traced_gi_enabled()) && gx::g_gxState.depthCompare && gx::g_gxState.depthUpdate &&
+      gx::g_gxState.colorUpdate && gx::g_gxState.blendMode == GX_BM_NONE) {
+    auto& candidate = current_render_passes()[g_recorder.currentRenderPass];
+    const auto& proj = gx::g_gxState.proj;
+    const auto& vp = gx::g_gxState.renderViewport;
+    const auto& size = current_render_passes()[g_recorder.currentRenderPass].colorAttachments[SceneColorAttachmentIndex].size;
+    const float depthMin = std::clamp(1.f - vp.zfar, 0.f, 1.f);
+    const float depthRange = std::clamp(1.f - vp.znear, 0.f, 1.f) - depthMin;
+    candidate.giProjection = {proj.m0[0] * vp.width / std::max(1u, size.width),
+                          proj.m1[1] * vp.height / std::max(1u, size.height),
+                          depthMin + proj.m2[2] * depthRange, proj.m2[3] * depthRange};
+    // Projection offsets use GX clip coordinates, while pixels have a top-left origin.
+    candidate.giScreenCenter = {
+        (2.f * vp.left + vp.width * (1.f - proj.m0[2])) / std::max(1u, size.width) - 1.f,
+        (2.f * vp.top + vp.height * (1.f + proj.m1[2])) / std::max(1u, size.height) - 1.f,
+    };
+    if (std::abs(candidate.giProjection[0]) > 0.0001f && std::abs(candidate.giProjection[1]) > 0.0001f &&
+        candidate.giProjection[3] < 0.f && vp.width > 0.5f * size.width && vp.height > 0.5f * size.height) {
+      ++candidate.giGeometry;
+    }
+  }
   const bool wasOrthographic = g_recorder.projectionTracker.known && g_recorder.projectionTracker.orthographic;
   const auto transition = g_recorder.projectionTracker.observe(orthographic);
   if (transition == pixel_perfect::GuiProjectionTransition::BeginThreeD) {
@@ -1169,7 +1278,8 @@ bool note_projection_draw(bool orthographic) noexcept {
   const bool scaled = output.width != static_cast<float>(size.width) ||
                       output.height != static_cast<float>(size.height) || mode != AURORA_UPSCALER_OFF ||
                       (xfb && (xfb->size.width != size.width || xfb->size.height != size.height));
-  if (!scaled || output.width <= 0.f || output.height <= 0.f || !previous.copySourceTexture ||
+  const bool sceneEffects = aurora_ambient_occlusion_enabled() || aurora_enhanced_bloom_enabled();
+  if ((!scaled && !sceneEffects) || output.width <= 0.f || output.height <= 0.f || !previous.copySourceTexture ||
       previous.snapshotColorDst) {
     return false;
   }
@@ -1228,6 +1338,7 @@ void capture_pixel_perfect_gui_scene(const ClipRect& source, const wgpu::Extent3
   }
   frame.hudCandidate = nullptr;
   frame.hudBackground = {};
+  frame.hudDepth = {};
 }
 
 PixelPerfectGuiPresent pixel_perfect_gui_present() noexcept {

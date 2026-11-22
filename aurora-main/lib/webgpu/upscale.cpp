@@ -482,7 +482,7 @@ struct Capture {
   uint32_t width = 0, height = 0, rowBytes = 0;
   wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
 };
-Capture g_capture;
+Capture g_capture, g_giOriginal, g_giLit, g_giDepth, g_giRay;
 } // namespace
 
 void set_settings(const Settings& s) noexcept {
@@ -603,83 +603,154 @@ AuroraUpscaleInfo info() noexcept {
 void request_capture(const std::string& path) {
   std::lock_guard lock{g_capture.mutex};
   g_capture.path = path;
+  if (std::getenv("SIN_GI_COMPARE") && !path.empty()) {
+    g_giOriginal.path = path + "-off.png";
+    g_giLit.path = path + "-on.png";
+    g_giOriginal.pending = g_giLit.pending = true;
+  }
   g_capture.pending = !path.empty();
   g_capture.encoded = false;
 }
 
-void capture_encode(const wgpu::CommandEncoder& encoder, const TextureWithSampler& image) {
-  std::lock_guard lock{g_capture.mutex};
-  if (!g_capture.pending || g_capture.encoded || !image.texture) {
+static void encode_capture(Capture& capture, const wgpu::CommandEncoder& encoder, const TextureWithSampler& image) {
+  if (!capture.pending || capture.encoded || !image.texture) {
     return;
   }
   const auto format = image.format;
-  if (format != wgpu::TextureFormat::RGBA8Unorm && format != wgpu::TextureFormat::BGRA8Unorm) {
+  if (format != wgpu::TextureFormat::RGBA8Unorm && format != wgpu::TextureFormat::BGRA8Unorm && format != wgpu::TextureFormat::R32Float) {
     Log.warn("Capture skipped: unsupported present format");
-    g_capture.pending = false;
+    capture.pending = false;
     return;
   }
-  g_capture.width = image.size.width;
-  g_capture.height = image.size.height;
-  g_capture.rowBytes = (g_capture.width * 4 + 255u) & ~255u;
-  g_capture.format = format;
+  capture.width = image.size.width;
+  capture.height = image.size.height;
+  capture.rowBytes = (capture.width * 4 + 255u) & ~255u;
+  capture.format = format;
   const wgpu::BufferDescriptor descriptor{
       .label = "Present capture",
       .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst,
-      .size = static_cast<uint64_t>(g_capture.rowBytes) * g_capture.height,
+      .size = static_cast<uint64_t>(capture.rowBytes) * capture.height,
   };
-  g_capture.buffer = g_device.CreateBuffer(&descriptor);
+  capture.buffer = g_device.CreateBuffer(&descriptor);
   const wgpu::TexelCopyTextureInfo source{.texture = image.texture};
   const wgpu::TexelCopyBufferInfo destination{
-      .layout = {.bytesPerRow = g_capture.rowBytes, .rowsPerImage = g_capture.height},
-      .buffer = g_capture.buffer,
+      .layout = {.bytesPerRow = capture.rowBytes, .rowsPerImage = capture.height},
+      .buffer = capture.buffer,
   };
-  const wgpu::Extent3D extent{g_capture.width, g_capture.height, 1};
+  const wgpu::Extent3D extent{capture.width, capture.height, 1};
   encoder.CopyTextureToBuffer(&source, &destination, &extent);
-  g_capture.encoded = true;
+  capture.encoded = true;
 }
 
-void capture_after_submit() {
+void capture_encode(const wgpu::CommandEncoder& encoder, const TextureWithSampler& image) {
   std::lock_guard lock{g_capture.mutex};
-  if (!g_capture.pending || !g_capture.encoded) {
+  encode_capture(g_capture, encoder, image);
+}
+
+bool culled_comparison_pending() {
+  static const bool compare = std::getenv("SIN_RTGI_CULL_COMPARE") != nullptr;
+  if (!compare) return false;
+  std::lock_guard lock{g_capture.mutex};
+  return g_giOriginal.pending && !g_giOriginal.encoded;
+}
+
+void capture_culled_before(const wgpu::CommandEncoder& encoder, const TextureWithSampler& lit) {
+  std::lock_guard lock{g_capture.mutex};
+  if (!g_giOriginal.pending || g_giOriginal.encoded) return;
+  g_giOriginal.path = g_capture.path + "-culled-before.png";
+  encode_capture(g_giOriginal, encoder, lit);
+}
+
+bool gi_comparison_pending() {
+  static const bool compare = std::getenv("SIN_GI_COMPARE") && !std::getenv("SIN_RTGI_CULL_COMPARE");
+  if (!compare) return false;
+  std::lock_guard lock{g_capture.mutex};
+  return g_giOriginal.pending && !g_giOriginal.encoded;
+}
+
+void capture_rtgi(const wgpu::CommandEncoder& encoder, const TextureWithSampler& lit) {
+  static const bool compare = std::getenv("SIN_GI_COMPARE") != nullptr;
+  if (!compare) return;
+  std::lock_guard lock{g_capture.mutex};
+  if (!g_giOriginal.encoded || g_giRay.encoded) return;
+  g_giRay.path = g_capture.path + (std::getenv("SIN_RTGI_CULL_COMPARE") ? "-culled-after.png" : "-rt.png");
+  g_giRay.pending = true;
+  encode_capture(g_giRay, encoder, lit);
+}
+
+void capture_gi_pair(const wgpu::CommandEncoder& encoder, const TextureWithSampler& original,
+                     const TextureWithSampler& lit, const TextureWithSampler& depth, std::array<float,4> projection) {
+  static const bool compare = std::getenv("SIN_GI_COMPARE") && !std::getenv("SIN_RTGI_CULL_COMPARE");
+  if (!compare) return;
+  std::lock_guard lock{g_capture.mutex};
+  if (!g_giOriginal.pending || g_giOriginal.encoded) return;
+  encode_capture(g_giOriginal, encoder, original);
+  encode_capture(g_giLit, encoder, lit);
+  g_giDepth.path = g_giOriginal.path + ".depth";
+  g_giDepth.pending = true;
+  encode_capture(g_giDepth, encoder, depth);
+  Log.info("GI comparison projection {} {} {} {}",projection[0],projection[1],projection[2],projection[3]);
+}
+
+static void finish_capture(Capture& capture) {
+  if (!capture.pending || !capture.encoded) {
     return;
   }
-  const uint64_t size = static_cast<uint64_t>(g_capture.rowBytes) * g_capture.height;
+  const uint64_t size = static_cast<uint64_t>(capture.rowBytes) * capture.height;
   std::vector<uint8_t> pixels;
   bool ok = false;
-  const auto future = g_capture.buffer.MapAsync(
+  const auto future = capture.buffer.MapAsync(
       wgpu::MapMode::Read, 0, size, wgpu::CallbackMode::WaitAnyOnly,
       [&](wgpu::MapAsyncStatus status, wgpu::StringView) {
         if (status != wgpu::MapAsyncStatus::Success) {
           return;
         }
-        const auto* data = static_cast<const uint8_t*>(g_capture.buffer.GetConstMappedRange(0, size));
+        const auto* data = static_cast<const uint8_t*>(capture.buffer.GetConstMappedRange(0, size));
         pixels.assign(data, data + size);
-        g_capture.buffer.Unmap();
+        capture.buffer.Unmap();
         ok = true;
       });
   if (g_instance.WaitAny(future, 5'000'000'000ull) != wgpu::WaitStatus::Success || !ok) {
     Log.warn("Present capture readback failed");
   } else {
+    if (capture.format == wgpu::TextureFormat::R32Float) {
+      if (auto* file = std::fopen(capture.path.c_str(), "wb")) {
+        for (uint32_t y=0;y<capture.height;++y)
+          std::fwrite(pixels.data()+size_t(y)*capture.rowBytes,4,capture.width,file);
+        std::fclose(file);
+      }
+      capture.buffer = {}; capture.pending = false; capture.encoded = false;
+      return;
+    }
     const auto pixelFormat =
-        g_capture.format == wgpu::TextureFormat::BGRA8Unorm ? SDL_PIXELFORMAT_BGRA32 : SDL_PIXELFORMAT_RGBA32;
-    for (uint32_t y = 0; y < g_capture.height; ++y) {
-      uint8_t* row = pixels.data() + static_cast<size_t>(y) * g_capture.rowBytes;
-      for (uint32_t x = 0; x < g_capture.width; ++x) {
+        capture.format == wgpu::TextureFormat::BGRA8Unorm ? SDL_PIXELFORMAT_BGRA32 : SDL_PIXELFORMAT_RGBA32;
+    for (uint32_t y = 0; y < capture.height; ++y) {
+      uint8_t* row = pixels.data() + static_cast<size_t>(y) * capture.rowBytes;
+      for (uint32_t x = 0; x < capture.width; ++x) {
         row[x * 4 + 3] = 255;
       }
     }
-    SDL_Surface* surface = SDL_CreateSurfaceFrom(static_cast<int>(g_capture.width), static_cast<int>(g_capture.height),
-                                                 pixelFormat, pixels.data(), static_cast<int>(g_capture.rowBytes));
-    if (surface != nullptr && SDL_SavePNG(surface, g_capture.path.c_str())) {
-      Log.info("Saved present image {}x{} to {}", g_capture.width, g_capture.height, g_capture.path);
+    SDL_Surface* surface = SDL_CreateSurfaceFrom(static_cast<int>(capture.width), static_cast<int>(capture.height),
+                                                 pixelFormat, pixels.data(), static_cast<int>(capture.rowBytes));
+    if (surface != nullptr && SDL_SavePNG(surface, capture.path.c_str())) {
+      Log.info("Saved present image {}x{} to {}", capture.width, capture.height, capture.path);
     } else {
-      Log.warn("Saving {} failed: {}", g_capture.path, SDL_GetError());
+      Log.warn("Saving {} failed: {}", capture.path, SDL_GetError());
     }
     SDL_DestroySurface(surface);
   }
-  g_capture.buffer = {};
-  g_capture.pending = false;
-  g_capture.encoded = false;
+  capture.buffer = {};
+  capture.pending = false;
+  capture.encoded = false;
+}
+
+void capture_after_submit() {
+  std::lock_guard lock{g_capture.mutex};
+  finish_capture(g_capture);
+  finish_capture(g_giOriginal);
+  finish_capture(g_giLit);
+  finish_capture(g_giDepth);
+  finish_capture(g_giRay);
 }
 
 void shutdown() noexcept {

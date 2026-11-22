@@ -101,6 +101,7 @@ typedef struct {
   bool pauseOnFocusLost;
   bool allowTextureDumps;
   bool allowTextureReplacements;
+  bool generateReplacementMips;
   bool allowCpuAdapter;
   bool disableCopyFilter;
   // When false, Aurora centers the first window. When true, windowPosX/Y are restored verbatim,

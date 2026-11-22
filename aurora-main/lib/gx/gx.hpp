@@ -284,6 +284,7 @@ struct Light {
   bool operator!=(const Light& rhs) const { return !(*this == rhs); }
 };
 static_assert(sizeof(Light) == 80);
+float water_phase() noexcept;
 struct Fog {
   Vec4<float> color;
   float a = 0.f;
@@ -517,11 +518,16 @@ struct ShaderConfig {
   u8 vtxStride = 0;
   u8 lineMode : 2 = 0; // 1 = GX_LINES, 2 = GX_LINESTRIP, 3 = GX_POINTS
   u8 fogRangeEnabled : 1 = false;
-  u8 pad1 : 5 = 0;
+  u8 projectedCaustics : 1 = false;
+  u8 surfaceHighlights : 1 = false;
+  u8 probeMaterials : 1 = false;
+  u8 combatLight : 1 = false;
+  u8 contactShadow : 1 = false;
   u8 zTextureOp : 2 = GX_ZT_DISABLE;
   u8 zTextureFormat : 2 = 0;
   u8 forceAlphaOne : 1 = false;
-  u8 pad2 : 3 = 0;
+  u8 pixelLighting : 1 = false;
+  u8 atmosphere : 2 = 0;
   std::array<AttrConfig, MaxVtxAttr> attrs;
   std::array<TevSwap, MaxTevSwap> tevSwapTable;
   std::array<TevStage, MaxTevStages> tevStages;
@@ -568,6 +574,8 @@ struct ShaderInfo {
   std::bitset<MaxIndTexMtxs> usedIndTexMtxs;
   u32 uniformSize = 0;
   bool usesFog : 1 = false;
+  bool sceneShading : 1 = false;
+  bool projectedCaustics : 1 = false;
   bool usesZTexture : 1 = false;
   bool lightingEnabled : 1 = false;
   u8 lineMode : 2 = 0;

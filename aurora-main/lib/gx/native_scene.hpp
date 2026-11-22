@@ -16,6 +16,7 @@ void append_native_scene(const ShaderConfig&, const uint8_t*, uint16_t) noexcept
 std::vector<std::shared_ptr<NativeSceneDraw>> retain_native_scene();
 NativeSceneDraw* record_native_scene(const ShaderConfig&, GXPrimitive, const uint8_t*, uint16_t, const Mat4x4<float>&,
                                      HashType material, bool translucent) noexcept;
+void record_ray_trace_geometry(const ShaderConfig&, GXPrimitive, const uint8_t*, uint16_t);
 bool seal_native_scene() noexcept;
 extern thread_local float g_nativeSceneWeight;
 } // namespace aurora::gx

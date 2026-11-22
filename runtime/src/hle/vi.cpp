@@ -35,6 +35,8 @@
 #endif
 
 #include <aurora/aurora.h>
+#include <aurora/gfx.h>
+#include "hle/scene_lighting.h"
 
 // Forward declaration for OSWakeupThread - used to wake threads on VI retrace queue
 extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
@@ -50,6 +52,7 @@ extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
 // aurora_begin_frame() before GX commands and aurora_end_frame() after.
 std::atomic_bool g_auroraFrameActive{false};
 std::atomic_bool g_auroraFrameHadWork{false};
+
 
 namespace {
 
@@ -269,6 +272,10 @@ static std::atomic<bool> s_inAdvanceRetrace{false};
 static std::atomic<bool> s_presentSequenceActive{false};
 
 void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool serviceAurora) {
+    // R2VE01 loaded-stage byte, also used by the aim telemetry and stage runner.
+    const auto stage = Memory::Read8(0x804B1968u);
+    aurora_set_atmosphere_type(stage == 2 ? AURORA_ATMOSPHERE_UNDERWATER :
+                               stage == 5 ? AURORA_ATMOSPHERE_DUST : AURORA_ATMOSPHERE_ORIGINAL);
     // Prevent re-entry - this can happen if OSWakeupThread triggers SelectThread
     // which goes idle and calls ProcessTimerEvents again
     if (s_inAdvanceRetrace.exchange(true)) {
@@ -311,6 +318,8 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         currentFb = g_vi.currentFrameBuffer;
         g_vi.lastRetrace = retraceStamp;
         retraceValue = g_vi.retraceCount;
+        UpdateSceneLighting(stage);
+        if (stage == 2) aurora_set_water_frame(retraceValue);
         preCb = Memory::Read32(kViPreRetraceCallback);
         postCb = Memory::Read32(kViPostRetraceCallback);
         hasXfbReady = g_vi.hasValidXfb;

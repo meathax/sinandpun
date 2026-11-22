@@ -98,6 +98,37 @@ int main() {
                      "duplicate data paths were accepted")) return 1;
     }
     {
+        for (bool enabled : {false, true}) {
+            std::istringstream input(enabled ? "[video]\ngenerate_mips = true\n" : "[video]\ngenerate_mips = false\n");
+            const auto config = RuntimeConfigFile::ParseConfig(input, "mipmaps.toml");
+            if (!Require(config.generateMips == std::optional<bool>{enabled}, "replacement mipmap setting mismatch")) return 1;
+            const std::string value = enabled ? "true" : "false";
+            std::istringstream settings("[video]\nenhancements_enabled = " + value + "\nenhanced_bloom = " + value +
+                                        "\nper_pixel_lighting = " + value + "\nstage_atmosphere = " + value +
+                                        "\nstrong_bounce = " + value + "\nretain_culled_gi = " + value + "\nray_traced_gi = " + value + "\nglobal_illumination = " + value + "\nambient_occlusion = " + value + "\nsharpening_enabled = " + value +
+                                        "\nprojected_caustics = " + value + "\nsurface_highlights = " + value + "\nprobe_materials = " + value + "\ncombat_light = " + value + "\ncontact_shadow = " + value);
+            const auto parsed = RuntimeConfigFile::ParseConfig(settings, "enhancements.toml");
+            if (!Require(parsed.enhancementsEnabled == enabled && parsed.enhancedBloom == enabled &&
+                         parsed.pixelLighting == enabled && parsed.stageAtmosphere == enabled &&
+                         parsed.strongBounce == enabled && parsed.retainCulledGi == enabled && parsed.rayTracedGi == enabled && parsed.globalIllumination == enabled && parsed.ambientOcclusion == enabled && parsed.sharpeningEnabled == enabled &&
+                         parsed.projectedCaustics == enabled && parsed.surfaceHighlights == enabled &&
+                         parsed.probeMaterials == enabled && parsed.combatLight == enabled && parsed.contactShadow == enabled,
+                         "enhancements switch mismatch")) return 1;
+        }
+    }
+    {
+        for (unsigned mask = 0; mask < 8; ++mask) {
+            const auto flag = [&](unsigned bit) { return (mask & bit) ? "true" : "false"; };
+            std::ostringstream text;
+            text << "[video]\nprobe_materials = " << flag(1) << "\ncombat_light = " << flag(2)
+                 << "\ncontact_shadow = " << flag(4);
+            std::istringstream input(text.str());
+            const auto parsed = RuntimeConfigFile::ParseConfig(input, "material-settings.toml");
+            if (!Require(parsed.probeMaterials == bool(mask & 1) && parsed.combatLight == bool(mask & 2) &&
+                         parsed.contactShadow == bool(mask & 4), "material toggles must be independent")) return 1;
+        }
+    }
+    {
         std::istringstream input("[video]\nmetalfx_spatial_upscaling = true\n");
         const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "enabled.toml");
         if (!Require(config.metalFxSpatialUpscaling == std::optional<bool>{true},

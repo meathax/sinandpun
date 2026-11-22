@@ -1,3 +1,4 @@
+#include <aurora/gfx.h>
 #include "command_processor.hpp"
 
 #include "../gfx/recording.hpp"
@@ -640,6 +641,10 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   } else if (prim == GX_POINTS) {
     instanceCount = vtxCount;
   }
+  if (aurora_ray_traced_gi_enabled() && state.projType == GX_PERSPECTIVE && state.depthCompare &&
+      state.depthUpdate && state.colorUpdate && state.blendMode == GX_BM_NONE) {
+    record_ray_trace_geometry(cache.config.shaderConfig, prim, sourceVertices, vtxCount);
+  }
   NativeSceneDraw* scene = nullptr;
   const bool translucent = cache.config.blendMode == GX_BM_BLEND && !cache.config.depthUpdate;
   // Direct translucent vertices carry no persistent particle IDs. Keep that
@@ -756,6 +761,10 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& 
       lastDraw->idxRange = idxRange;
     } else {
       lastDraw->idxRange.size += idxRange.size;
+    }
+    if (aurora_ray_traced_gi_enabled() && g_gxState.projType == GX_PERSPECTIVE && g_gxState.depthCompare &&
+        g_gxState.depthUpdate && g_gxState.colorUpdate && g_gxState.blendMode == GX_BM_NONE) {
+      record_ray_trace_geometry(sDrawCache.config.shaderConfig, prim, vertexData.data(), vtxCount);
     }
     if (lastDraw->scene) {
       append_native_scene(sDrawCache.config.shaderConfig, vertexData.data(), vtxCount);
@@ -1029,6 +1038,8 @@ void handle_aurora(ByteReader& reader) noexcept {
 }
 
 void clear_draw_cache() noexcept {
+  // Enhancements and the loaded stage can change between guest frames without a GX register write.
+  sDrawCache.hasPipeline = false;
   sDrawCache.bindGeneration = 0;
   sDrawCache.uniformRange = {};
   sDrawCache.fogRange = {};

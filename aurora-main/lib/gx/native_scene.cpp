@@ -116,6 +116,55 @@ struct JoinHash {
   size_t operator()(const Join& j) const { return xxh3_hash_s(j.xyz.data(), sizeof(j.xyz), j.camera); }
 };
 } // namespace
+void record_ray_trace_geometry(const ShaderConfig& config, GXPrimitive primitive, const uint8_t* vertices, uint16_t count) {
+  if (primitive != GX_TRIANGLES && primitive != GX_TRIANGLESTRIP && primitive != GX_TRIANGLEFAN &&
+      primitive != GX_QUADS) return;
+  auto* triangles = gfx::ray_trace_geometry();
+  if (!triangles || triangles->size() >= webgpu::rtgi::LiveTriangleLimit) return;
+  const auto& paint = g_gxState.colorChannelState[0].matColor;
+  const float r = std::clamp(paint[0], 0.05f, 1.f);
+  const float g = std::clamp(paint[1], 0.05f, 1.f);
+  const float b = std::clamp(paint[2], 0.05f, 1.f);
+  // Off-screen hits use the authored GX material tint. A visible hit can
+  // recover its actual textured radiance from the matched EFB.
+  thread_local std::vector<webgpu::rtgi::Point> positions;
+  positions.resize(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto* vertex = vertices + size_t(i) * config.vtxStride;
+    const auto& matrixAttribute = config.attrs[GX_VA_PNMTXIDX];
+    const unsigned matrix = matrixAttribute.attrType == GX_NONE ? g_gxState.currentPnMtx
+                                                               : (vertex[matrixAttribute.offset] & 63u) / 3u;
+    float p[3]{};
+    if (matrix >= MaxPnMtx || !attribute(config, vertex, GX_VA_POS, p, 3)) return;
+    positions[i] = transform(g_gxState.pnMtx[matrix].pos, p, 1.f);
+    for (float value : positions[i])
+      if (!finite(value) || std::abs(value) > 1.e7f) return;
+  }
+  const auto emit = [&](unsigned a, unsigned bIndex, unsigned c) {
+    if (triangles->size() < webgpu::rtgi::LiveTriangleLimit && positions[a] != positions[bIndex] &&
+        positions[a] != positions[c] && positions[bIndex] != positions[c])
+      triangles->push_back({positions[a], r, positions[bIndex], g, positions[c], b});
+  };
+  switch (primitive) {
+  case GX_TRIANGLES:
+    for (unsigned i = 0; i + 2 < count; i += 3) emit(i, i+1, i+2);
+    break;
+  case GX_QUADS:
+    for (unsigned i = 0; i + 3 < count; i += 4) {
+      emit(i, i+1, i+2);
+      emit(i, i+2, i+3);
+    }
+    break;
+  case GX_TRIANGLESTRIP:
+    for (unsigned i = 2; i < count; ++i) emit(i-2, i-1, i);
+    break;
+  case GX_TRIANGLEFAN:
+    for (unsigned i = 2; i < count; ++i) emit(0, i-1, i);
+    break;
+  default: break;
+  }
+}
+
 bool native_scene_enabled() noexcept {
   AuroraFrameRateMode mode;
   uint32_t fixed, cap;

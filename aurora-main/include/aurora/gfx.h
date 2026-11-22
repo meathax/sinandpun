@@ -137,6 +137,40 @@ bool aurora_get_skip_unready_pipelines();
 uint32_t aurora_get_queued_pipeline_count();
 
 // Controls whether display copies bypass the vertical copy filter.
+typedef enum AuroraAtmosphere {
+  AURORA_ATMOSPHERE_ORIGINAL,
+  AURORA_ATMOSPHERE_UNDERWATER,
+  AURORA_ATMOSPHERE_DUST
+} AuroraAtmosphere;
+void aurora_set_atmosphere_type(AuroraAtmosphere type);
+void aurora_set_ambient_occlusion(bool enabled);
+void aurora_set_global_illumination(bool enabled);
+void aurora_set_ray_traced_gi(bool enabled);
+void aurora_set_retain_culled_gi(bool enabled);
+void aurora_set_strong_bounce(bool enabled);
+void aurora_set_projected_caustics(bool enabled);
+void aurora_set_surface_highlights(bool enabled);
+typedef struct AuroraSceneLight {
+  float cameraUp[4], combat[4], shadow[4], shadowNormal[4];
+} AuroraSceneLight;
+unsigned aurora_scene_effect_mask(void);
+void aurora_update_scene_light(const AuroraSceneLight* scene);
+void aurora_read_scene_light(AuroraSceneLight* scene);
+void aurora_set_probe_materials(bool enabled);
+void aurora_set_combat_light(bool enabled);
+void aurora_set_contact_shadow(bool enabled);
+void aurora_set_water_frame(uint32_t frame);
+void aurora_set_stage_atmosphere(bool enabled);
+void aurora_set_pixel_lighting(bool enabled);
+bool aurora_enhanced_bloom_enabled(void);
+bool aurora_ambient_occlusion_enabled(void);
+bool aurora_global_illumination_enabled(void);
+bool aurora_ray_traced_gi_enabled(void);
+bool aurora_retain_culled_gi_enabled(void);
+typedef bool (*AuroraRtCameraProvider)(float* worldToView, uint32_t* scene);
+void aurora_set_rt_camera_provider(AuroraRtCameraProvider provider);
+bool aurora_strong_bounce_enabled(void);
+void aurora_set_enhanced_bloom(bool enabled);
 void aurora_set_disable_copy_filter(bool disabled);
 bool aurora_get_disable_copy_filter();
 

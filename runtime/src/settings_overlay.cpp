@@ -288,6 +288,21 @@ int FsrQualityIndexFromConfig() {
     return kDefaultFsrQualityIndex;
 }
 
+bool g_enhancementsEnabled = RuntimeConfigFile::EnhancementsEnabled();
+bool g_sharpeningEnabled = RuntimeConfigFile::SharpeningEnabled();
+bool g_ambientOcclusion = RuntimeConfigFile::AmbientOcclusion();
+bool g_globalIllumination = RuntimeConfigFile::GlobalIllumination();
+bool g_rayTracedGi = RuntimeConfigFile::RayTracedGi();
+bool g_retainCulledGi = RuntimeConfigFile::RetainCulledGi();
+bool g_strongBounce = RuntimeConfigFile::StrongBounce();
+bool g_projectedCaustics = RuntimeConfigFile::ProjectedCaustics();
+bool g_surfaceHighlights = RuntimeConfigFile::SurfaceHighlights();
+bool g_probeMaterials = RuntimeConfigFile::ProbeMaterials();
+bool g_combatLight = RuntimeConfigFile::CombatLight();
+bool g_contactShadow = RuntimeConfigFile::ContactShadow();
+bool g_stageAtmosphere = RuntimeConfigFile::StageAtmosphere();
+bool g_pixelLighting = RuntimeConfigFile::PixelLighting();
+bool g_enhancedBloom = RuntimeConfigFile::EnhancedBloom();
 int g_upscaler = UpscalerIndexFromConfig();
 int g_fsrQuality = FsrQualityIndexFromConfig();
 float g_fsrSharpness = static_cast<float>(RuntimeConfigFile::FsrSharpness());
@@ -302,8 +317,21 @@ bool UpscalerActive() {
 // Live apply: the scale factor changes the internal render size, which aurora re-evaluates at the next frame.
 void ApplyUpscaler() {
     GX_SYNC_INLINE();
-    const bool fsr = g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal;
-    const bool dlss = g_upscaler == kUpscalerDlss;
+    aurora_set_ambient_occlusion(g_enhancementsEnabled && g_ambientOcclusion);
+    aurora_set_global_illumination(g_enhancementsEnabled && g_globalIllumination);
+    aurora_set_ray_traced_gi(g_enhancementsEnabled && g_rayTracedGi);
+    aurora_set_retain_culled_gi(g_enhancementsEnabled && g_rayTracedGi && g_retainCulledGi);
+    aurora_set_strong_bounce(g_enhancementsEnabled && g_strongBounce);
+    aurora_set_projected_caustics(g_enhancementsEnabled && g_projectedCaustics);
+    aurora_set_surface_highlights(g_enhancementsEnabled && g_surfaceHighlights);
+    aurora_set_probe_materials(g_enhancementsEnabled && g_probeMaterials);
+    aurora_set_combat_light(g_enhancementsEnabled && g_combatLight);
+    aurora_set_contact_shadow(g_enhancementsEnabled && g_contactShadow);
+    aurora_set_stage_atmosphere(g_enhancementsEnabled && g_stageAtmosphere);
+    aurora_set_pixel_lighting(g_enhancementsEnabled && g_pixelLighting);
+    aurora_set_enhanced_bloom(g_enhancementsEnabled && g_enhancedBloom);
+    const bool fsr = g_enhancementsEnabled && (g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal);
+    const bool dlss = g_enhancementsEnabled && g_upscaler == kUpscalerDlss;
     float factor = fsr ? RuntimeConfigFile::kFsrQualities[static_cast<size_t>(g_fsrQuality)].factor : 1.0f;
     float sharpness = g_fsrSharpness;
     if (dlss) {
@@ -315,7 +343,7 @@ void ApplyUpscaler() {
     AuroraUpscaler mode = AURORA_UPSCALER_OFF;
     if (dlss) mode = AURORA_UPSCALER_DLSS;
     if (fsr && g_fsrQuality > 0) mode = g_upscaler == kUpscalerTemporal ? AURORA_UPSCALER_FSR3 : AURORA_UPSCALER_FSR1;
-    aurora_set_upscaler(mode, factor, sharpness / 100.0f);
+    aurora_set_upscaler(mode, factor, g_sharpeningEnabled ? sharpness / 100.0f : 0.0f);
 }
 
 void PersistUpscaler() {
@@ -347,6 +375,8 @@ struct LaunchValues {
     int msaa;
     int anisotropy;
     bool textureReplacements;
+    bool enhancementsEnabled;
+    bool generateMips;
     bool textureDumps;
     bool gxWorker;
     bool wiiRemotes;
@@ -357,7 +387,7 @@ const bool g_wiiRemotesAtLaunch = RuntimeConfigFile::WiiRemotesEnabled();
 const LaunchValues& Launch() {
     static const LaunchValues values = [] {
         const SystemSettings::Values sys = SystemSettings::Get();
-        return LaunchValues{sys.msaa, sys.anisotropy, RuntimeConfigFile::TextureReplacements(false),
+        return LaunchValues{sys.msaa, sys.anisotropy, RuntimeConfigFile::TextureReplacements(false), RuntimeConfigFile::EnhancementsEnabled(), RuntimeConfigFile::GenerateMips(),
                             RuntimeConfigFile::TextureDumps(false), RuntimeConfigFile::GxWorkerEnabled(true),
                             g_wiiRemotesAtLaunch};
     }();
@@ -409,6 +439,22 @@ struct GraphicsState {
     int msaa = SystemSettings::Get().msaa;
     int anisotropy = SystemSettings::Get().anisotropy;
     bool gxWorker = RuntimeConfigFile::GxWorkerEnabled(true);
+    bool enhancementsEnabled = g_enhancementsEnabled;
+    bool sharpeningEnabled = g_sharpeningEnabled;
+    bool ambientOcclusion = g_ambientOcclusion;
+    bool globalIllumination = g_globalIllumination;
+    bool rayTracedGi = g_rayTracedGi;
+    bool retainCulledGi = g_retainCulledGi;
+    bool strongBounce = g_strongBounce;
+    bool projectedCaustics = g_projectedCaustics;
+    bool surfaceHighlights = g_surfaceHighlights;
+    bool probeMaterials = g_probeMaterials;
+    bool combatLight = g_combatLight;
+    bool contactShadow = g_contactShadow;
+    bool stageAtmosphere = g_stageAtmosphere;
+    bool pixelLighting = g_pixelLighting;
+    bool enhancedBloom = g_enhancedBloom;
+    bool generateMips = RuntimeConfigFile::GenerateMips();
     bool textureReplacements = RuntimeConfigFile::TextureReplacements(false);
     bool textureDumps = RuntimeConfigFile::TextureDumps(false);
 };
@@ -435,6 +481,22 @@ GraphicsState CurrentGraphicsState() {
         .msaa = sys.msaa,
         .anisotropy = sys.anisotropy,
         .gxWorker = RuntimeConfigFile::GxWorkerEnabled(true),
+        .enhancementsEnabled = g_enhancementsEnabled,
+        .sharpeningEnabled = g_sharpeningEnabled,
+        .ambientOcclusion = g_ambientOcclusion,
+        .globalIllumination = g_globalIllumination,
+        .rayTracedGi = g_rayTracedGi,
+        .retainCulledGi = g_retainCulledGi,
+        .strongBounce = g_strongBounce,
+        .projectedCaustics = g_projectedCaustics,
+        .surfaceHighlights = g_surfaceHighlights,
+        .probeMaterials = g_probeMaterials,
+        .combatLight = g_combatLight,
+        .contactShadow = g_contactShadow,
+        .stageAtmosphere = g_stageAtmosphere,
+        .pixelLighting = g_pixelLighting,
+        .enhancedBloom = g_enhancedBloom,
+        .generateMips = RuntimeConfigFile::GenerateMips(),
         .textureReplacements = RuntimeConfigFile::TextureReplacements(false),
         .textureDumps = RuntimeConfigFile::TextureDumps(false),
     };
@@ -509,6 +571,21 @@ void ApplyGraphicsLive(GraphicsState next) {
     g_vrrLimiter = next.vrrLimiter;
     ApplyVrr();
 
+    g_enhancementsEnabled = next.enhancementsEnabled;
+    g_sharpeningEnabled = next.sharpeningEnabled;
+    g_ambientOcclusion = next.ambientOcclusion;
+    g_globalIllumination = next.globalIllumination;
+    g_rayTracedGi = next.rayTracedGi;
+    g_retainCulledGi = next.retainCulledGi;
+    g_strongBounce = next.strongBounce;
+    g_projectedCaustics = next.projectedCaustics;
+    g_surfaceHighlights = next.surfaceHighlights;
+    g_probeMaterials = next.probeMaterials;
+    g_combatLight = next.combatLight;
+    g_contactShadow = next.contactShadow;
+    g_stageAtmosphere = next.stageAtmosphere;
+    g_pixelLighting = next.pixelLighting;
+    g_enhancedBloom = next.enhancedBloom;
     g_upscaler = next.upscaler;
     g_fsrQuality = next.fsrQuality;
     g_fsrSharpness = next.fsrSharpness;
@@ -556,6 +633,38 @@ void PersistGraphics(const GraphicsState& state) {
 
     RuntimeUserConfig& userConfig = RuntimeConfigFile::Mutable();
     userConfig.gxWorker = state.gxWorker;
+    userConfig.enhancementsEnabled = state.enhancementsEnabled;
+    userConfig.sharpeningEnabled = state.sharpeningEnabled;
+    RuntimeConfigFile::WriteSetting("video", "sharpening_enabled", state.sharpeningEnabled ? "true" : "false");
+    userConfig.ambientOcclusion = state.ambientOcclusion;
+    userConfig.globalIllumination = state.globalIllumination;
+    userConfig.rayTracedGi = state.rayTracedGi;
+    userConfig.retainCulledGi = state.retainCulledGi;
+    userConfig.strongBounce = state.strongBounce;
+    RuntimeConfigFile::WriteSetting("video", "ambient_occlusion", state.ambientOcclusion ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "global_illumination", state.globalIllumination ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "ray_traced_gi", state.rayTracedGi ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "retain_culled_gi", state.retainCulledGi ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "strong_bounce", state.strongBounce ? "true" : "false");
+    userConfig.projectedCaustics = state.projectedCaustics;
+    userConfig.surfaceHighlights = state.surfaceHighlights;
+    userConfig.probeMaterials = state.probeMaterials;
+    userConfig.combatLight = state.combatLight;
+    userConfig.contactShadow = state.contactShadow;
+    userConfig.stageAtmosphere = state.stageAtmosphere;
+    RuntimeConfigFile::WriteSetting("video", "projected_caustics", state.projectedCaustics ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "surface_highlights", state.surfaceHighlights ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "probe_materials", state.probeMaterials ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "combat_light", state.combatLight ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "contact_shadow", state.contactShadow ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "stage_atmosphere", state.stageAtmosphere ? "true" : "false");
+    userConfig.pixelLighting = state.pixelLighting;
+    RuntimeConfigFile::WriteSetting("video", "per_pixel_lighting", state.pixelLighting ? "true" : "false");
+    userConfig.enhancedBloom = state.enhancedBloom;
+    RuntimeConfigFile::WriteSetting("video", "enhancements_enabled", state.enhancementsEnabled ? "true" : "false");
+    RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", state.enhancedBloom ? "true" : "false");
+    userConfig.generateMips = state.generateMips;
+    RuntimeConfigFile::WriteSetting("video", "generate_mips", state.generateMips ? "true" : "false");
     userConfig.textureReplacements = state.textureReplacements;
     userConfig.textureDumps = state.textureDumps;
     RuntimeConfigFile::WriteSetting("video", "gx_worker", state.gxWorker ? "true" : "false");
@@ -582,6 +691,22 @@ bool GraphicsDraftDirty() {
              g_graphicsDraft.msaa == SystemSettings::Get().msaa &&
              g_graphicsDraft.anisotropy == SystemSettings::Get().anisotropy &&
              g_graphicsDraft.gxWorker == RuntimeConfigFile::GxWorkerEnabled(true) &&
+             g_graphicsDraft.enhancementsEnabled == g_enhancementsEnabled &&
+             g_graphicsDraft.sharpeningEnabled == g_sharpeningEnabled &&
+             g_graphicsDraft.ambientOcclusion == g_ambientOcclusion &&
+             g_graphicsDraft.globalIllumination == g_globalIllumination &&
+             g_graphicsDraft.rayTracedGi == g_rayTracedGi &&
+             g_graphicsDraft.retainCulledGi == g_retainCulledGi &&
+             g_graphicsDraft.strongBounce == g_strongBounce &&
+             g_graphicsDraft.projectedCaustics == g_projectedCaustics &&
+             g_graphicsDraft.surfaceHighlights == g_surfaceHighlights &&
+             g_graphicsDraft.probeMaterials == g_probeMaterials &&
+             g_graphicsDraft.combatLight == g_combatLight &&
+             g_graphicsDraft.contactShadow == g_contactShadow &&
+             g_graphicsDraft.stageAtmosphere == g_stageAtmosphere &&
+             g_graphicsDraft.pixelLighting == g_pixelLighting &&
+             g_graphicsDraft.enhancedBloom == g_enhancedBloom &&
+             g_graphicsDraft.generateMips == RuntimeConfigFile::GenerateMips() &&
              g_graphicsDraft.textureReplacements == RuntimeConfigFile::TextureReplacements(false) &&
              g_graphicsDraft.textureDumps == RuntimeConfigFile::TextureDumps(false));
 }
@@ -716,8 +841,8 @@ const char* KeyBindingName(int scancode) {
 }
 
 // ---- menu state ----------------------------------------------------------------------------------------
-enum Tab { kTabDisplay, kTabGraphics, kTabAudio, kTabControls, kTabSystem, kTabAbout, kTabCount };
-constexpr std::array<const char*, kTabCount> kTabNames = {"Display", "Graphics", "Audio", "Controls", "System", "About"};
+enum Tab { kTabDisplay, kTabGraphics, kTabEnhancements, kTabAudio, kTabControls, kTabSystem, kTabAbout, kTabCount };
+constexpr std::array<const char*, kTabCount> kTabNames = {"Display", "Graphics", "Enhancements", "Audio", "Controls", "System", "About"};
 constexpr int kControlsPageCount = controls_menu::kPageCount + 1;  // + Devices
 constexpr std::array<const char*, kControlsPageCount> kControlsPageNames = {"Overview", "Gamepad", "Keyboard & Mouse", "Aiming",
                                                                             "Devices"};
@@ -849,7 +974,6 @@ void ResetGraphicsPage() {
     next.resolution = 0.0f;
     next.interpolation = 0;
     ApplyAndPersistDisplay(next);
-    ResetUpscaler();
     g_disableCopyFilter = true;
     GX_SYNC_INLINE();
     aurora_set_disable_copy_filter(true);
@@ -857,18 +981,72 @@ void ResetGraphicsPage() {
     g_skipUnreadyPipelines = true;
     aurora_set_skip_unready_pipelines(true);
     RuntimeConfigFile::SetSkipUnreadyPipelines(true);
+    auto& config = RuntimeConfigFile::Mutable();
+    config.textureDumps = false;
+    config.gxWorker = true;
+    RuntimeConfigFile::WriteSetting("video", "texture_dumps", "false");
+    RuntimeConfigFile::WriteSetting("video", "gx_worker", "true");
+    g_graphicsDraft = CurrentGraphicsState();
+}
+
+void ResetEnhancementsPage() {
+    g_enhancementsEnabled = true;
+    g_sharpeningEnabled = true;
+    g_ambientOcclusion = false;
+    g_globalIllumination = false;
+    g_rayTracedGi = false;
+    g_retainCulledGi = false;
+    g_strongBounce = true;
+    g_projectedCaustics = false;
+    g_surfaceHighlights = false;
+    g_probeMaterials = false;
+    g_combatLight = false;
+    g_contactShadow = false;
+    g_stageAtmosphere = false;
+    g_pixelLighting = false;
+    g_enhancedBloom = false;
+    ResetUpscaler();
     SystemSettings::Values sys = SystemSettings::Get();
     sys.msaa = 1;
     sys.anisotropy = 16;
     SystemSettings::Set(sys);
     SystemSettings::Save();
     RuntimeUserConfig& userConfig = RuntimeConfigFile::Mutable();
+    userConfig.enhancementsEnabled = true;
+    userConfig.sharpeningEnabled = true;
+    RuntimeConfigFile::WriteSetting("video", "sharpening_enabled", "true");
+    userConfig.ambientOcclusion = false;
+    userConfig.globalIllumination = false;
+    userConfig.rayTracedGi = false;
+    userConfig.retainCulledGi = false;
+    userConfig.strongBounce = true;
+    RuntimeConfigFile::WriteSetting("video", "ambient_occlusion", "false");
+    RuntimeConfigFile::WriteSetting("video", "global_illumination", "false");
+    RuntimeConfigFile::WriteSetting("video", "ray_traced_gi", "false");
+    RuntimeConfigFile::WriteSetting("video", "retain_culled_gi", "false");
+    RuntimeConfigFile::WriteSetting("video", "strong_bounce", "true");
+    userConfig.projectedCaustics = false;
+    userConfig.surfaceHighlights = false;
+    userConfig.probeMaterials = false;
+    userConfig.combatLight = false;
+    userConfig.contactShadow = false;
+    userConfig.stageAtmosphere = false;
+    RuntimeConfigFile::WriteSetting("video", "projected_caustics", "false");
+    RuntimeConfigFile::WriteSetting("video", "surface_highlights", "false");
+    RuntimeConfigFile::WriteSetting("video", "probe_materials", "false");
+    RuntimeConfigFile::WriteSetting("video", "combat_light", "false");
+    RuntimeConfigFile::WriteSetting("video", "contact_shadow", "false");
+    RuntimeConfigFile::WriteSetting("video", "stage_atmosphere", "false");
+    userConfig.pixelLighting = false;
+    RuntimeConfigFile::WriteSetting("video", "per_pixel_lighting", "false");
+    userConfig.enhancedBloom = false;
+    RuntimeConfigFile::WriteSetting("video", "enhancements_enabled", "true");
+    RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", "false");
+    userConfig.generateMips = false;
+    RuntimeConfigFile::WriteSetting("video", "generate_mips", "false");
     userConfig.textureReplacements = false;
-    userConfig.textureDumps = false;
-    userConfig.gxWorker = true;
     RuntimeConfigFile::WriteSetting("video", "texture_replacements", "false");
-    RuntimeConfigFile::WriteSetting("video", "texture_dumps", "false");
-    RuntimeConfigFile::WriteSetting("video", "gx_worker", "true");
+    g_graphicsDraft = CurrentGraphicsState();
 }
 
 void ResetAudioPage() {
@@ -910,6 +1088,7 @@ void ResetCurrentPage() {
     switch (g_tab) {
     case kTabDisplay: ResetDisplayPage(); break;
     case kTabGraphics: ResetGraphicsPage(); break;
+    case kTabEnhancements: ResetEnhancementsPage(); break;
     case kTabAudio: ResetAudioPage(); break;
     case kTabControls:
         if (g_controlsPage < controls_menu::kPageCount) controls_menu::ResetPage(g_controlsPage);
@@ -923,6 +1102,7 @@ void ResetCurrentPage() {
 void ResetEverything() {
     ResetDisplayPage();
     ResetGraphicsPage();
+    ResetEnhancementsPage();
     ResetAudioPage();
     controls_menu::ResetAll();
     ResetDevicesPage();
@@ -940,6 +1120,8 @@ bool RestartPending() {
     const LaunchValues& launch = Launch();
     const SystemSettings::Values sys = SystemSettings::Get();
     return sys.msaa != launch.msaa || sys.anisotropy != launch.anisotropy ||
+           RuntimeConfigFile::EnhancementsEnabled() != launch.enhancementsEnabled ||
+           RuntimeConfigFile::GenerateMips() != launch.generateMips ||
            RuntimeConfigFile::TextureReplacements(false) != launch.textureReplacements ||
            RuntimeConfigFile::TextureDumps(false) != launch.textureDumps ||
            (RuntimeConfigFile::Mutable().gxWorker.value_or(launch.gxWorker) != launch.gxWorker) ||
@@ -1105,7 +1287,9 @@ int DetectPreset(float resolution, int msaa, int anisotropy) {
 }
 
 void BuildUpscalingSection(ListView& v) {
-    v.Section("Upscaling");
+    v.Toggle("Upscaler sharpening", &g_graphicsDraft.sharpeningEnabled, true,
+             "Applies the saved sharpening strength for the selected upscaler.",
+             g_graphicsDraft.enhancementsEnabled && g_graphicsDraft.upscaler != 0 ? 0u : game_ui::kRowDisabled);
     AuroraDlssStatus dlssStatus{};
     aurora_get_dlss_status(&dlssStatus);
     const bool dlssAvailable = dlssStatus.state == AURORA_DLSS_AVAILABLE;
@@ -1183,45 +1367,64 @@ void BuildUpscalingSection(ListView& v) {
     }
 }
 
-void BuildGraphicsPage(ListView& v) {
-    DisplayState next = g_graphicsDraft.display;
-    const bool draftUpscalerActive =
-        ((g_graphicsDraft.upscaler == kUpscalerFsr1 || g_graphicsDraft.upscaler == kUpscalerTemporal) && g_graphicsDraft.fsrQuality > 0) ||
-        g_graphicsDraft.upscaler == kUpscalerDlss;
-
-    v.Note("A green star marks the recommended value of a row.");
-    v.Section("Quality");
-    int preset = DetectPreset(next.resolution, g_graphicsDraft.msaa, g_graphicsDraft.anisotropy);
-    if (v.Choice("Graphics preset", &preset, kPresetNames.data(), static_cast<int>(kPresetNames.size()), 1,
-                 "Sets resolution scale, anti-aliasing and anisotropic filtering together. Medium is the stock setup. Anti-aliasing and filtering apply after a restart.",
-                 game_ui::kRowConfirm) & kChanged) {
-        if (preset < static_cast<int>(kPresets.size())) {
-            const QualityPreset& p = kPresets[static_cast<size_t>(preset)];
-            next.resolution = p.resolution;
-            g_graphicsDraft.msaa = p.msaa;
-            g_graphicsDraft.anisotropy = p.anisotropy;
-        }
-    }
+void BuildGraphicsApplyAction(ListView& v) {
     if (v.Action("Apply graphics changes", GraphicsDraftDirty() ? "Apply and confirm" : "Up to date",
-                 "Applies all pending Display and Graphics changes together, then asks once whether to keep or revert them.",
+                 "Applies all pending display, graphics and enhancement changes together, then asks once whether to keep or revert them.",
                  GraphicsDraftDirty() ? game_ui::kRowConfirm : game_ui::kRowDisabled)) {
         ApplyGraphicsDraft();
     }
+}
 
-    int resolutionIndex = 1;
-    static std::array<const char*, kResolutions.size()> resolutionLabels{};
-    for (size_t i = 0; i < kResolutions.size(); ++i) {
-        resolutionLabels[i] = kResolutions[i].label;
-        if (std::fabs(kResolutions[i].scale - next.resolution) < 0.001f) resolutionIndex = static_cast<int>(i);
-    }
-    if (v.Choice("Resolution scale", &resolutionIndex, resolutionLabels.data(), static_cast<int>(resolutionLabels.size()), 1,
-                 draftUpscalerActive
-                     ? "Not used while an upscaler is on: the Upscaling section below sets the internal resolution from the window size."
-                     : "Rendering scale relative to the original 640x480 picture. Native (1x) is the original look. 6x and 8x are capped to 4x while frame interpolation is on.",
-                 game_ui::kRowConfirm | (draftUpscalerActive ? game_ui::kRowDisabled : 0u)) & kChanged) {
-        next.resolution = kResolutions[static_cast<size_t>(resolutionIndex)].scale;
-    }
-
+void BuildEnhancementsPage(ListView& v) {
+    BuildGraphicsApplyAction(v);
+    v.Section("Enhancements");
+    v.Toggle("Enable enhancements", &g_graphicsDraft.enhancementsEnabled, true,
+             "Keeps individual preferences. Bloom and upscaling switch on apply. Texture packs, MSAA and anisotropy switch after restart.", game_ui::kRowRestart);
+    v.Toggle("Ambient occlusion", &g_graphicsDraft.ambientOcclusion, false,
+             "Uses scene depth to shade nearby surface intersections before HUD composition.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Screen-space global illumination", &g_graphicsDraft.globalIllumination, false,
+             "Bounces colored light between visible surfaces before the HUD is drawn.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Ray-traced global illumination", &g_graphicsDraft.rayTracedGi, false,
+             "Traces bounce light through the 3D scene. Takes priority over screen-space GI.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Retain culled scenery for RTGI", &g_graphicsDraft.retainCulledGi, false,
+             "Keeps recently seen scenery in the ray tracer after it moves outside the view.",
+             g_graphicsDraft.enhancementsEnabled && g_graphicsDraft.rayTracedGi ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Dramatic bounce lighting", &g_graphicsDraft.strongBounce, true,
+             "Boosts reflected light and color bleed. Off uses a restrained bounce.",
+             g_graphicsDraft.enhancementsEnabled && (g_graphicsDraft.globalIllumination || g_graphicsDraft.rayTracedGi)
+                 ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Projected caustics", &g_graphicsDraft.projectedCaustics, false,
+             "Projects moving water-light patterns onto opaque, fogged Stage 2 surfaces.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Surface highlights", &g_graphicsDraft.surfaceHighlights, false,
+             "Adds a soft highlight to eligible opaque materials using the original scene lights.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Material reflections", &g_graphicsDraft.probeMaterials, false,
+             "Adds a subtle sheen to lit paint and stronger reflections to authored glossy surfaces.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Combat lighting", &g_graphicsDraft.combatLight, false,
+             "Adds brief local light to shot impacts, charged hits and explosions.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Actor contact shadows", &g_graphicsDraft.contactShadow, false,
+             "Softens contact with the ground beneath one active actor shadow.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Stage atmosphere", &g_graphicsDraft.stageAtmosphere, false,
+             "Adds wavelength-dependent underwater absorption in Stage 2 and distance haze in Stage 5 using the original fog palette.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Per-pixel material lighting", &g_graphicsDraft.pixelLighting, false,
+             "Evaluates authored lights across opaque surfaces with compatible materials and normals.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Enhanced bloom", &g_graphicsDraft.enhancedBloom, false,
+             "Adds a soft halo to bright scene details before eligible HUD draws are composited.",
+             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+    v.Toggle("Custom textures", &g_graphicsDraft.textureReplacements, false,
+             "Loads replacement textures from texture_replacements/ next to Config.toml.", game_ui::kRowRestart);
+    v.Toggle("Generate missing texture mipmaps", &g_graphicsDraft.generateMips, false,
+             "Builds smoother distance levels when a replacement color texture supplies only its base image.",
+             game_ui::kRowRestart | (g_graphicsDraft.textureReplacements ? 0u : game_ui::kRowDisabled));
     static constexpr const char* kMsaaLabels[] = {"Off", "4x"};
     int msaaIndex = 0;
     for (size_t i = 0; i < SystemSettings::kMsaaChoices.size(); ++i) {
@@ -1243,6 +1446,44 @@ void BuildGraphicsPage(ListView& v) {
     }
 
     BuildUpscalingSection(v);
+}
+
+void BuildGraphicsPage(ListView& v) {
+    DisplayState next = g_graphicsDraft.display;
+    const bool draftUpscalerActive =
+        g_graphicsDraft.enhancementsEnabled && (((g_graphicsDraft.upscaler == kUpscalerFsr1 || g_graphicsDraft.upscaler == kUpscalerTemporal) && g_graphicsDraft.fsrQuality > 0) ||
+        g_graphicsDraft.upscaler == kUpscalerDlss);
+
+    v.Note("A green star marks the recommended value of a row.");
+    v.Section("Quality");
+    int preset = DetectPreset(next.resolution, g_graphicsDraft.msaa, g_graphicsDraft.anisotropy);
+    if (v.Choice("Graphics preset", &preset, kPresetNames.data(), static_cast<int>(kPresetNames.size()), 1,
+                 "Sets resolution scale, anti-aliasing and anisotropic filtering together. Medium is the stock setup. Anti-aliasing and filtering apply after a restart.",
+                 game_ui::kRowConfirm) & kChanged) {
+        if (preset < static_cast<int>(kPresets.size())) {
+            const QualityPreset& p = kPresets[static_cast<size_t>(preset)];
+            next.resolution = p.resolution;
+            g_graphicsDraft.msaa = p.msaa;
+            g_graphicsDraft.anisotropy = p.anisotropy;
+        }
+    }
+    BuildGraphicsApplyAction(v);
+
+    int resolutionIndex = 1;
+    static std::array<const char*, kResolutions.size()> resolutionLabels{};
+    for (size_t i = 0; i < kResolutions.size(); ++i) {
+        resolutionLabels[i] = kResolutions[i].label;
+        if (std::fabs(kResolutions[i].scale - next.resolution) < 0.001f) resolutionIndex = static_cast<int>(i);
+    }
+    if (v.Choice("Resolution scale", &resolutionIndex, resolutionLabels.data(), static_cast<int>(resolutionLabels.size()), 1,
+                 draftUpscalerActive
+                     ? "Not used while an upscaler is on: Upscaler on the Enhancements tab sets the internal resolution from the window size."
+                     : "Rendering scale relative to the original 640x480 picture. Native (1x) is the original look. 6x and 8x are capped to 4x while frame interpolation is on.",
+                 game_ui::kRowConfirm | (draftUpscalerActive ? game_ui::kRowDisabled : 0u)) & kChanged) {
+        next.resolution = kResolutions[static_cast<size_t>(resolutionIndex)].scale;
+    }
+
+
 
     // The built-in transform-based interpolation; it is not AMD's optical-flow FSR 3 Frame Generation (docs/FSR-NOTES.md).
     v.Section("Frame generation");
@@ -1278,8 +1519,6 @@ void BuildGraphicsPage(ListView& v) {
              "Avoids stutter while pipelines build; some effects may flicker on first use.", 0, "On");
     v.Toggle("Run GX on its own thread", &g_graphicsDraft.gxWorker, true,
              "Processes graphics commands on a separate thread.", game_ui::kRowRestart, "On");
-    v.Toggle("Custom textures", &g_graphicsDraft.textureReplacements, false,
-             "Loads replacement textures from texture_replacements/ next to Config.toml.", game_ui::kRowRestart);
     v.Toggle("Dump unmatched textures", &g_graphicsDraft.textureDumps, false,
              "Writes every texture without a replacement to the cache folder (needs custom textures).",
              game_ui::kRowRestart | (g_graphicsDraft.textureReplacements ? 0u : game_ui::kRowDisabled));
@@ -1503,6 +1742,14 @@ void DrawTabIcon(ImDrawList* dl, int tab, ImVec2 c, float s, ImU32 colour, float
         dl->AddLine(ImVec2(c.x, c.y + s * 0.24f), ImVec2(c.x, c.y + s * 0.42f), col, t);
         break;
     }
+    case kTabEnhancements: {
+        const ImVec2 points[] = {{c.x, c.y - s * 0.5f}, {c.x + s * 0.12f, c.y - s * 0.12f},
+                                {c.x + s * 0.5f, c.y}, {c.x + s * 0.12f, c.y + s * 0.12f},
+                                {c.x, c.y + s * 0.5f}, {c.x - s * 0.12f, c.y + s * 0.12f},
+                                {c.x - s * 0.5f, c.y}, {c.x - s * 0.12f, c.y - s * 0.12f}};
+        dl->AddPolyline(points, 8, col, ImDrawFlags_Closed, t);
+        break;
+    }
     case kTabGraphics: {
         const float r = s * 0.5f;
         ImVec2 pts[6];
@@ -1686,6 +1933,7 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
     switch (g_tab) {
     case kTabDisplay: BuildDisplayPage(v); break;
     case kTabGraphics: BuildGraphicsPage(v); break;
+    case kTabEnhancements: BuildEnhancementsPage(v); break;
     case kTabAudio: BuildAudioPage(v); break;
     case kTabControls: BuildControlsPage(v); break;
     case kTabSystem: BuildSystemPage(v); break;
@@ -1696,7 +1944,7 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
     if (live && in.apply && !AnyModalActive()) {
         // Consume this edge so opening the display prompt cannot also accept it.
         in.apply = false;
-        if (g_tab == kTabDisplay || g_tab == kTabGraphics) {
+        if (g_tab == kTabDisplay || g_tab == kTabGraphics || g_tab == kTabEnhancements) {
             ApplyGraphicsDraft();
         } else {
             // These pages apply edits live; explicitly flush their settings.
@@ -2269,6 +2517,7 @@ void AdvancePresentedFrame() noexcept {
         break;
     }
 }
+
 
 void OpenFromGame() noexcept {
     g_gameOpenFlag.store(true, std::memory_order_release);

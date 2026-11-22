@@ -1696,12 +1696,13 @@ int RuntimeMain(int argc, char** argv) {
         // once during aurora_initialize, so both knobs only take effect on the next launch.
         // Dumps name each unmatched texture the way its replacement would have to be named,
         // which is only useful while the index is live - hence the conjunction.
-        auroraConfig.allowTextureReplacements = RuntimeConfigFile::TextureReplacements(false);
+        auroraConfig.generateReplacementMips = RuntimeConfigFile::GenerateMips();
+        auroraConfig.allowTextureReplacements = RuntimeConfigFile::EnhancementsEnabled() && RuntimeConfigFile::TextureReplacements(false);
         auroraConfig.allowTextureDumps = auroraConfig.allowTextureReplacements &&
                                          RuntimeConfigFile::TextureDumps(false);
         auroraConfig.vsync = RuntimeConfigFile::Vsync();
-        auroraConfig.msaa = static_cast<uint32_t>(SystemSettings::Get().msaa);
-        auroraConfig.maxTextureAnisotropy = static_cast<uint16_t>(SystemSettings::Get().anisotropy);
+        auroraConfig.msaa = static_cast<uint32_t>(RuntimeConfigFile::EnhancementsEnabled() ? SystemSettings::Get().msaa : 1);
+        auroraConfig.maxTextureAnisotropy = static_cast<uint16_t>(RuntimeConfigFile::EnhancementsEnabled() ? SystemSettings::Get().anisotropy : 1);
         auroraConfig.desiredBackend = BACKEND_AUTO;
         const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier();
         ConfigureDynamicAspect(configWidescreen, forceAspect,

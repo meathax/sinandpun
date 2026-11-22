@@ -50,14 +50,21 @@ TextureWithSampler g_normalBuffer;
 
 // EFB -> XFB copy pipeline
 static wgpu::BindGroupLayout g_CopyBindGroupLayout;
-wgpu::RenderPipeline g_CopyPipeline;
+wgpu::RenderPipeline g_CopyPipeline, g_GiRestorePipeline;
 wgpu::RenderPipeline g_CopyDimmedPipeline;
 wgpu::RenderPipeline g_CopyPremultipliedAlphaPipeline;
 wgpu::BindGroup g_CopyBindGroup;
 static std::atomic<AuroraSampler> g_Resampler{SAMPLER_BILINEAR};
 static wgpu::BindGroupLayout g_ResampleBindGroupLayout;
-static wgpu::RenderPipeline g_ResamplePipeline;
+static wgpu::RenderPipeline g_ResamplePipeline, g_BouncePipeline;
 static wgpu::Buffer g_ResampleUniformBuffer;
+static TextureWithSampler g_occlusionFrameBuffer;
+static std::array<TextureWithSampler, 6> g_giTargets;
+static std::array<wgpu::Buffer, 6> g_giUniforms;
+static wgpu::Buffer g_giNodes, g_giTriangles;
+static wgpu::Buffer g_OcclusionUniformBuffer;
+static TextureWithSampler g_bloomFrameBuffer;
+static wgpu::Buffer g_BloomUniformBuffer;
 static TextureWithSampler g_resampledFrameBuffer;
 
 static wgpu::Adapter g_adapter;
@@ -99,6 +106,9 @@ struct ResampleUniformBlock {
   uint32_t samplerMode = 0;
   float frameWidth = 0.f;
   float frameHeight = 0.f;
+  float bounceGain = 1.25f;
+  alignas(16) std::array<float, 4> projection{};
+  std::array<float, 2> screenCenter{};
 };
 
 constexpr std::string_view resampleShaderSource = R"(
@@ -106,6 +116,9 @@ struct Uniforms {
     sampler_mode: u32,
     frame_width: f32,
     frame_height: f32,
+    bounce_gain: f32,
+    projection: vec4f,
+    screen_center: vec2f,
 };
 
 struct VertexOutput {
@@ -116,6 +129,12 @@ struct VertexOutput {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var s: sampler;
 @group(0) @binding(2) var t: texture_2d<f32>;
+@group(0) @binding(3) var scene_depth: texture_2d<f32>;
+@group(0) @binding(4) var irradiance: texture_2d<f32>;
+struct BvhNode { low: vec3f, escape: u32, high: vec3f, first: u32, count: u32 };
+struct SceneTriangle { a: vec3f, red: f32, b: vec3f, green: f32, c: vec3f, blue: f32 };
+@group(0) @binding(5) var<storage, read> bvh: array<BvhNode>;
+@group(0) @binding(6) var<storage, read> triangles: array<SceneTriangle>;
 
 var<private> pos: array<vec2<f32>, 3> = array<vec2<f32>, 3>(
     vec2(-1.0, 1.0),
@@ -185,14 +204,270 @@ fn sample_area(frag_position: vec4<f32>) -> vec4<f32> {
 
 // END AREA SAMPLER REGION
 
+// Reconstruct positive eye distance from the reversed GX perspective projection.
+fn eye_depth(p: vec2i) -> f32 {
+    let raw = textureLoad(scene_depth, p, 0).r;
+    return -uniforms.projection.w / max(raw - uniforms.projection.z, 1e-7);
+}
+fn eye_position(p: vec2i, dim: vec2i) -> vec3f {
+    let ndc = (vec2f(p)+0.5)/vec2f(dim)*2.0-1.0-uniforms.screen_center;
+    let z = eye_depth(p);
+    return z * vec3f(ndc.x/uniforms.projection.x, -ndc.y/uniforms.projection.y, -1.0);
+}
+fn receiver_normal(p: vec2i, dim: vec2i, center: vec3f) -> vec3f {
+    let hi = dim-1;
+    let l = center-eye_position(clamp(p-vec2i(1,0),vec2i(0),hi),dim);
+    let r = eye_position(clamp(p+vec2i(1,0),vec2i(0),hi),dim)-center;
+    let u = center-eye_position(clamp(p-vec2i(0,1),vec2i(0),hi),dim);
+    let d = eye_position(clamp(p+vec2i(0,1),vec2i(0),hi),dim)-center;
+    let n = cross(select(d,u,abs(u.z)<abs(d.z)), select(r,l,abs(l.z)<abs(r.z)));
+    return n * inverseSqrt(max(dot(n,n),1e-18));
+}
+
+fn triangle_hit(o: vec3f, direction: vec3f, tri: SceneTriangle) -> f32 {
+    let ab = tri.b-tri.a;
+    let ac = tri.c-tri.a;
+    let p = cross(direction,ac);
+    let determinant = dot(ab,p);
+    if (abs(determinant)<1e-7) { return -1.0; }
+    let fromA = o-tri.a;
+    let u = dot(fromA,p)/determinant;
+    let q = cross(fromA,ab);
+    let v = dot(direction,q)/determinant;
+    if (min(u,v)<0.0 || u+v>1.0) { return -1.0; }
+    return dot(ac,q)/determinant;
+}
+
+fn trace_bounce(origin: vec3f, direction: vec3f, reach: f32, dim: vec2i) -> vec4f {
+    let inverse = 1.0/select(direction,vec3f(1e-7),abs(direction)<vec3f(1e-7));
+    var best = reach;
+    var hit = 0xffffffffu;
+    var nodeId = 0u;
+    let end = bvh[0].escape;
+    for (var visited=0u; nodeId<end && visited<96u; visited++) {
+        let node = bvh[nodeId];
+        let lower = (node.low-origin)*inverse;
+        let upper = (node.high-origin)*inverse;
+        let start = min(lower,upper);
+        let stop = max(lower,upper);
+        if (max(0.0,max(start.x,max(start.y,start.z))) > min(best,min(stop.x,min(stop.y,stop.z)))) {
+            nodeId = node.escape;
+        } else {
+            for (var j=0u; j<node.count; j++) {
+                let id = node.first+j;
+                let t = triangle_hit(origin,direction,triangles[id]);
+                if (t > 0.0001 && t < best) {
+                    best = t;
+                    hit = id;
+                }
+            }
+            nodeId += 1u;
+        }
+    }
+    if (hit == 0xffffffffu) { return vec4f(0); }
+    let tri = triangles[hit];
+    let worldHit = origin+direction*best;
+    // Off-screen or occluded surfaces retain their own material radiance.
+    let normal = normalize(cross(tri.b-tri.a,tri.c-tri.a));
+    let facing = abs(dot(normal,direction));
+    var light = vec3f(tri.red,tri.green,tri.blue) * (0.28+0.20*abs(normal.y));
+    let z = -worldHit.z;
+    let ndc = vec2f(worldHit.x,-worldHit.y)*uniforms.projection.xy/max(z,1e-6)+uniforms.screen_center;
+    if (z>0.0 && all(abs(ndc)<vec2f(1))) {
+        let pixel = clamp(vec2i((ndc*0.5+0.5)*vec2f(dim)),vec2i(0),dim-1);
+        if (abs(eye_depth(pixel)-z) < 0.025*z) {
+            let sample = textureLoad(t,pixel,0).rgb;
+            // Bright, rapidly animated GX effects can overlap an opaque hit.
+            // Limit their diffuse energy so a single tap cannot paint a flash.
+            light = min(sample, vec3f(0.68));
+        }
+    }
+    let weight = facing * (1.0-smoothstep(0.04,1.0,best/reach));
+    return vec4f(light*light*weight,weight);
+}
+
+fn gather_rays(p: vec2i, dim: vec2i) -> vec4f {
+    let center = eye_position(p,dim);
+    let normal = receiver_normal(p,dim,center);
+    if (dot(normal,normal)<0.5) { return vec4f(0); }
+    let tangent = normalize(cross(select(vec3f(0,1,0),vec3f(1,0,0),abs(normal.y)>0.90),normal));
+    let bitangent = cross(normal,tangent);
+    // Stable per-pixel rotation decorrelates neighboring ray fans without
+    // introducing temporal noise or repeating diagonal patterns.
+    var seed = u32(p.x/4)*1973u + u32(p.y/4)*9277u + 89173u;
+    seed = (seed ^ (seed >> 16u))*0x7feb352du;
+    seed = (seed ^ (seed >> 15u))*0x846ca68bu;
+    let angle = f32((seed ^ (seed >> 16u)) & 65535u)*(6.2831853/65536.0);
+    let lateral = cos(angle)*tangent+sin(angle)*bitangent;
+    let origin = center+normal*max(0.018,-center.z*0.0016);
+    let reach = clamp(-center.z*0.78,5.0,5000.0);
+    var light = trace_bounce(origin,0.88*lateral+0.47497*normal,reach,dim);
+    light += trace_bounce(origin,-0.88*lateral+0.47497*normal,reach,dim);
+    return vec4f(sqrt(clamp(light.rgb*0.32,vec3f(0),vec3f(1))),light.a*0.5);
+}
+
+// Each screen-space slice integrates only newly visible solid angle as it moves
+// outward. Samples behind an already encountered horizon contribute no light.
+fn gather_bounce(p: vec2i, dim: vec2i) -> vec4f {
+    let center = eye_position(p,dim);
+    let normal = receiver_normal(p,dim,center);
+    let dirs = array<vec2f,8>(vec2f(1,0),vec2f(0.707,0.707),vec2f(0,1),vec2f(-0.707,0.707),
+                               vec2f(-1,0),vec2f(-0.707,-0.707),vec2f(0,-1),vec2f(0.707,-0.707));
+    // Only local geometry contributes to screen-space GI. Long screen-space
+    // offsets copy foreground silhouettes onto unrelated receivers.
+    let radius = clamp(0.045*f32(dim.y),8.0,44.0);
+    var light = vec3f(0);
+    var blocked = 0.0;
+    for (var i=0; i<8; i++) {
+        var horizon = 0.04;
+        for (var j=1; j<=5; j++) {
+            let q = p+vec2i(round(dirs[i]*max(2.0,radius*f32(j*j)/25.0)));
+            if (any(q<vec2i(0)) || any(q>=dim)) { break; }
+            let delta = eye_position(q,dim)-center;
+            let dist = length(delta);
+            let relativeDistance = dist/max(0.001,-center.z);
+            let reach = 1.0-smoothstep(0.025,0.14,relativeDistance);
+            let elevation = dot(normal,delta)/max(dist,1e-6);
+            let visible = max(0.0,elevation-horizon)*reach;
+            horizon = max(horizon,mix(horizon,elevation,reach));
+            // Prefilter the emitter so a character or muzzle flash cannot
+            // appear as a translated image in the indirect lighting.
+            let uv = (vec2f(q)+0.5)/vec2f(dim);
+            let radiance = min(textureSampleLevel(irradiance,s,uv,0.0).rgb,vec3f(0.63));
+            light += visible*radiance*radiance;
+        }
+        blocked += max(0.0,horizon-0.04);
+    }
+    // Store square-root encoded diffuse irradiance for precision in an 8-bit target.
+    return vec4f(sqrt(clamp(light/8.0,vec3f(0),vec3f(1))), blocked/8.0);
+}
+@fragment
+fn fs_bounce(in: VertexOutput) -> @location(0) vec4<f32> {
+    if (uniforms.sampler_mode == 8u) {
+        let dim = vec2i(textureDimensions(scene_depth));
+        let p = min(vec2i(in.position.xy)*4+2,dim-1);
+        if (textureLoad(scene_depth,p,0).r <= 1e-7) { return vec4f(0); }
+        return gather_rays(p,dim);
+    }
+    if (uniforms.sampler_mode == 10u) {
+        let dim = vec2i(textureDimensions(scene_depth));
+        let reduced = vec2i(textureDimensions(irradiance));
+        let pixel = min(vec2i(in.position.xy)*4+2,dim-1);
+        let raw = textureLoad(scene_depth,pixel,0).r;
+        if (raw <= 1e-7) { return vec4f(0); }
+        let depth = eye_depth(pixel);
+        var sum = vec4f(0);
+        var total = 0.0;
+        for (var y=-3;y<=3;y++) { for (var x=-3;x<=3;x++) {
+            let offset = vec2i(x,y);
+            let q = clamp(vec2i(in.position.xy)+offset,vec2i(0),reduced-1);
+            let neighbor = min(q*4+2,dim-1);
+            let error = abs(eye_depth(neighbor)-depth)/max(depth,1e-6);
+            let w = exp2(-0.23*f32(x*x+y*y)) / (1.0+1700.0*error*error);
+            let tap = textureLoad(irradiance,q,0);
+            sum += w*vec4f(tap.rgb*tap.rgb,tap.a);
+            total += w;
+        }}
+        let blurred = sum/max(total,0.00001);
+        return vec4f(sqrt(blurred.rgb),blurred.a);
+    }
+    if (uniforms.sampler_mode == 7u) {
+        // Filter a broad emitter footprint so recognizable silhouettes cannot be
+        // projected across the frame as indirect light. Alpha stores log eye depth.
+        let dim = vec2i(textureDimensions(scene_depth));
+        let footprint = vec2f(dim)/vec2f(uniforms.frame_width,uniforms.frame_height);
+        let start = floor(in.position.xy)*footprint;
+        var average = vec4f(0);
+        for (var y=0;y<4;y++) { for (var x=0;x<4;x++) {
+            let p = clamp(vec2i(start+(vec2f(vec2i(x,y))+0.5)*footprint/4.0),vec2i(0),dim-1);
+            let radiance = textureLoad(t,p,0).rgb;
+            let logZ = clamp((log2(max(eye_depth(p),0.004))+8.0)/32.0,0.0,1.0);
+            average += vec4f(radiance*radiance,logZ);
+        }}
+        return vec4f(sqrt(average.rgb/16.0),average.a/16.0);
+    }
+    if (uniforms.sampler_mode == 5u) {
+        let dim = vec2i(textureDimensions(scene_depth));
+        let p = min(vec2i(in.position.xy)*2+1,dim-1);
+        if (textureLoad(scene_depth,p,0).r <= 1e-7) { return vec4f(0.0); }
+        return gather_bounce(p,dim);
+    }
+    if (uniforms.sampler_mode == 6u || uniforms.sampler_mode == 9u) {
+        let p = vec2i(in.position.xy);
+        let base = sample_by_pixel(p);
+        let dim = vec2i(textureDimensions(scene_depth));
+        if (textureLoad(scene_depth,p,0).r <= 1e-7) { return base; }
+        let rt = uniforms.sampler_mode == 9u;
+        let stride = select(2,4,rt);
+        let grid = (vec2f(p)-f32(stride/2))/f32(stride);
+        let corner = vec2i(floor(grid));
+        let z = eye_depth(p);
+        var sum = vec3f(0);
+        var total = 0.0;
+        var blocked = 0.0;
+        for (var y=0;y<2;y++) { for (var x=0;x<2;x++) {
+            let q = clamp(corner+vec2i(x,y),vec2i(0),vec2i(textureDimensions(irradiance))-1);
+            let error = abs(eye_depth(min(q*stride+stride/2,dim-1))-z)/max(z,1e-6);
+            let offset = vec2f(vec2i(x,y))-fract(grid);
+            let spatial = 1.0-abs(offset);
+            let windowWeight = spatial.x*spatial.y;
+            let w = windowWeight/(1.0+40000.0*error*error);
+            let tap = textureLoad(irradiance,q,0);
+            sum += w*tap.rgb*tap.rgb;
+            blocked += w*tap.a;
+            total += w;
+        }}
+        let indirect = sum/max(total,0.002);
+        let energy = min(indirect,vec3f(select(0.035,0.055,rt)));
+        let reflected = uniforms.bounce_gain * energy * sqrt(clamp(base.rgb,vec3f(0),vec3f(1)));
+        // Replace part of the existing ambient fill where geometry occludes it.
+        let ambient = 1.0 - select(0.15,0.11,rt)*clamp(blocked/max(total,0.002),0.0,1.0);
+        let lit = sqrt(ambient*base.rgb*base.rgb + reflected*(1.0-base.rgb*base.rgb));
+        return vec4f(min(lit,vec3f(1.0)),base.a);
+    }
+    return vec4f(0);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if (uniforms.sampler_mode == 4u) {
+        let p = vec2i(in.position.xy);
+        let base = sample_by_pixel(p);
+        let z = textureLoad(scene_depth, p, 0).r;
+        let limit = vec2i(textureDimensions(scene_depth)) - 1;
+        let r = max(1, i32(round(uniforms.frame_height / 180.0)));
+        let dirs = array<vec2i, 4>(vec2i(r,0),vec2i(0,r),vec2i(r,r),vec2i(r,-r));
+        var occlusion = 0.0;
+        for (var i = 0; i < 4; i++) {
+            let za = textureLoad(scene_depth, clamp(p + dirs[i], vec2i(0), limit), 0).r;
+            let zb = textureLoad(scene_depth, clamp(p - dirs[i], vec2i(0), limit), 0).r;
+            // Opposed taps cancel a planar depth slope. Large jumps indicate disjoint silhouettes.
+            let delta = (vec2f(za, zb) - z) / max(z, 0.0001);
+            let proximity = 1.0 - smoothstep(0.08, 0.25, max(abs(delta.x), abs(delta.y)));
+            occlusion += smoothstep(0.002, 0.04, delta.x + delta.y) * proximity;
+        }
+        return vec4f(base.rgb * (1.0 - 0.065 * occlusion), base.a);
+    }
+    if (uniforms.sampler_mode == 3u) {
+        let center = vec2i(in.position.xy);
+        let base = sample_by_pixel(center);
+        let radius = max(1, i32(round(uniforms.frame_height / 360.0)));
+        var light = vec3f(0.0);
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                let tap = sample_by_pixel(center + vec2i(x, y) * radius).rgb;
+                let peak = max(tap.r, max(tap.g, tap.b));
+                light += tap * smoothstep(0.72, 1.0, peak) * f32((2 - abs(x)) * (2 - abs(y)));
+            }
+        }
+        return vec4f(base.rgb + (1.0 - base.rgb) * light * (0.25 / 16.0), base.a);
+    }
     if (uniforms.sampler_mode == 2u) {
         let output = vec2<u32>(vec2f(uniforms.frame_width, uniforms.frame_height));
         let replication = output / textureDimensions(t);
         return vec4(sample_by_pixel(vec2<i32>(vec2<u32>(in.position.xy) / replication)).rgb, 1.0);
     }
-    var color = textureSample(t, s, in.uv);
+    var color = textureSampleLevel(t, s, in.uv, 0.0);
     if (uniforms.sampler_mode == 1u) {
         color = sample_area(in.position);
     }
@@ -584,7 +859,7 @@ fn fs_premultiplied_alpha(in: VertexOutput) -> @location(0) vec4<f32> {
   auto pipelineLayout = g_device.CreatePipelineLayout(&layoutDescriptor);
 
   const auto make_copy_pipeline = [&](const char* label, const char* fragmentEntryPoint,
-                                      const wgpu::BlendState* blend) {
+                                      const wgpu::BlendState* blend, unsigned samples = 1) {
     const std::array colorTargets{wgpu::ColorTargetState{
         .format = g_graphicsConfig.surfaceConfiguration.format,
         .blend = blend,
@@ -610,7 +885,7 @@ fn fs_premultiplied_alpha(in: VertexOutput) -> @location(0) vec4<f32> {
             },
         .multisample =
             wgpu::MultisampleState{
-                .count = 1,
+                .count = samples,
                 .mask = UINT32_MAX,
             },
         .fragment = &fragmentState,
@@ -618,6 +893,7 @@ fn fs_premultiplied_alpha(in: VertexOutput) -> @location(0) vec4<f32> {
     return g_device.CreateRenderPipeline(&pipelineDescriptor);
   };
   g_CopyPipeline = make_copy_pipeline("XFB Copy Pipeline", "fs_opaque", nullptr);
+  g_GiRestorePipeline = make_copy_pipeline("GI restore", "fs_premultiplied_alpha", nullptr, g_graphicsConfig.msaaSamples);
   const wgpu::BlendState dimmingBlend{
 	.color = {
 		.operation = wgpu::BlendOperation::Add,
@@ -694,10 +970,25 @@ void create_resample_pipeline() {
                   .viewDimension = wgpu::TextureViewDimension::e2D,
               },
       },
+      wgpu::BindGroupLayoutEntry{
+          .binding = 3,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .texture = wgpu::TextureBindingLayout{
+              .sampleType = wgpu::TextureSampleType::UnfilterableFloat,
+              .viewDimension = wgpu::TextureViewDimension::e2D,
+          },
+      },
   };
+  auto resampleEntries = std::vector<wgpu::BindGroupLayoutEntry>(bindGroupLayoutEntries.begin(), bindGroupLayoutEntries.end());
+  auto indirect = resampleEntries.back();
+  indirect.binding = 4;
+  indirect.texture.sampleType = wgpu::TextureSampleType::Float;
+  resampleEntries.push_back(indirect);
+  for (unsigned binding : {5u, 6u})
+    resampleEntries.push_back({.binding=binding, .visibility=wgpu::ShaderStage::Fragment,
+                              .buffer={.type=wgpu::BufferBindingType::ReadOnlyStorage}});
   const wgpu::BindGroupLayoutDescriptor bindGroupLayoutDescriptor{
-      .entryCount = bindGroupLayoutEntries.size(),
-      .entries = bindGroupLayoutEntries.data(),
+      .entryCount = resampleEntries.size(), .entries = resampleEntries.data(),
   };
   g_ResampleBindGroupLayout = g_device.CreateBindGroupLayout(&bindGroupLayoutDescriptor);
   const wgpu::PipelineLayoutDescriptor layoutDescriptor{
@@ -725,6 +1016,12 @@ void create_resample_pipeline() {
       .fragment = &fragmentState,
   };
   g_ResamplePipeline = g_device.CreateRenderPipeline(&pipelineDescriptor);
+  auto bounceFragment = fragmentState;
+  bounceFragment.entryPoint = "fs_bounce";
+  auto bounceDescriptor = pipelineDescriptor;
+  bounceDescriptor.label = "Screen-space diffuse bounce";
+  bounceDescriptor.fragment = &bounceFragment;
+  g_BouncePipeline = g_device.CreateRenderPipeline(&bounceDescriptor);
 
   const wgpu::BufferDescriptor uniformBufferDescriptor{
       .label = "Present Resample Uniform Buffer",
@@ -732,6 +1029,14 @@ void create_resample_pipeline() {
       .size = AURORA_ALIGN(sizeof(ResampleUniformBlock), 16),
   };
   g_ResampleUniformBuffer = g_device.CreateBuffer(&uniformBufferDescriptor);
+  g_BloomUniformBuffer = g_device.CreateBuffer(&uniformBufferDescriptor);
+  g_OcclusionUniformBuffer = g_device.CreateBuffer(&uniformBufferDescriptor);
+  for (auto& buffer : g_giUniforms) buffer = g_device.CreateBuffer(&uniformBufferDescriptor);
+  const auto storage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Storage;
+  const wgpu::BufferDescriptor nodeBuffer{.usage=storage, .size=sizeof(rtgi::Node)*rtgi::TriangleLimit};
+  g_giNodes = g_device.CreateBuffer(&nodeBuffer);
+  const wgpu::BufferDescriptor triangleBuffer{.usage=storage, .size=sizeof(rtgi::Triangle)*rtgi::TriangleLimit};
+  g_giTriangles = g_device.CreateBuffer(&triangleBuffer);
 }
 
 wgpu::BindGroup create_copy_bind_group(const TextureWithSampler& source) {
@@ -754,12 +1059,17 @@ wgpu::BindGroup create_copy_bind_group(const TextureWithSampler& source) {
 }
 
 const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
-                                                  const TextureWithSampler& source, AuroraSampler sampler) {
+                                                  const TextureWithSampler& source, AuroraSampler sampler, bool bloom, const wgpu::TextureView& depth, BouncePass bounce, std::array<float, 4> projection,
+                                                  std::span<const rtgi::Triangle> triangles, std::span<const rtgi::Node> nodes,
+                                                  std::array<float, 2> screenCenter, bool independentGeometry) {
+  const auto giPass = static_cast<unsigned>(bounce);
+  auto& target = giPass ? g_giTargets[giPass-1] : depth ? g_occlusionFrameBuffer : bloom ? g_bloomFrameBuffer : g_resampledFrameBuffer;
+  auto& buffer = giPass ? g_giUniforms[giPass-1] : depth ? g_OcclusionUniformBuffer : bloom ? g_BloomUniformBuffer : g_ResampleUniformBuffer;
   const uint32_t width = viewport_extent(viewport.width);
   const uint32_t height = viewport_extent(viewport.height);
-  if (!g_resampledFrameBuffer.view || g_resampledFrameBuffer.size.width != width ||
-      g_resampledFrameBuffer.size.height != height || g_resampledFrameBuffer.format != source.format) {
-    g_resampledFrameBuffer = create_render_texture(width, height, false);
+  if (!target.view || target.size.width != width ||
+      target.size.height != height || target.format != g_graphicsConfig.surfaceConfiguration.format) {
+    target = create_render_texture(width, height, false);
   }
 
   const bool integer = sampler == SAMPLER_INTEGER &&
@@ -767,17 +1077,33 @@ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& en
       gfx::pixel_perfect::integer_scale(source.size.height, height) &&
       width / source.size.width == height / source.size.height;
   const ResampleUniformBlock uniform{
-      .samplerMode = integer ? 2u : sampler_mode(sampler),
+      .samplerMode = giPass ? 4u+giPass : depth ? 4u : bloom ? 3u : integer ? 2u : sampler_mode(sampler),
       .frameWidth = static_cast<float>(width),
       .frameHeight = static_cast<float>(height),
+      .bounceGain = (bounce == BouncePass::Composite || bounce == BouncePass::RayComposite) && aurora_strong_bounce_enabled() ? 3.2f : 1.25f,
+      .projection = projection,
+      .screenCenter = screenCenter,
   };
   AURORA_ASSERT(gfx::render_worker::is_worker_thread(), "Present resample queue write must run on the render worker");
-  g_queue.WriteBuffer(g_ResampleUniformBuffer, 0, &uniform, sizeof(uniform));
+  g_queue.WriteBuffer(buffer, 0, &uniform, sizeof(uniform));
+  auto nodeBuffer = g_giNodes;
+  auto triangleBuffer = g_giTriangles;
+  if (bounce == BouncePass::RayGather) {
+    if (independentGeometry) {
+      const auto usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Storage;
+      const wgpu::BufferDescriptor nodeDesc{.usage=usage, .size=nodes.size_bytes()};
+      const wgpu::BufferDescriptor triangleDesc{.usage=usage, .size=triangles.size_bytes()};
+      nodeBuffer = g_device.CreateBuffer(&nodeDesc);
+      triangleBuffer = g_device.CreateBuffer(&triangleDesc);
+    }
+    g_queue.WriteBuffer(nodeBuffer, 0, nodes.data(), nodes.size_bytes());
+    g_queue.WriteBuffer(triangleBuffer, 0, triangles.data(), triangles.size_bytes());
+  }
 
   const std::array bindGroupEntries{
       wgpu::BindGroupEntry{
           .binding = 0,
-          .buffer = g_ResampleUniformBuffer,
+          .buffer = buffer,
           .size = AURORA_ALIGN(sizeof(ResampleUniformBlock), 16),
       },
       wgpu::BindGroupEntry{
@@ -788,6 +1114,12 @@ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& en
           .binding = 2,
           .textureView = source.view,
       },
+      wgpu::BindGroupEntry{.binding = 3, .textureView = depth ? depth : source.view},
+      wgpu::BindGroupEntry{.binding = 4, .textureView = bounce == BouncePass::RayComposite ? g_giTargets[5].view :
+                         bounce == BouncePass::RayFilter ? g_giTargets[3].view :
+                         giPass == 2 ? g_giTargets[0].view : giPass == 1 ? g_giTargets[2].view : source.view},
+      wgpu::BindGroupEntry{.binding=5, .buffer=nodeBuffer},
+      wgpu::BindGroupEntry{.binding=6, .buffer=triangleBuffer},
   };
   const wgpu::BindGroupDescriptor bindGroupDescriptor{
       .layout = g_ResampleBindGroupLayout,
@@ -798,7 +1130,7 @@ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& en
 
   const std::array attachments{
       wgpu::RenderPassColorAttachment{
-          .view = g_resampledFrameBuffer.view,
+          .view = target.view,
           .loadOp = wgpu::LoadOp::Clear,
           .storeOp = wgpu::StoreOp::Store,
       },
@@ -807,16 +1139,16 @@ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& en
       .label = "Present resample render pass",
       .colorAttachmentCount = attachments.size(),
       .colorAttachments = attachments.data(),
-      .timestampWrites = gpu_prof::pass_writes("Present resample"),
+      .timestampWrites = gpu_prof::pass_writes(bounce == BouncePass::RayFilter ? "RTGI filter" : bounce == BouncePass::RayGather ? "RTGI trace" : bounce == BouncePass::RayComposite ? "RTGI composite" : giPass == 3 ? "GI radiance" : giPass == 1 ? "GI gather" : giPass == 2 ? "GI composite" : depth ? "Ambient occlusion" : bloom ? "Enhanced bloom" : "Present resample"),
   };
   const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
-  pass.SetPipeline(g_ResamplePipeline);
+  pass.SetPipeline(giPass ? g_BouncePipeline : g_ResamplePipeline);
   pass.SetBindGroup(0, bindGroup, 0, nullptr);
   pass.SetViewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height), 0.f, 1.f);
   pass.Draw(3);
   pass.End();
 
-  return g_resampledFrameBuffer;
+  return target;
 }
 
 static wgpu::BackendType to_wgpu_backend(AuroraBackend backend) {
@@ -1248,12 +1580,22 @@ void shutdown() {
   gpu_prof::shutdown();
   g_CopyBindGroupLayout = {};
   g_CopyPipeline = {};
+  g_GiRestorePipeline = {};
   g_CopyDimmedPipeline = {};
   g_CopyPremultipliedAlphaPipeline = {};
   g_CopyBindGroup = {};
   g_ResampleBindGroupLayout = {};
   g_ResamplePipeline = {};
+  g_BouncePipeline = {};
   g_ResampleUniformBuffer = {};
+  g_giTargets = {};
+  g_giUniforms = {};
+  g_giNodes = {};
+  g_giTriangles = {};
+  g_occlusionFrameBuffer = {};
+  g_OcclusionUniformBuffer = {};
+  g_bloomFrameBuffer = {};
+  g_BloomUniformBuffer = {};
   g_resampledFrameBuffer = {};
   g_frameBuffer = {};
   g_frameBufferResolved = {};

@@ -1,4 +1,5 @@
 #pragma once
+#include "../webgpu/rtgi.hpp"
 
 #include "pipeline_cache.hpp"
 #include "pixel_perfect.hpp"
@@ -90,6 +91,15 @@ struct RenderPass {
   wgpu::TextureView copySourceView;
   wgpu::TextureView copySourceDepthView;
   bool captureDepthSnapshot = false;
+  unsigned giGeometry = 0;
+  std::vector<webgpu::rtgi::Triangle> giTriangles;
+  std::vector<webgpu::rtgi::Node> giNodes;
+  std::vector<webgpu::rtgi::Triangle> giUnretained;
+  std::vector<webgpu::rtgi::Node> giUnretainedNodes;
+  size_t giRetainedCount = 0;
+  std::array<float, 4> giProjection{};
+  std::array<float, 2> giScreenCenter{};
+  webgpu::TextureWithSampler giDepth;
   wgpu::Texture copySourceNormalTexture;
   uint32_t msaaSamples = 1;
 
@@ -210,6 +220,8 @@ struct FramePacket {
   bool sceneTexturesReady = true;
   bool sceneAfterCaptured = false;
   RenderPassList renderPasses;
+  std::vector<webgpu::rtgi::Triangle> giTriangleScratch;
+  std::vector<webgpu::rtgi::Node> giNodeScratch;
   std::deque<TextureCopy> textureCopies;
   std::deque<EncoderTask> encoderTasks;
   std::deque<ReadbackTask> readbackTasks;

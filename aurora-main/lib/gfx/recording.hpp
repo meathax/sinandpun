@@ -138,6 +138,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat,
                        GXPixelFmt sourceFormat, const ResolveOptions& options = {});
 // Returns true for a candidate HUD draw that may need a presentation pipeline.
+std::vector<webgpu::rtgi::Triangle>* ray_trace_geometry() noexcept;
 bool note_projection_draw(bool orthographic) noexcept;
 void capture_pixel_perfect_gui_scene(const ClipRect& source, const wgpu::Extent3D& destination,
                                      const std::array<u32, 3>& filter);

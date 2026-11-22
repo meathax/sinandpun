@@ -736,7 +736,6 @@ bool begin_frame() {
   }
 
   auto& frame = g_framePackets[frameSlot];
-  frame = {};
   frame.frameId = g_nextFrameId++;
   frame.frameIndex = g_frameIndex;
   frame.stagingBuffer = *stagingSlot;
@@ -862,7 +861,21 @@ void end_frame(EndFrameCallback callback) {
         detail::restore_scene_textures(restore,retiring,true);
         auto commands=restore.Finish(); g_queue.Submit(1,&commands);
       }
-      g_framePackets[frameSlot] = {};
+      // Packet storage belongs to the render worker until the slot is released.
+      // Keep the largest RT allocations hot for the next owner of this slot.
+      for (auto& pass : retiring.renderPasses) {
+        if (pass.giTriangles.capacity() > retiring.giTriangleScratch.capacity())
+          retiring.giTriangleScratch.swap(pass.giTriangles);
+        if (pass.giNodes.capacity() > retiring.giNodeScratch.capacity())
+          retiring.giNodeScratch.swap(pass.giNodes);
+      }
+      auto triangles = std::move(retiring.giTriangleScratch);
+      auto nodes = std::move(retiring.giNodeScratch);
+      retiring = {};
+      triangles.clear();
+      nodes.clear();
+      retiring.giTriangleScratch = std::move(triangles);
+      retiring.giNodeScratch = std::move(nodes);
       g_frameSlots.release(frameSlot);
       notify_gpu_progress();
       expire_cached_bind_groups();

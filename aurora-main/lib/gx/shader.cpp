@@ -4,6 +4,7 @@
 #include "../internal.hpp"
 #include "../webgpu/gpu.hpp"
 #include "gx.hpp"
+#include <aurora/gfx.h>
 #include "gx_fmt.hpp"
 #include "shader_info.hpp"
 
@@ -880,27 +881,27 @@ std::string vertex_color_attr(const ShaderConfig& config, u8 channel) {
   return "vec4f(1.0)"s;
 }
 
-auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 i, bool alpha) -> std::string {
+auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 i, bool alpha, bool fragment = false) -> std::string {
   std::string_view swizzle = alpha ? ".a"sv : ".rgb"sv;
   std::string_view intType = alpha ? "i32"sv : "vec3i"sv;
   std::string_view intZero = alpha ? "0"sv : "vec3i(0)"sv;
   std::string_view intMax = alpha ? "255"sv : "vec3i(255)"sv;
   std::string_view shift7 = alpha ? "7u"sv : "vec3u(7u)"sv;
   std::string_view shift8 = alpha ? "8u"sv : "vec3u(8u)"sv;
-  std::string outVar = fmt::format("out.cc{}", i);
+  std::string outVar = fragment ? fmt::format("rast{}", i) : fmt::format("out.cc{}", i);
   std::string_view posVar = "mv_pos"sv;
   std::string_view nrmVar = "mv_nrm"sv;
 
   std::string ambSrc, matSrc;
 
   if (cc.ambSrc == GX_SRC_VTX) {
-    ambSrc = vertex_color_attr(config, i);
+    ambSrc = fragment ? fmt::format("in.cc{}", i) : vertex_color_attr(config, i);
   } else if (cc.ambSrc == GX_SRC_REG) {
     ambSrc = fmt::format("ubuf.cc{0}{1}_amb", i, alpha ? "a"sv : ""sv);
   }
 
   if (cc.matSrc == GX_SRC_VTX) {
-    matSrc = vertex_color_attr(config, i);
+    matSrc = fragment ? fmt::format("in.cc{}", i) : vertex_color_attr(config, i);
   } else if (cc.matSrc == GX_SRC_REG) {
     matSrc = fmt::format("ubuf.cc{0}{1}_mat", i, alpha ? "a"sv : ""sv);
   }
@@ -963,6 +964,16 @@ auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 
     lightDiffFn = "max(0.0, dot(ldir, mv_nrm))"sv;
   }
 
+  // A second, low-energy specular lobe follows authored diffuse lights and attenuation.
+  const bool enhancedHighlight = fragment && config.surfaceHighlights && !alpha &&
+      cc.attnFn != GX_AF_SPEC && diffFn != GX_DF_NONE;
+  if (enhancedHighlight) {
+    lightAttnFn += R"(
+          let v = -mv_pos * inverseSqrt(max(dot(mv_pos, mv_pos), 1e-10));
+          let h = v + ldir;
+          let nh = max(dot(mv_nrm, h * inverseSqrt(max(dot(h,h), 1e-10))), 0.0);
+          let materialHighlight = 0.16 * pow(nh, 32.0) * max(dot(ldir, mv_nrm), 0.0);)";
+  }
   // Accumulate and modulate in the hardware's 8-bit fixed point.
   const auto outputTarget = alpha ? fmt::format("{}.a", outVar) : outVar;
   const auto outputValue =
@@ -975,7 +986,7 @@ auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 
           if ((ubuf.lightState{0}{7} & (1u << i)) == 0u) {{ continue; }}
           var light = ubuf.lights[i];{5}
           var attn: f32;{2}
-          var diff = {3};
+          var diff = {3}{14};
           lighting = lighting + {8}(round(attn * diff * light.color{6} * 255.0));
       }}
       let lacc = clamp(lighting, {9}, {10});
@@ -983,7 +994,8 @@ auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 
       {12} = {13};
     }})""",
                      i, GX::MaxLights, lightAttnFn, lightDiffFn, ambSrc, lightDirSetup, swizzle,
-                     alpha ? "a"sv : ""sv, intType, intZero, intMax, matSrc, outputTarget, outputValue);
+                     alpha ? "a"sv : ""sv, intType, intZero, intMax, matSrc, outputTarget, outputValue,
+                     enhancedHighlight ? " + materialHighlight"sv : ""sv);
 }
 
 absl::flat_hash_set<gfx::ShaderRef> s_seenShaders;
@@ -1211,7 +1223,33 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
       "\n    let mv_nrm = select(nrm_tmp, normalize(nrm_tmp), dot(nrm_tmp, nrm_tmp) > 1e-10);",
       vtx_attr(config, GX_VA_NRM), vidxAttr);
   const bool useNormalTarget = normalAttachment != UINT32_MAX && config.attrs[GX_VA_NRM].attrType != GX_NONE;
-  if ((useNormalTarget && !info.lightingEnabled) || EnableNormalVisualization) {
+  std::string fragmentFnPre;
+  const auto receivesHighlight = [&](int i) {
+    const auto& cc = config.colorChannels[i];
+    return config.surfaceHighlights && info.sampledColorChannels.test(i) && cc.lightingEnabled &&
+           cc.attnFn != GX_AF_SPEC && cc.diffFn != GX_DF_NONE;
+  };
+  const auto eligibleLight = [&](int i) {
+    return receivesHighlight(i) || (config.pixelLighting && info.sampledColorChannels.test(i) &&
+                                    config.colorChannels[i].lightingEnabled);
+  };
+  if (config.projectedCaustics) {
+    vtxOutAttrs += fmt::format("\n    @location({}) waterPosition: vec3f,", vtxOutIdx++);
+    vtxXfrAttrsPre += fmt::format("\n    out.waterPosition = {};", vtx_attr(config, GX_VA_POS));
+  }
+  const bool pixelLighting = eligibleLight(0) || eligibleLight(1);
+  if (pixelLighting || config.projectedCaustics || config.atmosphere != AURORA_ATMOSPHERE_ORIGINAL) {
+    static const bool profile = std::getenv("SIN_RENDER_PROF") != nullptr;
+    if (profile) Log.info("Enhanced GX shader {:x}: per-pixel lighting {}, atmosphere {}, caustics {}, highlights {}", hash, pixelLighting,
+                          unsigned(config.atmosphere), bool(config.projectedCaustics), receivesHighlight(0) || receivesHighlight(1));
+  }
+  if (pixelLighting || info.sceneShading) {
+    vtxOutAttrs += fmt::format("\n    @location({}) viewPosition: vec3f,", vtxOutIdx++);
+    vtxXfrAttrsPre += "\n    out.viewPosition = mv_pos;";
+    fragmentFnPre += "\n    let mv_pos = in.viewPosition;"
+                     "\n    let mv_nrm = in.mv_nrm * inverseSqrt(max(dot(in.mv_nrm, in.mv_nrm), 1e-20));";
+  }
+  if (pixelLighting || info.sceneShading || (useNormalTarget && !info.lightingEnabled) || EnableNormalVisualization) {
     vtxOutAttrs += fmt::format("\n    @location({}) mv_nrm: vec3f,", vtxOutIdx++);
     vtxXfrAttrsPre += "\n    out.mv_nrm = mv_nrm;";
   }
@@ -1219,7 +1257,6 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
   uniBufAttrs += "\n    proj: mat4x4f,";
   uniBufAttrs += fmt::format("\n    postex_mtx: array<mat3x4f, {}>,", MaxPnMtx + MaxTexMtx);
   uniBufAttrs += fmt::format("\n    nrm_mtx: array<mat3x4f, {}>,", MaxPnMtx);
-  std::string fragmentFnPre;
   std::string fragmentFn;
 
   static std::array regName{"prev"sv, "tevreg0"sv, "tevreg1"sv, "tevreg2"sv};
@@ -1344,9 +1381,17 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     }
 
     vtxOutAttrs += fmt::format("\n    @location({}) cc{}: vec4f,", vtxOutIdx++, i);
-    vtxXfrAttrs += lighting_func(config, cc, i, false);
+    if (eligibleLight(i)) {
+      vtxXfrAttrs += fmt::format("\n    out.cc{} = {};", i, vertex_color_attr(config, i));
+    } else {
+      vtxXfrAttrs += lighting_func(config, cc, i, false);
+    }
     vtxXfrAttrs += lighting_func(config, cca, i, true);
     fragmentFnPre += fmt::format("\n    var rast{0} = in.cc{0};", i);
+    if (eligibleLight(i)) {
+      fragmentFnPre += lighting_func(config, cc, i, false, true);
+      fragmentFnPre += fmt::format("\n    rast{0}.a = in.cc{0}.a;", i);
+    }
   }
 
   for (int i = 0; i < info.sampledKColors.size(); ++i) {
@@ -1743,6 +1788,49 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     fogDepth = "zDepth";
   }
 
+  if (config.probeMaterials) {
+    bool reflective = false;
+    for (int i = 0; i < info.sampledTexCoords.size(); ++i)
+      reflective |= info.sampledTexCoords.test(i) && config.tcgs[i].src == GX_TG_NRM;
+    for (int i = 0; i < 2; ++i)
+      reflective |= info.sampledColorChannels.test(i) && config.colorChannels[i].lightingEnabled &&
+                    config.colorChannels[i].attnFn == GX_AF_SPEC;
+    static const bool traceMaterials = std::getenv("SIN_RENDER_PROF") != nullptr;
+    bool painted = false;
+    for (int i = 0; i < 2; ++i)
+      painted |= info.sampledColorChannels.test(i) && config.colorChannels[i].lightingEnabled &&
+                 config.colorChannels[i].diffFn != GX_DF_NONE;
+    if ((reflective || painted) && traceMaterials) Log.info("GX material reflection shader {:x}", hash);
+    if (reflective || painted) {
+      fragmentFn += reflective ? "\n    let roughness = 0.24; let f0 = 0.12;" :
+                                 "\n    let roughness = 0.70; let f0 = 0.04;";
+      fragmentFn += R"(
+    let eye = -mv_pos * inverseSqrt(max(dot(mv_pos, mv_pos), 0.0001));
+    let reflected = reflect(-eye, mv_nrm);
+    let elevation = dot(reflected, ubuf.scene[0].xyz);
+    let sky = mix(vec3f(0.47, 0.63, 0.82), vec3f(0.16, 0.58, 0.63), ubuf.scene[0].w);
+    let env = mix(vec3f(0.19, 0.16, 0.14), sky, smoothstep(-roughness, roughness, elevation));
+    let grazing = 1.0 - clamp(dot(mv_nrm, eye), 0.0, 1.0);
+    let fresnel = f0 + (1.0-roughness-f0) * grazing*grazing*grazing*grazing*grazing;
+    prev = vec4f(mix(prev.rgb, env, fresnel * clamp(dot(ubuf.scene[0].xyz,ubuf.scene[0].xyz),0.0,1.0)), prev.a);)";
+    }
+  }
+  if (config.combatLight) fragmentFn += R"(
+    if (ubuf.scene[1].w > 0.0) {
+    let toFlash = ubuf.scene[1].xyz - mv_pos;
+    let flashD2 = dot(toFlash, toFlash);
+    let flashFalloff = max(0.0, 1.0 - flashD2 / 22500.0);
+    let flashDiffuse = clamp(0.24 + 0.76 * dot(mv_nrm, toFlash) * inverseSqrt(max(flashD2, 0.001)), 0.0, 1.0);
+    prev = vec4f(prev.rgb + (1.0-prev.rgb) * (0.12+0.88*prev.rgb) * vec3f(1.0,0.46,0.13)
+      * ubuf.scene[1].w * flashFalloff * flashFalloff * flashDiffuse, prev.a); })";
+  if (config.contactShadow) fragmentFn += R"(
+    if (ubuf.scene[2].w > 0.0) {
+    let separation = mv_pos - ubuf.scene[2].xyz;
+    let height = dot(separation, ubuf.scene[3].xyz);
+    let lateral = separation - height * ubuf.scene[3].xyz;
+    let footprint = 1.0 - smoothstep(0.0, 1.0, dot(lateral,lateral) * ubuf.scene[3].w);
+    let contact = footprint * (1.0-smoothstep(0.3, 3.0, abs(height))) * max(0.0,dot(mv_nrm,ubuf.scene[3].xyz));
+    prev = vec4f(prev.rgb * (1.0 - ubuf.scene[2].w * contact), prev.a); })";
   if (info.usesFog) {
     uniformPre +=
         "\n"
@@ -1799,7 +1887,26 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
       break;
     }
 
-    fragmentFn += "\n    prev = vec4f(mix(prev.rgb, ubuf.fog.color.rgb, clamp(fogZ, 0.0, 1.0)), prev.a);";
+    if (config.projectedCaustics) {
+      fragmentFn += R"(
+    let p = (in.waterPosition.xz + in.waterPosition.y * vec2f(0.27, 0.39)) * 0.055;
+    let t = ubuf.fog.color.a;
+    let warp = vec2f(sin(p.y * 0.73 + t), sin(p.x * 0.67 - t));
+    let waves = sin(p.x + warp.x + 2.0 * t) + sin(p.y + warp.y - t);
+    let ridge = 1.0 - smoothstep(0.035, 0.22, abs(waves));
+    let footprint = max(length(dpdx(p)), length(dpdy(p)));
+    let strength = ridge * (1.0 - smoothstep(0.15, 0.65, footprint)) * (1.0 - clamp(fogZ, 0.0, 1.0));
+    prev = vec4f(prev.rgb + strength * prev.rgb * (1.0 - prev.rgb) * vec3f(0.18, 0.52, 0.65), prev.a);)";
+    }
+    if (config.atmosphere == AURORA_ATMOSPHERE_UNDERWATER) {
+      fragmentFn += "\n    let transmittance = pow(vec3f(1.0 - clamp(fogZ, 0.0, 1.0)), vec3f(1.65, 1.10, 0.92));"
+                    "\n    prev = vec4f(mix(ubuf.fog.color.rgb, prev.rgb, transmittance), prev.a);";
+    } else {
+      if (config.atmosphere == AURORA_ATMOSPHERE_DUST) {
+        fragmentFn += "\n    fogZ += 0.24 * fogZ * (1.0 - fogZ);";
+      }
+      fragmentFn += "\n    prev = vec4f(mix(prev.rgb, ubuf.fog.color.rgb, clamp(fogZ, 0.0, 1.0)), prev.a);";
+    }
   }
 
   if (info.usesZTexture) {
@@ -1825,6 +1932,8 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
         "var tex{0}_samp: sampler;",
         i, i * 2, i * 2 + 1);
   }
+
+  if (info.sceneShading) uniBufAttrs += "\n    scene: array<vec4f, 4>,";
 
   if (!prevColorNormalized && !prevAlphaNormalized) {
     fragmentFn += "\n    prev = tev_overflow_vec4f(prev);";

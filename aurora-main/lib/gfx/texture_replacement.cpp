@@ -675,6 +675,36 @@ std::optional<gfx::ConvertedTexture> load_encoded_replacement(Source&& src) noex
     more.push_back(std::move(*lvl));
   }
 
+  // Artist-provided mip chains take precedence. Filter straight-alpha RGBA
+  // using alpha-weighted color so transparent texels cannot bleed into edges.
+  if (more.empty() && g_config.generateReplacementMips &&
+      base->format == wgpu::TextureFormat::RGBA8Unorm &&
+      base->data.size() == uint64_t(base->width) * base->height * 4) {
+    while (true) {
+      const auto& prev = more.empty() ? *base : more.back();
+      if (prev.width == 1 && prev.height == 1) break;
+      const auto w = std::max(prev.width / 2, 1u);
+      const auto h = std::max(prev.height / 2, 1u);
+      ByteBuffer pixels{uint64_t(w) * h * 4};
+      for (uint32_t y = 0; y < h; ++y) {
+        for (uint32_t x = 0; x < w; ++x) {
+          unsigned rgb[3]{}, alpha = 0, count = 0;
+          for (auto sy = y * prev.height / h; sy < (y + 1ull) * prev.height / h; ++sy) {
+            for (auto sx = x * prev.width / w; sx < (x + 1ull) * prev.width / w; ++sx) {
+              const auto* p = prev.data.data() + (uint64_t(sy) * prev.width + sx) * 4;
+              alpha += p[3];
+              for (int c = 0; c < 3; ++c) rgb[c] += p[c] * p[3];
+              ++count;
+            }
+          }
+          auto* dst = pixels.data() + (uint64_t(y) * w + x) * 4;
+          for (int c = 0; c < 3; ++c) dst[c] = alpha ? (rgb[c] + alpha / 2) / alpha : 0;
+          dst[3] = (alpha + count / 2) / count;
+        }
+      }
+      more.push_back({.format = base->format, .width = w, .height = h, .mips = 1, .data = std::move(pixels)});
+    }
+  }
   if (more.empty()) {
     return base;
   }

@@ -1,4 +1,6 @@
 #pragma once
+#include "rtgi.hpp"
+#include <span>
 
 #include <aurora/aurora.h>
 #include "../gfx/pixel_perfect.hpp"
@@ -52,7 +54,7 @@ extern TextureWithSampler g_frameBuffer;
 extern TextureWithSampler g_frameBufferResolved;
 extern TextureWithSampler g_depthBuffer;
 extern TextureWithSampler g_normalBuffer;
-extern wgpu::RenderPipeline g_CopyPipeline;
+extern wgpu::RenderPipeline g_CopyPipeline, g_GiRestorePipeline;
 extern wgpu::RenderPipeline g_CopyDimmedPipeline;
 extern wgpu::RenderPipeline g_CopyPremultipliedAlphaPipeline;
 extern wgpu::BindGroup g_CopyBindGroup;
@@ -86,8 +88,13 @@ Viewport calculate_present_viewport_for_aspect(uint32_t surface_width, uint32_t 
 Viewport calculate_integer_present_viewport(uint32_t surfaceWidth, uint32_t surfaceHeight,
                                             uint32_t sourceWidth, uint32_t sourceHeight,
                                             const Viewport& fitted) noexcept;
+enum class BouncePass : unsigned { None, Gather, Composite, Radiance, RayGather, RayComposite, RayFilter };
 const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
-                                                  const TextureWithSampler& source, AuroraSampler sampler);
+                                                  const TextureWithSampler& source, AuroraSampler sampler, bool bloom = false, const wgpu::TextureView& depth = {},
+                                                  BouncePass bounce = BouncePass::None, std::array<float, 4> projection = {},
+                                                  std::span<const rtgi::Triangle> triangles = {},
+                                                  std::span<const rtgi::Node> nodes = {},
+                                                  std::array<float, 2> screenCenter = {}, bool independentGeometry = false);
 void draw_clear(const wgpu::RenderPassEncoder& pass, bool clearColor, bool clearAlpha, bool clearDepth,
                 const Vec4<float>& clearColorValue, float clearDepthValue);
 

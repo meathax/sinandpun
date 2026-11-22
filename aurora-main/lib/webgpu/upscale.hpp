@@ -54,6 +54,12 @@ void request_capture(const std::string& path);
 void capture_encode(const wgpu::CommandEncoder& encoder, const TextureWithSampler& image);
 // Render worker, after the command buffer holding capture_encode's copy was submitted.
 void capture_after_submit();
+bool gi_comparison_pending();
+bool culled_comparison_pending();
+void capture_culled_before(const wgpu::CommandEncoder&, const TextureWithSampler&);
+void capture_rtgi(const wgpu::CommandEncoder& encoder, const TextureWithSampler& lit);
+void capture_gi_pair(const wgpu::CommandEncoder& encoder, const TextureWithSampler& original,
+                     const TextureWithSampler& lit, const TextureWithSampler& depth, std::array<float,4> projection);
 
 void shutdown() noexcept;
 

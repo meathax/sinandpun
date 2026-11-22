@@ -48,6 +48,10 @@
 #include "system_info.hpp"
 #include "tracy/Tracy.hpp"
 
+static std::atomic<bool> s_enhancedBloom{false};
+extern "C" bool aurora_enhanced_bloom_enabled() { return s_enhancedBloom.load(std::memory_order_relaxed); }
+extern "C" void aurora_set_enhanced_bloom(bool enabled) { s_enhancedBloom.store(enabled); }
+
 namespace aurora {
 AuroraConfig g_config;
 uint32_t g_sdlCustomEventsStart;
@@ -742,8 +746,14 @@ void end_frame_gx(imgui::DrawData imguiDrawData) noexcept {
               gfx::pixel_perfect::integer_scale(presentSource.size.height, static_cast<uint32_t>(viewport.height)) &&
               static_cast<uint32_t>(viewport.width) / presentSource.size.width ==
                   static_cast<uint32_t>(viewport.height) / presentSource.size.height;
-          const bool replayHud = !exactPixels && displayCopy && gfx::presentation_hud_ready(pixelPerfectGui);
-          const auto scene = replayHud ? gfx::prepare_presentation_hud_scene(encoder, pixelPerfectGui) : presentSource;
+          const bool sceneEffects = aurora_enhanced_bloom_enabled() || aurora_ambient_occlusion_enabled();
+          const bool replayHud = (!exactPixels || sceneEffects) && displayCopy && gfx::presentation_hud_ready(pixelPerfectGui);
+          auto scene = replayHud ? gfx::prepare_presentation_hud_scene(encoder, pixelPerfectGui) : presentSource;
+          if (replayHud && s_enhancedBloom.load(std::memory_order_relaxed)) {
+            const webgpu::Viewport sceneViewport{0.f, 0.f, static_cast<float>(scene.size.width),
+                                                static_cast<float>(scene.size.height), 0.f, 1.f};
+            scene = webgpu::resample_present_source(encoder, sceneViewport, scene, SAMPLER_BILINEAR, true);
+          }
           const webgpu::TextureWithSampler* gameImage = nullptr;
           bool fsrOutput = false;
           auto fsr = dlss_dispatch(encoder, scene, viewport, replayHud, pixelPerfectGui);

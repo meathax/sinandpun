@@ -1,5 +1,6 @@
 #include "gx.hpp"
 
+#include <aurora/gfx.h>
 #include "pipeline.hpp"
 #include "texture.hpp"
 #include "../dolphin/vi/vi_internal.hpp"
@@ -27,10 +28,42 @@
 
 static aurora::Module Log("aurora::gx");
 
+static std::atomic<bool> s_caustics{false}, s_highlights{false};
+static std::atomic<bool> s_probe{false}, s_combat{false}, s_contact{false};
+static std::mutex s_sceneMutex;
+static AuroraSceneLight s_scene{};
+extern "C" void aurora_set_probe_materials(bool enabled) { s_probe.store(enabled); }
+extern "C" void aurora_set_combat_light(bool enabled) { s_combat.store(enabled); }
+extern "C" void aurora_set_contact_shadow(bool enabled) { s_contact.store(enabled); }
+extern "C" unsigned aurora_scene_effect_mask() {
+  return unsigned(s_probe.load()) | (unsigned(s_combat.load()) << 1) | (unsigned(s_contact.load()) << 2);
+}
+extern "C" void aurora_update_scene_light(const AuroraSceneLight* scene) {
+  std::lock_guard lock(s_sceneMutex);
+  s_scene = *scene;
+}
+extern "C" void aurora_read_scene_light(AuroraSceneLight* scene) {
+  std::lock_guard lock(s_sceneMutex);
+  *scene = s_scene;
+}
+static std::atomic<uint32_t> s_waterFrame{0};
+extern "C" void aurora_set_projected_caustics(bool enabled) { s_caustics.store(enabled); }
+extern "C" void aurora_set_surface_highlights(bool enabled) { s_highlights.store(enabled); }
+extern "C" void aurora_set_water_frame(uint32_t frame) { s_waterFrame.store(frame, std::memory_order_relaxed); }
+static std::atomic<bool> s_stageAtmosphere{false};
+static std::atomic<AuroraAtmosphere> s_atmosphereType{AURORA_ATMOSPHERE_ORIGINAL};
+extern "C" void aurora_set_atmosphere_type(AuroraAtmosphere type) { s_atmosphereType.store(type, std::memory_order_relaxed); }
+extern "C" void aurora_set_stage_atmosphere(bool enabled) { s_stageAtmosphere.store(enabled, std::memory_order_relaxed); }
+static std::atomic<bool> s_pixelLighting{false};
+extern "C" void aurora_set_pixel_lighting(bool enabled) { s_pixelLighting.store(enabled); }
+
 namespace aurora::gx {
 using webgpu::g_device;
 using webgpu::g_graphicsConfig;
 
+float water_phase() noexcept {
+  return float(s_waterFrame.load(std::memory_order_relaxed) % 1200u) * (6.28318530718f / 1200.f);
+}
 GXState g_gxState{};
 wgpu::BindGroup g_emptyTextureBindGroup;
 
@@ -522,6 +555,21 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.shaderConfig = {};
 	config.shaderConfig.forceAlphaOne = !g_gxState.colorUpdate && g_gxState.alphaUpdate &&
 		g_gxState.dstAlpha != UINT32_MAX && g_gxState.dstAlpha != 0;
+  const bool opaqueSurface = g_gxState.projType == GX_PERSPECTIVE && g_gxState.depthUpdate &&
+      g_gxState.colorUpdate && g_gxState.blendMode == GX_BM_NONE && primitive != GX_POINTS &&
+      primitive != GX_LINES && primitive != GX_LINESTRIP;
+  const bool hasSurfaceNormal = opaqueSurface && g_gxState.vtxDesc[GX_VA_NRM] != GX_NONE;
+  config.shaderConfig.probeMaterials = hasSurfaceNormal && s_probe.load(std::memory_order_relaxed);
+  config.shaderConfig.combatLight = hasSurfaceNormal && s_combat.load(std::memory_order_relaxed);
+  config.shaderConfig.contactShadow = hasSurfaceNormal && s_contact.load(std::memory_order_relaxed);
+  config.shaderConfig.pixelLighting = hasSurfaceNormal && s_pixelLighting.load(std::memory_order_relaxed);
+  config.shaderConfig.surfaceHighlights = hasSurfaceNormal && s_highlights.load(std::memory_order_relaxed);
+  config.shaderConfig.projectedCaustics = opaqueSurface && g_gxState.fog.type != GX_FOG_NONE &&
+      s_caustics.load(std::memory_order_relaxed) && s_atmosphereType.load() == AURORA_ATMOSPHERE_UNDERWATER;
+  if (g_gxState.fog.type != GX_FOG_NONE && g_gxState.projType == GX_PERSPECTIVE &&
+      s_stageAtmosphere.load(std::memory_order_relaxed)) {
+    config.shaderConfig.atmosphere = s_atmosphereType.load(std::memory_order_relaxed);
+  }
   config.shaderConfig.fogType = g_gxState.fog.type;
 	config.shaderConfig.zTextureOp = g_gxState.zTextureOp;
 	if (g_gxState.zTextureOp != GX_ZT_DISABLE) {

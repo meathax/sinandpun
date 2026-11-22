@@ -68,6 +68,22 @@ struct RuntimeUserConfig {
     std::optional<bool> vsync;
     std::optional<bool> gxWorker;
     std::optional<bool> disableCopyFilter;
+    std::optional<bool> enhancementsEnabled;
+    std::optional<bool> enhancedBloom;
+    std::optional<bool> sharpeningEnabled;
+    std::optional<bool> ambientOcclusion;
+    std::optional<bool> globalIllumination;
+    std::optional<bool> rayTracedGi;
+    std::optional<bool> retainCulledGi;
+    std::optional<bool> strongBounce;
+    std::optional<bool> projectedCaustics;
+    std::optional<bool> surfaceHighlights;
+    std::optional<bool> probeMaterials;
+    std::optional<bool> combatLight;
+    std::optional<bool> contactShadow;
+    std::optional<bool> stageAtmosphere;
+    std::optional<bool> pixelLighting;
+    std::optional<bool> generateMips;
     std::optional<bool> textureReplacements;
     std::optional<bool> textureDumps;
     std::optional<bool> showFps;
@@ -784,6 +800,22 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.gxWorker = FindConfigValue<bool>(document, "video", "gx_worker");
     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
+    config.enhancementsEnabled = FindConfigValue<bool>(document, "video", "enhancements_enabled");
+    config.sharpeningEnabled = FindConfigValue<bool>(document, "video", "sharpening_enabled");
+    config.ambientOcclusion = FindConfigValue<bool>(document, "video", "ambient_occlusion");
+    config.globalIllumination = FindConfigValue<bool>(document, "video", "global_illumination");
+    config.rayTracedGi = FindConfigValue<bool>(document, "video", "ray_traced_gi");
+    config.retainCulledGi = FindConfigValue<bool>(document, "video", "retain_culled_gi");
+    config.strongBounce = FindConfigValue<bool>(document, "video", "strong_bounce");
+    config.projectedCaustics = FindConfigValue<bool>(document, "video", "projected_caustics");
+    config.surfaceHighlights = FindConfigValue<bool>(document, "video", "surface_highlights");
+    config.probeMaterials = FindConfigValue<bool>(document, "video", "probe_materials");
+    config.combatLight = FindConfigValue<bool>(document, "video", "combat_light");
+    config.contactShadow = FindConfigValue<bool>(document, "video", "contact_shadow");
+    config.stageAtmosphere = FindConfigValue<bool>(document, "video", "stage_atmosphere");
+    config.pixelLighting = FindConfigValue<bool>(document, "video", "per_pixel_lighting");
+    config.enhancedBloom = FindConfigValue<bool>(document, "video", "enhanced_bloom");
+    config.generateMips = FindConfigValue<bool>(document, "video", "generate_mips");
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
@@ -1499,6 +1531,23 @@ inline bool DisableCopyFilter(bool fallback = true) {
 inline bool ShowFps(bool fallback = true) {
     return Get().showFps.value_or(fallback);
 }
+
+inline bool EnhancementsEnabled() { return Get().enhancementsEnabled.value_or(true); }
+inline bool SharpeningEnabled() { return Get().sharpeningEnabled.value_or(true); }
+inline bool AmbientOcclusion() { return Get().ambientOcclusion.value_or(false); }
+inline bool GlobalIllumination() { return Get().globalIllumination.value_or(false); }
+inline bool RayTracedGi() { return Get().rayTracedGi.value_or(false); }
+inline bool RetainCulledGi() { return Get().retainCulledGi.value_or(false); }
+inline bool StrongBounce() { return Get().strongBounce.value_or(true); }
+inline bool ProjectedCaustics() { return Get().projectedCaustics.value_or(false); }
+inline bool SurfaceHighlights() { return Get().surfaceHighlights.value_or(false); }
+inline bool ProbeMaterials() { return Get().probeMaterials.value_or(false); }
+inline bool CombatLight() { return Get().combatLight.value_or(false); }
+inline bool ContactShadow() { return Get().contactShadow.value_or(false); }
+inline bool StageAtmosphere() { return Get().stageAtmosphere.value_or(false); }
+inline bool PixelLighting() { return Get().pixelLighting.value_or(false); }
+inline bool EnhancedBloom() { return Get().enhancedBloom.value_or(false); }
+inline bool GenerateMips() { return Get().generateMips.value_or(false); }
 
 inline bool TextureReplacements(bool fallback = false) {
     return Get().textureReplacements.value_or(fallback);

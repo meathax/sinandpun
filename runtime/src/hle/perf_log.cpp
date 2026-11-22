@@ -119,10 +119,18 @@ struct PerfLog {
         if (const char* shot = std::getenv("SIN_SCREENSHOT"); shot && *shot) {
             const char* delayText = std::getenv("SIN_SCREENSHOT_DELAY");
             const int delay = delayText ? std::max(1, std::atoi(delayText)) : 30;
-            std::thread([path = std::string(shot), delay] {
+            const char* repeatText = std::getenv("SIN_SCREENSHOT_REPEAT");
+            const char* intervalText = std::getenv("SIN_SCREENSHOT_INTERVAL");
+            const int repeat = repeatText ? std::clamp(std::atoi(repeatText), 1, 48) : 1;
+            const int interval = intervalText ? std::max(1, std::atoi(intervalText)) : 2;
+            std::thread([path = std::string(shot), delay, repeat, interval] {
                 std::this_thread::sleep_for(std::chrono::seconds(delay));
-                aurora_capture_present_image(path.c_str());
-                RT_LOGF(RT_TAG_RUNTIME, "[screenshot] requested final image capture -> %s\n", path.c_str());
+                for (int i = 0; i < repeat; ++i) {
+                    const auto target = repeat == 1 ? path : path + "-" + std::to_string(delay + i*interval) + ".png";
+                    aurora_capture_present_image(target.c_str());
+                    RT_LOGF(RT_TAG_RUNTIME, "[screenshot] requested final image capture -> %s\n", target.c_str());
+                    if (i + 1 < repeat) std::this_thread::sleep_for(std::chrono::seconds(interval));
+                }
             }).detach();
         }
         const char* v = std::getenv("SIN_PERF_LOG");

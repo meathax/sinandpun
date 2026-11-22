@@ -27,6 +27,8 @@
 #include "settings_overlay.h"
 #include "virtual_remote.h"
 
+#include "hle/scene_lighting.h"
+
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -184,6 +186,7 @@ static void TitleRoot(CpuContext* ctx) {
 // Called by the translated handlers listed in projects/r2ve01/recomp.yml translation.entry_hooks. The menu page
 // handlers are only reached through an indirect call, so a registry wrapper cannot see them.
 void GuestEntryHook(uint32_t address, CpuContext* ctx) {
+    if (ctx && ObserveSceneAnchor(address, ctx)) return;
     // R2VE01 StrapMsg update: state 10 waits for the existing fade to finish,
     // then returns completion to the task owner. The owner still releases the
     // strap archive and runs controller/save initialization before the title.

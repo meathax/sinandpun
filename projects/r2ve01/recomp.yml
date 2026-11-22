@@ -35,6 +35,14 @@ translation:
     - 0x8010C1E4
     - 0x8010C6C8
     - 0x8003B950
+    - 0x8006D35C
+    - 0x8006DA00
+    - 0x8006E4D4
+    - 0x80123220
+    - 0x8013C148
+    - 0x8013C5FC
+    - 0x8013C358
+    - 0x80258A60
 
 output:
   # Donor contract: the runtime CMake hard-codes <workspace>/generated for
