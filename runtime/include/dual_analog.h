@@ -100,6 +100,22 @@ inline Config ModernAim() {
     return c;
 }
 
+// With the virtual 72-pixel bar, the guest reports ~0.00443 KPAD units per
+// camera pixel. TV bar placement offsets the vertical origin by ~103 pixels.
+// Keep a stick sweep inside the visible -1..1 playfield, even at its corners.
+inline Config StickPointerConfig(Config c, bool barAbove) {
+    if (c.curve != Curve::PrecisionSweep) return c;
+    c.cameraMinX = 287.f;
+    c.cameraMaxX = 736.f;
+    const float centerY = barAbove ? 487.f : 281.f;
+    c.cameraMinY = centerY - 224.f;
+    c.cameraMaxY = centerY + 224.f;
+    // GunSight draws in an 810x456 layer. Equal screen-pixel motion on
+    // both axes needs more vertical camera travel per unit of stick input.
+    c.maxSpeedY = c.maxSpeedX * (810.f / 456.f);
+    return c;
+}
+
 inline void Sanitize(Config& c) {
     auto fin = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
     c.radialDeadzone = std::clamp(fin(c.radialDeadzone, 0.12f), 0.0f, 0.6f);

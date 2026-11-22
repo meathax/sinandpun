@@ -56,7 +56,11 @@ travel, Balanced moves 42 camera pixels per second. Above the threshold a
 quadratic term adds speed progressively. **Full-stick speed** adjusts the peak
 independently while it exceeds the tracking gain. Each preset responds immediately
 to direction changes. Speed cap, timed boost and smoothing remain available for
-custom tuning. Version 4 upgrades the original Automatic aim defaults to Balanced.
+custom tuning. At full horizontal tilt the three presets traverse the calibrated
+playfield in roughly 140, 187 and 86 milliseconds respectively (before guest
+sampling and display latency). The stick stops at the visible edge. Recenter
+accounts for the Wii sensor-bar position, and diagonal travel accounts for the
+game's 810 by 456 reticle layer. Version 4 upgrades the original Automatic aim defaults to Balanced.
 
 The radial calibration follows [Hypersect’s analog-stick analysis](https://blog.hypersect.com/interpreting-analog-sticks/).
 Independent deadzone and full-input controls also appear in [Halo Infinite’s controller settings](https://support.halowaypoint.com/hc/en-us/articles/4407649252116-Guide-to-Halo-Infinite-Game-Settings).

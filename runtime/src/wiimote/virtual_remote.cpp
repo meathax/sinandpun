@@ -133,7 +133,7 @@ public:
         BuildEeprom();
         BuildExtensionRegisters();
         m_pointer = DualAnalog::PointerState{};
-        DualAnalog::Recenter(m_pointer, m_config);
+        DualAnalog::Recenter(m_pointer, m_stickConfig);
         m_pointerStamp = Clock::now();
         m_scriptStart = Clock::now();
     }
@@ -203,6 +203,7 @@ private:
         if (m_settingsLoaded && generation == m_settingsGeneration) return;
         m_settings = AimSettings::Get();
         m_config = m_settings.aim;
+        m_stickConfig = DualAnalog::StickPointerConfig(m_config, RuntimeConfigFile::WiiSensorBarAbove());
         m_settingsGeneration = generation;
         m_settingsLoaded = true;
     }
@@ -751,7 +752,7 @@ private:
             return;
         }
         if (in.recenter && !m_prevRecenter) {
-            DualAnalog::Recenter(m_pointer, m_config);
+            DualAnalog::Recenter(m_pointer, m_stickConfig);
             gdx = gdy = 0.f;
         }
         m_prevRecenter = in.recenter;
@@ -769,7 +770,7 @@ private:
             }
         } else {
             // Stick right moves the pointer right, which moves the sensor bar left in the camera.
-            auto config = m_config;
+            auto config = m_stickConfig;
             if (m_settings.gyro.enabled) {
                 config.absoluteMode = false;
                 config.recenterOnRelease = false;
@@ -892,6 +893,7 @@ private:
     std::array<uint8_t, 0x20> m_zero{};
     std::array<uint8_t, kEepromSize> m_eeprom{};
     DualAnalog::Config m_config;
+    DualAnalog::Config m_stickConfig;
     DualAnalog::PointerState m_pointer;
     AimSettings::Settings m_settings;
     uint32_t m_settingsGeneration = 0;

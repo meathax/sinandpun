@@ -153,6 +153,16 @@ static void TestSweepPresets() {
         Config c;
         ApplySweepPreset(c, preset);
         Sanitize(c);
+        for (bool above : {false, true}) {
+            const Config calibrated = StickPointerConfig(c, above);
+            const float bias = above ? -0.457f : 0.457f;
+            auto guestY = [&](float y) { return bias + (y - 384.f) * 0.00443f; };
+            CHECK(std::fabs(guestY(CenterY(calibrated))) < 0.004f);
+            CHECK(Near(guestY(calibrated.cameraMinY), -1.f, 0.012f));
+            CHECK(Near(guestY(calibrated.cameraMaxY), 1.f, 0.012f));
+            CHECK(Near(calibrated.maxSpeedX * 405.f / (calibrated.maxSpeedY * 228.f), 1.f));
+        }
+        c = StickPointerConfig(c, false);
         const float span = c.cameraMaxX - c.cameraMinX;
         for (int hz : {30, 60, 120, 250}) {
             PointerState p;
@@ -173,10 +183,12 @@ static void TestSweepPresets() {
         }
         float raw = c.radialDeadzone + 0.1f * (c.outerSaturation - c.radialDeadzone);
         PointerState fine;
+        Recenter(fine, c);
         Advance(fine, c, raw, 0.f, 0.01f);
         CHECK(Near(fine.x - CenterX(c), 0.001f * preset.tracking));
         c.maxSpeedX *= 1.5f;
         PointerState faster;
+        Recenter(faster, c);
         Advance(faster, c, raw, 0.f, 0.01f);
         CHECK(Near(fine.x, faster.x));
     }

@@ -92,7 +92,8 @@ InputMap::AimSource UpdatePreview(const AimSettings::Settings& s) {
             g_preview.pointer.y = DualAnalog::SmoothToward(g_preview.pointer.y, ty, dt, s.mouse.smoothingMs);
         }
     } else {
-        DualAnalog::Advance(g_preview.pointer, s.aim, -g_preview.rawX, g_preview.rawY, dt, AimSettings::ActionValue(s, Action::Precision, raw) >= 0.5f);
+        const auto config = DualAnalog::StickPointerConfig(s.aim, RuntimeConfigFile::WiiSensorBarAbove());
+        DualAnalog::Advance(g_preview.pointer, config, -g_preview.rawX, g_preview.rawY, dt, AimSettings::ActionValue(s, Action::Precision, raw) >= 0.5f);
     }
     return g_preview.arbiter.active;
 }
@@ -221,10 +222,12 @@ void DrawPreview(ListView& v, const AimSettings::Settings& s) {
         const ImVec2 pMax(x + boxW, top + size);
         dl->AddRectFilled(pMin, pMax, IM_COL32(6, 20, 44, 190), 14.0f * S);
         dl->AddRect(pMin, pMax, rim, 14.0f * S, 0, 1.5f);
-        const float hx = (c.cameraMaxX - c.cameraMinX) * 0.5f * s.mouse.rangeX;
-        const float hy = (c.cameraMaxY - c.cameraMinY) * 0.5f * s.mouse.rangeY;
-        const float u = std::clamp(0.5f - (g_preview.pointer.x - DualAnalog::CenterX(c)) / (2.0f * hx), 0.f, 1.f);
-        const float vv = std::clamp(0.5f + (g_preview.pointer.y - DualAnalog::CenterY(c)) / (2.0f * hy), 0.f, 1.f);
+        const bool mouse = g_preview.arbiter.active == InputMap::AimSource::Mouse && s.mouse.enabled;
+        const auto area = mouse ? c : DualAnalog::StickPointerConfig(c, RuntimeConfigFile::WiiSensorBarAbove());
+        const float hx = (area.cameraMaxX - area.cameraMinX) * 0.5f * (mouse ? s.mouse.rangeX : 1.f);
+        const float hy = (area.cameraMaxY - area.cameraMinY) * 0.5f * (mouse ? s.mouse.rangeY : 1.f);
+        const float u = std::clamp(0.5f - (g_preview.pointer.x - DualAnalog::CenterX(area)) / (2.f * hx), 0.f, 1.f);
+        const float vv = std::clamp(0.5f + (g_preview.pointer.y - DualAnalog::CenterY(area)) / (2.f * hy), 0.f, 1.f);
         const ImVec2 p(pMin.x + 10.0f * S + u * (boxW - 20.0f * S), pMin.y + 10.0f * S + vv * (size - 20.0f * S));
         const float arm = 9.0f * S;
         dl->AddCircle(p, arm * 0.8f, IM_COL32(255, 96, 96, 255), 20, 2.0f);
