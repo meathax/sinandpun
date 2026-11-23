@@ -131,7 +131,7 @@ struct VertexOutput {
 @group(0) @binding(2) var t: texture_2d<f32>;
 @group(0) @binding(3) var scene_depth: texture_2d<f32>;
 @group(0) @binding(4) var irradiance: texture_2d<f32>;
-struct BvhNode { low: vec3f, escape: u32, high: vec3f, first: u32, count: u32 };
+struct BvhNode { low: vec3f, escape: u32, high: vec3f, leaf: u32 };
 struct SceneTriangle { a: vec3f, red: f32, b: vec3f, green: f32, c: vec3f, blue: f32 };
 @group(0) @binding(5) var<storage, read> bvh: array<BvhNode>;
 @group(0) @binding(6) var<storage, read> triangles: array<SceneTriangle>;
@@ -253,8 +253,8 @@ fn trace_bounce(origin: vec3f, direction: vec3f, reach: f32, dim: vec2i) -> vec4
         if (max(0.0,max(start.x,max(start.y,start.z))) > min(best,min(stop.x,min(stop.y,stop.z)))) {
             nodeId = node.escape;
         } else {
-            for (var j=0u; j<node.count; j++) {
-                let id = node.first+j;
+            for (var j=0u; j<(node.leaf & 7u); j++) {
+                let id = (node.leaf >> 3u)+j;
                 let t = triangle_hit(origin,direction,triangles[id]);
                 if (t > 0.0001 && t < best) {
                     best = t;

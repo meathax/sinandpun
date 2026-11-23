@@ -13,6 +13,7 @@
 //   ModuleOverlay    : resolves calls into the window to the active code set. It is consulted only where
 //                      the base registry has no translation, so the base hot path is unaffected.
 
+#include "module_file.h"
 #include "abi_bridge.h"
 #include "guest_abi/module_codeset.h"
 #include "hle_stubs.h"
@@ -159,31 +160,20 @@ extern "C" uint32_t RSOLinkListFixed_HLE(uint32_t rso, uint32_t bss, uint32_t le
         const auto rsoStart = std::chrono::steady_clock::now();
         PerfPacing::PhaseScope rsoScope(PerfPacing::kPhaseRso);
         // Images are immutable after import: read each file once (SIN_RSO_CACHE=0 re-reads on every link).
-        static std::vector<char> s_images[100];
+        static std::vector<uint8_t> s_images[100];
         static const bool s_cache = [] {
             const char* v = std::getenv("SIN_RSO_CACHE");
             return !(v && *v == '0');
         }();
-        std::vector<char> scratch;
-        std::vector<char>& image = (s_cache && index >= 0 && index < 100) ? s_images[index] : scratch;
+        std::vector<uint8_t> scratch;
+        std::vector<uint8_t>& image = (s_cache && index >= 0 && index < 100) ? s_images[index] : scratch;
         if (image.empty()) {
-            std::ifstream in(path, std::ios::binary);
-            image.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        }
-        if (image.empty() || image.size() > set.windowSize) {
-            RT_LOG(RT_TAG_OS) << "RSOLinkListFixed: bad image size " << image.size() << std::endl;
-            image.clear();
-            return 0;
+            image = ReadModuleFile(path, set.windowSize);
         }
         g_active.store(nullptr, std::memory_order_release);
         uint8_t* window = Memory::GetPointer(set.windowBase, set.windowSize);
-        if (s_cache) {
-            std::memcpy(window, image.data(), image.size());
-            std::memset(window + image.size(), 0, set.windowSize - image.size());
-        } else {
-            std::memset(window, 0, set.windowSize);
-            std::memcpy(window, image.data(), image.size());
-        }
+        std::memcpy(window, image.data(), image.size());
+        std::memset(window + image.size(), 0, set.windowSize - image.size());
         Memory::Write32(rso + kHdrProlog, set.prolog);
         Memory::Write32(rso + kHdrEpilog, set.epilog);
         Memory::Write32(rso + kHdrUnresolved, set.unresolved);
@@ -196,6 +186,9 @@ extern "C" uint32_t RSOLinkListFixed_HLE(uint32_t rso, uint32_t bss, uint32_t le
         return 1;
     } catch (const Memory::AccessViolation& e) {
         LogMemoryError(RT_TAG_OS, "RSOLinkListFixed", e);
+        return 0;
+    } catch (const std::exception& e) {
+        RT_LOG(RT_TAG_OS) << "RSOLinkListFixed: " << e.what() << std::endl;
         return 0;
     }
 }

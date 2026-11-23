@@ -9,6 +9,7 @@
 //   decrypted partition data starts with boot.bin (0x440), bi2.bin (0x2000), apploader; boot.bin holds the
 //   DOL / FST offsets (>>2) and the FST size (>>2).
 
+#include "module_file.h"
 #include "disc_import.h"
 
 #ifdef _WIN32
@@ -733,12 +734,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
 
         // Everything derived from the disc: prelinked stage module images.
         progress.SetStage("Preparing stage modules");
-        auto slurp = [](const fs::path& p) {
-            std::ifstream in(p, std::ios::binary);
-            if (!in) throw ImportError("A required game file is missing from the disc: " + p.filename().string());
-            return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-        };
-        const std::vector<uint8_t> sel = slurp(staging / "files" / "gs2.sel");
+        const std::vector<uint8_t> sel = ReadModuleFile(staging / "files" / "gs2.sel");
         for (int i = 0; i < kModuleCount; ++i) {
             if (progress.cancel.load(std::memory_order_relaxed)) throw ImportCancelled{};
             char name[32];
@@ -746,7 +742,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
             progress.SetStage("Preparing stage modules", name);
             std::vector<uint8_t> image;
             std::string moduleError;
-            if (!BuildModuleImage(slurp(staging / "files" / (std::string(name) + ".rso")), sel, kModuleBase, image, moduleError)) {
+            if (!BuildModuleImage(ReadModuleFile(staging / "files" / (std::string(name) + ".rso")), sel, kModuleBase, image, moduleError)) {
                 throw ImportError(std::string("Could not link stage module ") + name + ": " + moduleError);
             }
             WriteFile(staging / "modules" / (std::string(name) + ".bin"), image.data(), image.size(), progress);

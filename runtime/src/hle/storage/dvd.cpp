@@ -620,14 +620,17 @@ static void ScanDirectory(const fs::path& root, const std::string& virtualPrefix
             return;
         }
 
-        const std::uintmax_t size = fs::file_size(entry.path(), entryEc);
+        const std::uintmax_t size = entry.file_size(entryEc);
         if (entryEc) {
             RT_LOG(RT_TAG_DVD) << "WARNING: skipping " << HostPathText(entry.path()) << ": "
                       << entryEc.message() << std::endl;
             return;
         }
 
-        const fs::path relative = fs::relative(entry.path(), root, entryEc);
+        // Directory iteration already supplies a path rooted at root. Preserve
+        // canonical resolution for symlinked files.
+        const fs::path relative = entry.is_symlink(entryEc)
+            ? fs::relative(entry.path(), root, entryEc) : entry.path().lexically_relative(root);
         if (entryEc) {
             return;
         }

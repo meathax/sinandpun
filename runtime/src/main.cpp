@@ -1,3 +1,4 @@
+#include "module_file.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -1439,18 +1440,13 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
         // cannot provide prelinked images from somebody else's copy of the game.
         const auto modules = ManagedGameDirectory() / "modules";
         try {
-            const auto read = [](const std::filesystem::path& path) {
-                std::ifstream input(path, std::ios::binary);
-                if (!input) throw std::runtime_error("Cannot read " + RuntimeConfigFile::PathToUtf8(path));
-                return std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
-            };
-            const auto sel = read(absoluteGamePath / "files" / "gs2.sel");
+            const auto sel = ReadModuleFile(absoluteGamePath / "files" / "gs2.sel");
             std::array<std::vector<uint8_t>, DiscImport::kModuleCount> images;
             for (int index = 0; index < DiscImport::kModuleCount; ++index) {
                 char name[16];
                 std::snprintf(name, sizeof name, "stg%02d", index);
                 if (!DiscImport::BuildModuleImage(
-                        read(absoluteGamePath / "files" / (std::string(name) + ".rso")),
+                        ReadModuleFile(absoluteGamePath / "files" / (std::string(name) + ".rso")),
                         sel, DiscImport::kModuleBase, images[index], error)) {
                     throw std::runtime_error(std::string(name) + ": " + error);
                 }
