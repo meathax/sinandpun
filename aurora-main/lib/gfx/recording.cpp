@@ -273,7 +273,7 @@ void snapshot_current_pass_color(webgpu::TextureWithSampler& output, wgpu::Textu
   auto& pass = g_recorder.passes()[g_recorder.currentRenderPass];
   const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
   const auto mode = webgpu::upscale::settings().mode;
-  const bool captureDepth = (aurora_ambient_occlusion_enabled() || mode == AURORA_UPSCALER_FSR3 || mode == AURORA_UPSCALER_DLSS) &&
+  const bool captureDepth = (mode == AURORA_UPSCALER_FSR3 || mode == AURORA_UPSCALER_DLSS) &&
       pass.copySourceDepthView && !pass.snapshotDepthDst && tex_copy_conv::snapshot_depth_supported();
   auto& entry = acquire_pass_snapshot(size.width, size.height, true, captureDepth, false);
   depth = captureDepth ? entry.depth.view : wgpu::TextureView{};
@@ -628,6 +628,8 @@ void enqueue_pass(FramePacket& frame, uint32_t passIndex) {
     const bool substantial = pass.giGeometry >= std::max(4u, g_recorder.giLastPeak);
     if (!g_recorder.giScheduled && (matches || substantial)) {
       const auto& size = pass.colorAttachments[SceneColorAttachmentIndex].size;
+      pass.applyAmbientOcclusion = aurora_ambient_occlusion_enabled();
+      pass.applyGlobalIllumination = aurora_global_illumination_enabled() || aurora_ray_traced_gi_enabled();
       pass.giDepth = acquire_pass_snapshot(size.width, size.height, false, true, false).depth;
       if (!pass.giTriangles.empty() && g_recorder.giCameraSampled) {
         const auto liveCount = pass.giTriangles.size();
@@ -1229,8 +1231,17 @@ bool note_projection_draw(bool orthographic) noexcept {
   }
 
   auto& frame = current_frame_packet();
-  if (!orthographic && (aurora_global_illumination_enabled() || aurora_ray_traced_gi_enabled()) && gx::g_gxState.depthCompare && gx::g_gxState.depthUpdate &&
-      gx::g_gxState.colorUpdate && gx::g_gxState.blendMode == GX_BM_NONE) {
+  const bool opaqueWorld = !orthographic && gx::g_gxState.depthCompare && gx::g_gxState.depthUpdate &&
+                           gx::g_gxState.colorUpdate && gx::g_gxState.blendMode == GX_BM_NONE;
+  auto& current = current_render_passes()[g_recorder.currentRenderPass];
+  // Seal geometry before the first effect can contribute color without matching depth.
+  if (!opaqueWorld && gx::g_gxState.colorUpdate && current.giGeometry && !g_recorder.giScheduled) {
+    current.discardable = false;
+    enqueue_pass(frame, g_recorder.currentRenderPass);
+    resume_efb_pass_loading(current);
+  }
+  if (opaqueWorld && (aurora_ambient_occlusion_enabled() || aurora_global_illumination_enabled() ||
+                      aurora_ray_traced_gi_enabled())) {
     auto& candidate = current_render_passes()[g_recorder.currentRenderPass];
     const auto& proj = gx::g_gxState.proj;
     const auto& vp = gx::g_gxState.renderViewport;

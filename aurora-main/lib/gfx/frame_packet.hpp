@@ -92,6 +92,8 @@ struct RenderPass {
   wgpu::TextureView copySourceDepthView;
   bool captureDepthSnapshot = false;
   unsigned giGeometry = 0;
+  bool applyAmbientOcclusion = false;
+  bool applyGlobalIllumination = false;
   std::vector<webgpu::rtgi::Triangle> giTriangles;
   std::vector<webgpu::rtgi::Node> giNodes;
   std::vector<webgpu::rtgi::Triangle> giUnretained;

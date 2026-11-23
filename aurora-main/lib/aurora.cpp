@@ -758,7 +758,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
               gfx::pixel_perfect::integer_scale(presentSource.size.height, static_cast<uint32_t>(viewport.height)) &&
               static_cast<uint32_t>(viewport.width) / presentSource.size.width ==
                   static_cast<uint32_t>(viewport.height) / presentSource.size.height;
-          const bool sceneEffects = aurora_enhanced_bloom_enabled() || aurora_ambient_occlusion_enabled();
+          const bool sceneEffects = aurora_enhanced_bloom_enabled();
           const bool replayHud = (!exactPixels || sceneEffects) && displayCopy && gfx::presentation_hud_ready(pixelPerfectGui);
           auto scene = replayHud ? gfx::prepare_presentation_hud_scene(encoder, pixelPerfectGui) : presentSource;
           if (replayHud && s_enhancedBloom.load(std::memory_order_relaxed)) {

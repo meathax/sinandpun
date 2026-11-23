@@ -298,8 +298,8 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
       webgpu::resample_present_source(cmd, quarter, scene, SAMPLER_BILINEAR, false, depth,
                                        webgpu::BouncePass::RayFilter, passInfo.giProjection);
     }
-    webgpu::TextureWithSampler lit;
-    if (!rayTraced || webgpu::upscale::gi_comparison_pending()) {
+    auto lit = scene;
+    if (passInfo.applyGlobalIllumination && (!rayTraced || webgpu::upscale::gi_comparison_pending())) {
       const webgpu::Viewport half{0,0,float((size.width+1)/2),float((size.height+1)/2),0,1};
       const webgpu::Viewport coarse{0,0,float((size.width+31)/32),float((size.height+31)/32),0,1};
       webgpu::resample_present_source(cmd, coarse, scene, SAMPLER_BILINEAR, false, depth,
@@ -315,10 +315,13 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
                                                webgpu::BouncePass::RayComposite, passInfo.giProjection);
       webgpu::upscale::capture_rtgi(cmd, lit);
     }
-    if (passInfo.msaaSamples == 1) {
+    if (passInfo.applyAmbientOcclusion) {
+      lit = webgpu::resample_present_source(cmd, full, lit, SAMPLER_BILINEAR, false, depth);
+    }
+    if (passInfo.msaaSamples == 1 && lit.texture.Get() != scene.texture.Get()) {
       const wgpu::TexelCopyTextureInfo src{.texture=lit.texture}, dst{.texture=scene.texture};
       cmd.CopyTextureToTexture(&src, &dst, &size);
-    } else {
+    } else if (passInfo.msaaSamples > 1 && lit.texture.Get() != scene.texture.Get()) {
       const wgpu::RenderPassColorAttachment dst{.view=attachment.view, .resolveTarget=attachment.resolveView,
                                                 .loadOp=wgpu::LoadOp::Clear, .storeOp=wgpu::StoreOp::Store};
       const wgpu::RenderPassDescriptor descriptor{.label="GI multisample restore", .colorAttachmentCount=1, .colorAttachments=&dst};
@@ -667,13 +670,10 @@ webgpu::TextureWithSampler prepare_presentation_hud_scene(const wgpu::CommandEnc
   const bool scaled = size.width != static_cast<uint32_t>(copy.resolveRect.width) ||
                       size.height != static_cast<uint32_t>(copy.resolveRect.height);
   const auto& background = hud.background;
-  const webgpu::Viewport viewport{0.f, 0.f, float(background.size.width), float(background.size.height), 0.f, 1.f};
-  const auto& shaded = hud.depth ? webgpu::resample_present_source(encoder, viewport, background,
-                                                                   SAMPLER_BILINEAR, false, hud.depth) : background;
   tex_copy_conv::blit(encoder, {
       .fmt = copy.resolveFormat,
       .srcFmt = copy.resolveSourceFormat,
-      .srcView = shaded.view,
+      .srcView = background.view,
       .uniformRange = copy.resolveUniformRange,
       .dst = g_hudSceneCopy,
       .sampleFilter = scaled ? tex_copy_conv::SampleFilter::Linear : tex_copy_conv::SampleFilter::Nearest,
