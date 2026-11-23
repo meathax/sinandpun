@@ -292,18 +292,19 @@ fn gather_rays(p: vec2i, dim: vec2i) -> vec4f {
     if (dot(normal,normal)<0.5) { return vec4f(0); }
     let tangent = normalize(cross(select(vec3f(0,1,0),vec3f(1,0,0),abs(normal.y)>0.90),normal));
     let bitangent = cross(normal,tangent);
-    // Stable per-pixel rotation decorrelates neighboring ray fans without
-    // introducing temporal noise or repeating diagonal patterns.
-    var seed = u32(p.x/4)*1973u + u32(p.y/4)*9277u + 89173u;
-    seed = (seed ^ (seed >> 16u))*0x7feb352du;
-    seed = (seed ^ (seed >> 15u))*0x846ca68bu;
-    let angle = f32((seed ^ (seed >> 16u)) & 65535u)*(6.2831853/65536.0);
+    // A low-discrepancy rotation spreads directions within the filter footprint.
+    let cell = vec2f(p/4);
+    let angle = 6.2831853*fract(dot(cell,vec2f(0.75487767,0.56984029)));
     let lateral = cos(angle)*tangent+sin(angle)*bitangent;
+    let across = cross(normal,lateral);
     let origin = center+normal*max(0.018,-center.z*0.0016);
     let reach = clamp(-center.z*0.78,5.0,5000.0);
-    var light = trace_bounce(origin,0.88*lateral+0.47497*normal,reach,dim);
-    light += trace_bounce(origin,-0.88*lateral+0.47497*normal,reach,dim);
-    return vec4f(sqrt(clamp(light.rgb*0.32,vec3f(0),vec3f(1))),light.a*0.5);
+    // Two equal-area strata on the cosine-weighted hemisphere.
+    var light = trace_bounce(origin,0.8660254*lateral+0.5*normal,reach,dim);
+    light += trace_bounce(origin,-0.8660254*lateral+0.5*normal,reach,dim);
+    light += trace_bounce(origin,0.5*across+0.8660254*normal,reach,dim);
+    light += trace_bounce(origin,-0.5*across+0.8660254*normal,reach,dim);
+    return vec4f(sqrt(clamp(light.rgb*0.16,vec3f(0),vec3f(1))),light.a*0.25);
 }
 
 // Each screen-space slice integrates only newly visible solid angle as it moves
@@ -358,12 +359,13 @@ fn fs_bounce(in: VertexOutput) -> @location(0) vec4<f32> {
         let depth = eye_depth(pixel);
         var sum = vec4f(0);
         var total = 0.0;
-        for (var y=-3;y<=3;y++) { for (var x=-3;x<=3;x++) {
+        for (var y=-4;y<=4;y++) { for (var x=-4;x<=4;x++) {
             let offset = vec2i(x,y);
-            let q = clamp(vec2i(in.position.xy)+offset,vec2i(0),reduced-1);
+            let q = clamp(vec2i(in.position.xy)+2*offset,vec2i(0),reduced-1);
             let neighbor = min(q*4+2,dim-1);
+            if (textureLoad(scene_depth,neighbor,0).r <= 1e-7) { continue; }
             let error = abs(eye_depth(neighbor)-depth)/max(depth,1e-6);
-            let w = exp2(-0.23*f32(x*x+y*y)) / (1.0+1700.0*error*error);
+            let w = exp2(-0.14*f32(x*x+y*y)) / (1.0+1700.0*error*error);
             let tap = textureLoad(irradiance,q,0);
             sum += w*vec4f(tap.rgb*tap.rgb,tap.a);
             total += w;
@@ -400,16 +402,21 @@ fn fs_bounce(in: VertexOutput) -> @location(0) vec4<f32> {
         let rt = uniforms.sampler_mode == 9u;
         let stride = select(2,4,rt);
         let grid = (vec2f(p)-f32(stride/2))/f32(stride);
-        let corner = vec2i(floor(grid));
+        let nearest = vec2i(floor(grid+0.5));
         let z = eye_depth(p);
         var sum = vec3f(0);
         var total = 0.0;
         var blocked = 0.0;
-        for (var y=0;y<2;y++) { for (var x=0;x<2;x++) {
-            let q = clamp(corner+vec2i(x,y),vec2i(0),vec2i(textureDimensions(irradiance))-1);
-            let error = abs(eye_depth(min(q*stride+stride/2,dim-1))-z)/max(z,1e-6);
-            let offset = vec2f(vec2i(x,y))-fract(grid);
-            let spatial = 1.0-abs(offset);
+        // Quadratic B-spline weights give adjacent grid cells matching slopes.
+        for (var y=-1;y<=1;y++) { for (var x=-1;x<=1;x++) {
+            let cell = nearest+vec2i(x,y);
+            let q = clamp(cell,vec2i(0),vec2i(textureDimensions(irradiance))-1);
+            let neighbor = min(q*stride+stride/2,dim-1);
+            if (textureLoad(scene_depth,neighbor,0).r <= 1e-7) { continue; }
+            let error = abs(eye_depth(neighbor)-z)/max(z,1e-6);
+            let offset = abs(vec2f(cell)-grid);
+            let tail = 1.5-offset;
+            let spatial = select(0.5*tail*tail,0.75-offset*offset,offset<=vec2f(0.5));
             let windowWeight = spatial.x*spatial.y;
             let w = windowWeight/(1.0+40000.0*error*error);
             let tap = textureLoad(irradiance,q,0);
@@ -418,12 +425,11 @@ fn fs_bounce(in: VertexOutput) -> @location(0) vec4<f32> {
             total += w;
         }}
         let indirect = sum/max(total,0.002);
-        let energy = min(indirect,vec3f(select(0.035,0.055,rt)));
-        let reflected = uniforms.bounce_gain * energy * sqrt(clamp(base.rgb,vec3f(0),vec3f(1)));
-        // Replace part of the existing ambient fill where geometry occludes it.
-        let ambient = 1.0 - select(0.15,0.11,rt)*clamp(blocked/max(total,0.002),0.0,1.0);
-        let lit = sqrt(ambient*base.rgb*base.rgb + reflected*(1.0-base.rgb*base.rgb));
-        return vec4f(min(lit,vec3f(1.0)),base.a);
+        // Both GI paths shade the receiver with a bounded relative gain. This
+        // keeps isolated hits from washing dark metal white in strong-bounce mode.
+        let gain = uniforms.bounce_gain * indirect / (vec3f(0.20)+indirect);
+        let response = 0.45 * gain / (vec3f(1.0)+gain);
+        return vec4f(base.rgb + base.rgb*(1.0-base.rgb)*response,base.a);
     }
     return vec4f(0);
 }
