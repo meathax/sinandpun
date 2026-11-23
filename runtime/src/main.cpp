@@ -1416,6 +1416,46 @@ bool ConfigureGamePathForLaunch(const std::filesystem::path& gamePath) {
     return true;
 }
 
+bool PrepareExtractedFolder(const std::filesystem::path& absoluteGamePath, std::string& error) {
+    if (!ValidateExtractedGameFolder(absoluteGamePath, error)) {
+        return false;
+    }
+    std::cout << "progress 0.8 Checking extracted game\n";
+    // Folder setup must derive the same images as disc import; release archives
+    // cannot provide prelinked images from somebody else's copy of the game.
+    const auto modules = ManagedGameDirectory() / "modules";
+    try {
+        const auto sel = ReadModuleFile(absoluteGamePath / "files" / "gs2.sel");
+        std::array<std::vector<uint8_t>, DiscImport::kModuleCount> images;
+        for (int index = 0; index < DiscImport::kModuleCount; ++index) {
+            char name[16];
+            std::snprintf(name, sizeof name, "stg%02d", index);
+            if (!DiscImport::BuildModuleImage(
+                    ReadModuleFile(absoluteGamePath / "files" / (std::string(name) + ".rso")),
+                    sel, DiscImport::kModuleBase, images[index], error)) {
+                throw std::runtime_error(std::string(name) + ": " + error);
+            }
+            std::cout << "progress " << (0.8 + 0.02 * index) << " Preparing " << name << std::endl;
+        }
+        std::filesystem::create_directories(modules);
+        std::filesystem::remove(RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile);
+        for (int index = 0; index < DiscImport::kModuleCount; ++index) {
+            const std::string name = "stg0" + std::to_string(index);
+            const auto& image = images[index];
+            std::ofstream output(modules / (std::string(name) + ".bin"),
+                                 std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char*>(image.data()),
+                         static_cast<std::streamsize>(image.size()));
+            output.close();
+            if (!output) throw std::runtime_error(std::string("Cannot write module ") + name);
+        }
+    } catch (const std::exception& failure) {
+        error = failure.what();
+        return false;
+    }
+    return WritePreparedConfiguration(absoluteGamePath.lexically_normal(), error);
+}
+
 int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
     std::error_code ec;
     const auto absoluteGamePath = std::filesystem::absolute(*args.gamePath, ec);
@@ -1431,44 +1471,7 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
 
     std::string error;
     if (std::filesystem::is_directory(absoluteGamePath, ec)) {
-        if (!ValidateExtractedGameFolder(absoluteGamePath, error)) {
-            std::cerr << "[prepare] " << error << '\n';
-            return EXIT_FAILURE;
-        }
-        std::cout << "progress 0.8 Checking extracted game\n";
-        // Folder setup must derive the same images as disc import; release archives
-        // cannot provide prelinked images from somebody else's copy of the game.
-        const auto modules = ManagedGameDirectory() / "modules";
-        try {
-            const auto sel = ReadModuleFile(absoluteGamePath / "files" / "gs2.sel");
-            std::array<std::vector<uint8_t>, DiscImport::kModuleCount> images;
-            for (int index = 0; index < DiscImport::kModuleCount; ++index) {
-                char name[16];
-                std::snprintf(name, sizeof name, "stg%02d", index);
-                if (!DiscImport::BuildModuleImage(
-                        ReadModuleFile(absoluteGamePath / "files" / (std::string(name) + ".rso")),
-                        sel, DiscImport::kModuleBase, images[index], error)) {
-                    throw std::runtime_error(std::string(name) + ": " + error);
-                }
-                std::cout << "progress " << (0.8 + 0.02 * index) << " Preparing " << name << std::endl;
-            }
-            std::filesystem::create_directories(modules);
-            std::filesystem::remove(RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile);
-            for (int index = 0; index < DiscImport::kModuleCount; ++index) {
-                const std::string name = "stg0" + std::to_string(index);
-                const auto& image = images[index];
-                std::ofstream output(modules / (std::string(name) + ".bin"),
-                                     std::ios::binary | std::ios::trunc);
-                output.write(reinterpret_cast<const char*>(image.data()),
-                             static_cast<std::streamsize>(image.size()));
-                output.close();
-                if (!output) throw std::runtime_error(std::string("Cannot write module ") + name);
-            }
-        } catch (const std::exception& failure) {
-            std::cerr << "[prepare] " << failure.what() << '\n';
-            return EXIT_FAILURE;
-        }
-        if (!WritePreparedConfiguration(absoluteGamePath.lexically_normal(), error)) {
+        if (!PrepareExtractedFolder(absoluteGamePath, error)) {
             std::cerr << "[prepare] " << error << '\n';
             return EXIT_FAILURE;
         }
@@ -1796,7 +1799,7 @@ int RuntimeMain(int argc, char** argv) {
         settings_overlay::InitializeRuntimeSettings();
         // No usable game data yet: ask for the disc image and import it instead of failing in dvd.cpp.
         if (!g_headless && !first_run_launcher::GameDataAvailable()) {
-            first_run_launcher::Run();
+            first_run_launcher::Run(PrepareExtractedFolder);
         }
         if (!g_headless) {
             SteamInputLayout::Initialize(RuntimeConfigFile::SteamInputOverrideEnabled(),

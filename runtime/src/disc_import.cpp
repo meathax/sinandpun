@@ -381,10 +381,12 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
 
 #include "disc_key.inc"
 
+struct KeyRequired {};
+
 class WiiPartition {
 public:
     WiiPartition(RawImage& raw, uint64_t partitionOffset, const Sha1& sha, std::atomic<bool>& cancel,
-                 const fs::path& keyFile)
+                 const fs::path& requestedKeyFile)
         : m_raw(raw), m_sha(sha), m_cancel(cancel) {
         uint8_t ticket[0x2C0];
         if (!raw.Read(partitionOffset, ticket, sizeof ticket)) throw ImportError("The disc image is truncated (partition header).");
@@ -398,13 +400,17 @@ public:
         const uint64_t encryptedSize = static_cast<uint64_t>(Be32(ticket + 0x2BC)) << 2;
         m_clusters = encryptedSize / kClusterSize;
         if (m_clusters == 0) throw ImportError("The disc image has an empty data partition.");
-        if (keyFile.empty() && raw.SelectPartition(m_dataStart, m_clusters, nullptr)) {
+        if (requestedKeyFile.empty() && raw.SelectPartition(m_dataStart, m_clusters, nullptr)) {
             m_plainPartition = true;
             m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
             return;
         }
+        auto keyFile = requestedKeyFile;
         if (keyFile.empty()) {
-            throw ImportError("Select your own 16-byte Wii common key file, or use an extracted game folder.");
+            if (const wchar_t* configured = _wgetenv(L"SIN_WII_KEY_FILE")) keyFile = configured;
+        }
+        if (keyFile.empty()) {
+            throw KeyRequired{};
         }
         const bool suppliedTitleKey = ReadDiscKey(keyFile, commonIndex, commonKey.bytes);
         if (suppliedTitleKey) {
@@ -607,10 +613,6 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         progress.total = 1;
         progress.SetStage("Reading disc image");
         auto raw = OpenDiscImage(image);
-        auto keyFile = requestedKeyFile;
-        if (keyFile.empty()) {
-            if (const wchar_t* configured = _wgetenv(L"SIN_WII_KEY_FILE")) keyFile = configured;
-        }
         uint8_t header[0x60];
         if (!raw->Read(0, header, sizeof header)) throw ImportError("The disc image is truncated.");
         const uint32_t wiiMagic = Be32(header + 0x18), gcMagic = Be32(header + 0x1C);
@@ -650,7 +652,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         if (partitionOffset == 0) throw ImportError("The disc image has no game partition (damaged or scrubbed image).");
 
         Sha1 sha;
-        WiiPartition part(*raw, partitionOffset, sha, progress.cancel, keyFile);
+        WiiPartition part(*raw, partitionOffset, sha, progress.cancel, requestedKeyFile);
 
         uint8_t bootBin[0x440];
         part.Read(0, bootBin, sizeof bootBin);
@@ -783,6 +785,9 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         summary.bytes = bytes;
         summary.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         return Result::Ok;
+    } catch (const KeyRequired&) {
+        error = "This encrypted disc requires your Wii common key or R2VE01 title key.";
+        return Result::KeyRequired;
     } catch (const ImportCancelled&) {
         cleanup();
         error = "Import cancelled.";

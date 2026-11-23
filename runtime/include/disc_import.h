@@ -42,7 +42,7 @@ struct Summary {
     double seconds = 0.0;
 };
 
-enum class Result { Ok, Cancelled, Failed };
+enum class Result { Ok, Cancelled, Failed, KeyRequired };
 
 // Imports `image` into `gameDir` (built in a sibling "<gameDir>.importing" directory and swapped in only when
 // everything succeeded). On Failed, `error` holds a user-presentable explanation.

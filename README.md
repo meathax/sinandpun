@@ -37,7 +37,7 @@ Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required f
 
 1. See [GitHub Releases](https://github.com/meathax/sinandpun/releases) for published builds, or [build it from source](#building-from-source).
 2. Extract the entire Windows ZIP and run `WiiCompiled.exe`.
-3. Select your `R2VE01` Wii disc image (ISO, WBFS, RVZ or GCZ). For an RVZ with a decoded game partition, click **Cancel** in the key picker to import directly. Encrypted images require your own key. An extracted folder with `sys/` and `files/` can be prepared without one.
+3. Choose **Select disc image** for an R2VE01 ISO, WBFS, RVZ or GCZ. Setup asks for a key only when the game partition needs one. For an extracted game, choose **Select extracted folder** and select the parent folder containing both `sys/` and `files/`. Keep that folder in place after setup. It needs no key.
 
 The key picker accepts a 16-byte binary common key, 32 hexadecimal digits in text, or a BootMii `keys.bin`. In a text list, put the 32 digits on one line followed by `# Wii common key` or `# R2VE01 title key`. You can also select an intact, unencrypted `.7z` containing a single key file. Choose **All files** for other filenames. WAD channel packages do not supply this game's disc contents.
 

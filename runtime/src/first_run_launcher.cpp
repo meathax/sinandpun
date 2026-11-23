@@ -62,7 +62,7 @@ bool GameDataAvailable() {
 }
 
 #ifndef _WIN32
-bool Run() { return false; }
+bool Run(PrepareFolder) { return false; }
 #else
 
 namespace {
@@ -79,13 +79,13 @@ struct Launcher {
     std::thread dialogThread;
     std::atomic<int> dialogState{0};  // 0 idle, 1 open, 2 finished
     std::mutex lock;
-    fs::path picked, pickedKeys;
+    fs::path picked, pickedKeys, currentImage;
 
     // import thread
     std::thread importThread;
     DiscImport::Progress progress;
     DiscImport::Summary summary;
-    std::atomic<int> importState{0};  // 0 running, 1 ok, 2 failed, 3 cancelled
+    std::atomic<int> importState{0};  // 0 running, 1 ok, 2 failed, 3 cancelled, 4 needs key
     std::string error;
     std::chrono::steady_clock::time_point importStart;
     std::string imageName;
@@ -110,11 +110,11 @@ fs::path PickFile(HWND owner, const wchar_t* title, const wchar_t* label, const 
             {label, pattern},
             {L"All files", L"*.*"},
         };
-        dialog->SetFileTypes(2, filters);
+        if (pattern) dialog->SetFileTypes(2, filters);
         dialog->SetTitle(title);
         DWORD options = 0;
         dialog->GetOptions(&options);
-        dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
+        dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | (pattern ? FOS_FILEMUSTEXIST : FOS_PICKFOLDERS));
         if (SUCCEEDED(dialog->Show(owner))) {
             IShellItem* item = nullptr;
             if (SUCCEEDED(dialog->GetResult(&item)) && item) {
@@ -133,21 +133,20 @@ fs::path PickFile(HWND owner, const wchar_t* title, const wchar_t* label, const 
 }
 
 // The dialogs run on a worker so the first-run screen stays visible.
-void PickImportInputs(Launcher& launcher, HWND owner, fs::path image) {
+enum class Picker { Disc, Folder, Key };
+void PickInput(Launcher& launcher, HWND owner, Picker picker) {
     launcher.dialogState = 1;
-    launcher.dialogThread = std::thread([&launcher, owner, image = std::move(image)]() mutable {
-        if (image.empty()) {
-            image = PickFile(owner, L"1 of 2: Select your Wii disc image",
-                             L"Wii images and packages", L"*.iso;*.wbfs;*.rvz;*.wad;*.gcz;*.cue;*.bin;*.gcm");
+    launcher.dialogThread = std::thread([&launcher, owner, picker] {
+        if (picker == Picker::Disc) {
+            launcher.picked = PickFile(owner, L"Select your Wii disc image", L"Wii images and packages",
+                                       L"*.iso;*.wbfs;*.rvz;*.wad;*.gcz;*.cue;*.bin;*.gcm");
+        } else if (picker == Picker::Folder) {
+            launcher.picked = PickFile(owner, L"Select the game folder containing sys and files", nullptr, nullptr);
+        } else {
+            launcher.pickedKeys = PickFile(owner, L"This disc is encrypted. Select your Wii key file",
+                                           L"Wii key files", L"*.bin;*.key;*.hex;*.txt;*.7z;common-key");
+            if (!launcher.pickedKeys.empty()) launcher.picked = launcher.currentImage;
         }
-        fs::path keys;
-        if (!image.empty() && _wcsicmp(image.extension().c_str(), L".wad") != 0) {
-            const bool rvz = _wcsicmp(image.extension().c_str(), L".rvz") == 0;
-            keys = PickFile(owner, rvz ? L"Select a Wii key, or Cancel to use the RVZ partition" : L"2 of 2: Select your Wii common key file",
-                            L"Wii common key files", L"*.bin;*.key;*.hex;*.txt;*.7z;common-key");
-        }
-        launcher.picked = std::move(image);
-        launcher.pickedKeys = std::move(keys);
         launcher.dialogState = 2;
     });
 }
@@ -163,6 +162,7 @@ void StartImport(Launcher& l, const fs::path& image, const fs::path& keys) {
     l.progress.total = 1;
     l.summary = {};
     l.error.clear();
+    l.currentImage = image;
     l.imageName = image.filename().string();
     l.importState = 0;
     l.importStart = std::chrono::steady_clock::now();
@@ -176,7 +176,8 @@ void StartImport(Launcher& l, const fs::path& image, const fs::path& keys) {
             std::lock_guard<std::mutex> guard(l.lock);
             l.error = error;
         }
-        l.importState = result == DiscImport::Result::Ok ? 1 : result == DiscImport::Result::Cancelled ? 3 : 2;
+        l.importState = result == DiscImport::Result::Ok ? 1 : result == DiscImport::Result::Cancelled ? 3 :
+                        result == DiscImport::Result::KeyRequired ? 4 : 2;
     });
 }
 
@@ -206,7 +207,7 @@ void DrawBackground(ImDrawList* dl, const ImVec2& size) {
 
 }  // namespace
 
-bool Run() {
+bool Run(PrepareFolder prepareFolder) {
     Launcher l;
 
     // The default 854x480 window renders the 1080p-based UI far too small; use 720p while the launcher is up.
@@ -295,18 +296,25 @@ bool Run() {
         if (l.dialogState.load() == 2) {
             JoinFinished(l.dialogThread);
             l.dialogState = 0;
-            if (!l.picked.empty() && (!l.pickedKeys.empty() || _wcsicmp(l.picked.extension().c_str(), L".rvz") == 0 || _wcsicmp(l.picked.extension().c_str(), L".wad") == 0) &&
-                l.phase != Phase::Importing && l.phase != Phase::Done) {
-                StartImport(l, l.picked, l.pickedKeys);
+            if (!l.picked.empty()) {
+                std::error_code ec;
+                if (fs::is_directory(l.picked, ec)) {
+                    finished = prepareFolder(l.picked, l.error);
+                    if (!finished) l.phase = Phase::Failed;
+                } else {
+                    StartImport(l, l.picked, l.pickedKeys);
+                }
             }
             l.picked.clear();
             l.pickedKeys.clear();
+            if (finished) break;
         }
         if (!l.dropped.empty()) {
             auto file = std::move(l.dropped);
             l.dropped.clear();
             if (l.dialogState.load() == 0 && l.phase != Phase::Importing && l.phase != Phase::Done) {
-                PickImportInputs(l, WindowHandle(), std::move(file));
+                l.picked = std::move(file);
+                l.dialogState = 2;
             }
         }
         if (l.phase == Phase::Importing && l.importState.load() != 0) {
@@ -316,6 +324,9 @@ bool Run() {
                 PointConfigAtManagedGame();
                 l.phase = Phase::Done;
                 hookClock = std::chrono::steady_clock::now();
+            } else if (state == 4) {
+                l.phase = Phase::Idle;
+                PickInput(l, WindowHandle(), Picker::Key);
             } else {
                 l.phase = Phase::Failed;
                 if (state == 3) l.phase = Phase::Idle;
@@ -359,23 +370,21 @@ bool Run() {
                 game_ui::DrawWrapped(dl, 26.0f, ImVec2(bodyX, bodyY + Px(50.0f)), bodyW, game_ui::kWhite, message, game_ui::Outline::Thin, 1.0f, true);
             } else {
                 game_ui::DrawWrapped(dl, 30.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kWhite,
-                                     "Welcome! To get started, select your own disc image of Sin & Punishment: Star Successor (North America).",
+                                     "Welcome! To get started, choose your North American Star Successor disc image or extracted game folder.",
                                      game_ui::Outline::Thin, 1.0f, true);
                 game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(105.0f)), bodyW, game_ui::kTextDim,
-                                     "Select your NTSC-U disc image, then your Wii common key or BootMii keys.bin. Setup uses the key once.",
+                                     "For extracted games, choose the folder containing both sys and files. Encrypted discs will prompt for a key.",
                                      game_ui::Outline::Thin, 1.0f, true);
             }
             // A dialog may finish during this frame. Consume its result and
             // join the worker before accepting another activation.
             const bool busy = l.dialogState.load() != 0;
             const char* label = busy ? "Waiting for file dialog..." : (l.phase == Phase::Failed ? "Select another disc image" : "Select disc image");
-            primary = Button(dl, in, ImVec2(cx, btnY - Px(70.0f)), 560.0f, label, l.focus == 0, true);
-            game_ui::TextCentered(dl, 22.0f, ImVec2(cx, btnY + Px(10.0f)), game_ui::kTextDim, "or drag and drop the file onto this window",
-                                  game_ui::Outline::Thin);
-            if (in.accept && l.focus == 0) primary = true;
-            if (busy) primary = false;
-            if (primary) {
-                PickImportInputs(l, WindowHandle(), {});
+            if (!busy && (in.up || in.down)) l.focus = 1 - l.focus;
+            primary = Button(dl, in, ImVec2(cx, btnY - Px(80.0f)), 560.0f, label, l.focus == 0, true);
+            secondary = Button(dl, in, ImVec2(cx, btnY), 560.0f, "Select extracted folder", l.focus == 1, false);
+            if (!busy && (primary || secondary || in.accept)) {
+                PickInput(l, WindowHandle(), (secondary || (!primary && l.focus == 1)) ? Picker::Folder : Picker::Disc);
             }
         } else if (l.phase == Phase::Importing) {
             std::string stage, detail;
