@@ -1,5 +1,5 @@
 param(
-    [string]$Source = "build\native",     # build tree with the freshly built WiiCompiled.exe
+    [string]$Source = "build\native",     # build tree with the freshly built sinandpun.exe
     [string]$Target = "ready",
     [switch]$FetchDlss,                   # download the NVIDIA Streamline / DLSS SDK release (263 MB zip) into third_party\nvidia first
     [switch]$NoDlss                       # do not copy the NVIDIA DLSS DLLs
@@ -19,7 +19,7 @@ Set-Location $root
 if ($FetchDlss) { & "$PSScriptRoot/fetch_graphics_sdks.ps1" }
 $src = Join-Path $root $Source
 $dst = Join-Path $root $Target
-$exe = Join-Path $src "WiiCompiled.exe"
+$exe = Join-Path $src "sinandpun.exe"
 if (-not (Test-Path $exe)) { throw "no exe at $exe - build first" }
 $runtimeAssets = @("dsp_coef.bin", "initial_pipeline_cache.db")
 foreach ($asset in ($runtimeAssets + @("SDL3.dll", "webgpu_dawn.dll"))) {
@@ -43,7 +43,7 @@ $amdFiles = @{
 foreach ($path in $amdFiles.Keys) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing AMD runtime asset: $path" }
 }
-if (Get-Process WiiCompiled,sinandpun -ErrorAction SilentlyContinue | Where-Object { $_.Path -and (Split-Path $_.Path -Parent) -eq $dst }) {
+if (Get-Process sinandpun -ErrorAction SilentlyContinue | Where-Object { $_.Path -and (Split-Path $_.Path -Parent) -eq $dst }) {
     throw "the game in $Target is running; close it first"
 }
 $moduleNames = 0..7 | ForEach-Object { "stg0$_.bin" }
@@ -55,7 +55,6 @@ foreach ($moduleName in $moduleNames) {
 }
 New-Item -ItemType Directory -Force $dst | Out-Null
 Get-ChildItem -LiteralPath $dst -File -Filter "*.dll" | Remove-Item -Force
-Copy-Item $exe (Join-Path $dst "WiiCompiled.exe") -Force
 Copy-Item $exe (Join-Path $dst "sinandpun.exe") -Force
 foreach ($asset in $runtimeAssets) {
     Copy-Item -LiteralPath (Join-Path $src $asset) -Destination $dst -Force
@@ -145,12 +144,12 @@ start "" "%~dp0sinandpun.exe"
 $commit = (git -c core.fsmonitor=false rev-parse --short HEAD) 2>$null
 if ($LASTEXITCODE -ne 0) { throw "could not determine the source commit" }
 $dirty = if ((git -c core.fsmonitor=false status --short --untracked-files=no) 2>$null) { " (+uncommitted tracked changes)" } else { "" }
-$hash = (Get-FileHash (Join-Path $dst "WiiCompiled.exe") -Algorithm SHA256).Hash
+$hash = (Get-FileHash (Join-Path $dst "sinandpun.exe") -Algorithm SHA256).Hash
 @"
 Sin & Punishment: Star Successor - recomp (ready to play / test)
 Updated : $(Get-Date -Format 'yyyy-MM-dd HH:mm')
 Commit  : $commit$dirty
-Exe     : WiiCompiled.exe  $((Get-Item (Join-Path $dst 'WiiCompiled.exe')).Length) bytes
+Exe     : sinandpun.exe  $((Get-Item (Join-Path $dst 'sinandpun.exe')).Length) bytes
 SHA-256 : $hash
 
 Run Play.bat (or sinandpun.exe). Your disc folder is set by dvd_root in UserData\Config.toml.

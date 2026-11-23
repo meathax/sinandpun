@@ -55,7 +55,7 @@ int main() {
                  "macOS config must be under Application Support")) return 1;
 #endif
     {
-        const char* argv[] = {"WiiCompiled.exe", "--headless", nullptr};
+        const char* argv[] = {"sinandpun.exe", "--headless", nullptr};
         RecompLauncher::Arguments arguments;
         std::string error;
         if (!Require(RecompLauncher::ParseArguments(2, const_cast<char**>(argv), arguments, error) &&
@@ -63,7 +63,7 @@ int main() {
                      "headless arguments were not parsed")) return 1;
     }
     {
-        const char* argv[] = {"WiiCompiled.exe", "--prepare", "--data=C:/Launcher Data",
+        const char* argv[] = {"sinandpun.exe", "--prepare", "--data=C:/Launcher Data",
                               "--game", "D:/Dumps/R2VE01.iso", nullptr};
         RecompLauncher::Arguments arguments;
         std::string error;
@@ -74,7 +74,7 @@ int main() {
                      "launcher setup arguments were not parsed")) return 1;
     }
     {
-        const char* argv[] = {"WiiCompiled.exe", "--prepare", "--data", "C:/Data", nullptr};
+        const char* argv[] = {"sinandpun.exe", "--prepare", "--data", "C:/Data", nullptr};
         RecompLauncher::Arguments arguments;
         std::string error;
         if (!Require(!RecompLauncher::ParseArguments(4, const_cast<char**>(argv), arguments, error) &&
@@ -82,7 +82,7 @@ int main() {
                      "prepare without a game was accepted")) return 1;
     }
     {
-        const char* argv[] = {"WiiCompiled.exe", "--unknown", nullptr};
+        const char* argv[] = {"sinandpun.exe", "--unknown", nullptr};
         RecompLauncher::Arguments arguments;
         std::string error;
         if (!Require(!RecompLauncher::ParseArguments(2, const_cast<char**>(argv), arguments, error) &&
@@ -90,7 +90,7 @@ int main() {
                      "unknown launcher arguments were accepted")) return 1;
     }
     {
-        const char* argv[] = {"WiiCompiled.exe", "--data=first", "--data", "second", nullptr};
+        const char* argv[] = {"sinandpun.exe", "--data=first", "--data", "second", nullptr};
         RecompLauncher::Arguments arguments;
         std::string error;
         if (!Require(!RecompLauncher::ParseArguments(4, const_cast<char**>(argv), arguments, error) &&

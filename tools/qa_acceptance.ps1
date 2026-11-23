@@ -14,7 +14,7 @@ Set-Location $root
 if (-not $SaveScript) { throw "SaveScript is required and must finish with a deterministic HOME-menu quit path." }
 if (-not $ReloadScript) { throw "ReloadScript is required and must finish with a deterministic HOME-menu quit path." }
 if ($SaveSeconds -le 0 -or $ReloadSeconds -le 0) { throw "phase timeouts must be positive" }
-if (-not $Exe) { $Exe = "$root\build\native\WiiCompiled.exe" }
+if (-not $Exe) { $Exe = "$root\build\native\sinandpun.exe" }
 if (-not $NandDir) { $NandDir = "$root\build\native\UserData\NAND\title\00010004\52325645\data" }
 $tool = "$root\tools\qa_acceptance.py"
 $outDir = "$root\build\qa\$Name"

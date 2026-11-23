@@ -32,7 +32,7 @@ $envEntries = if ($Env.Contains(';')) { $Env -split ';' } else { $Env -split ','
 foreach ($e in $envEntries) { if ($e) { $k, $v = $e -split '=', 2; $envs[$k] = $v } }
 Take-Lock "qa-$Name"
 try {
-    $src = "$root\build\native\WiiCompiled.exe"; $exe = "$root\build\native\SinQA.exe"
+    $src = "$root\build\native\sinandpun.exe"; $exe = "$root\build\native\SinQA.exe"
     if (-not (Test-Path $exe) -or (Get-Item $src).LastWriteTime -gt (Get-Item $exe).LastWriteTime) { Copy-Item $src $exe -Force }
     Get-Process SinQA -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     foreach ($k in $envs.Keys) { Set-Item -Path "Env:$k" -Value $envs[$k] }

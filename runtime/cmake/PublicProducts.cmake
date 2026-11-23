@@ -322,6 +322,7 @@ endfunction()
 
 add_executable(WiiCompiled "${MKW_BASE_PRODUCT_SOURCE}")
 mkw_configure_product(WiiCompiled)
+set_target_properties(WiiCompiled PROPERTIES OUTPUT_NAME sinandpun)
 if(MKW_PLATFORM_WINDOWS)
     target_link_libraries(WiiCompiled PRIVATE ${SIN_DISC_LIBRARIES})
 endif()

@@ -1,5 +1,5 @@
 param(
-    [string]$ProcessName = "WiiCompiled",
+    [string]$ProcessName = "sinandpun",
     [string]$OutFile = "build\screenshots\latest.png"
 )
 Add-Type -AssemblyName System.Drawing

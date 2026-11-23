@@ -4,7 +4,7 @@ Prints per thread the top symbols by self samples."""
 import bisect, subprocess, sys, re, collections
 NM = "C:/Users/meath/.local/share/retcomm/toolchains/cmake-clang-v1/latest/bin/llvm-nm.exe"
 samples = sys.argv[1] if len(sys.argv) > 1 else "build/native/prof_samples.txt"
-exe = sys.argv[2] if len(sys.argv) > 2 else "build/native/WiiCompiled.exe"
+exe = sys.argv[2] if len(sys.argv) > 2 else "build/native/sinandpun.exe"
 top = int(sys.argv[3]) if len(sys.argv) > 3 else 40
 out = subprocess.run([NM, "-n", "--defined-only", exe], capture_output=True, text=True).stdout
 # image base: take from the lowest text symbol vs. known RVA is unknown, so ask objdump-free: use llvm-readobj

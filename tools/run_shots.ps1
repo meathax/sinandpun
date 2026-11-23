@@ -7,9 +7,9 @@ param(
 # then closes it. Usage: powershell -File tools\run_shots.ps1 -At "70,90,110" -Name s6 -Env "SIN_VIRTUAL_REMOTE=1,SIN_AUTOSTAGE=6"
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
-Get-Process WiiCompiled -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process sinandpun -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 foreach ($e in ($Env -split ',')) { if ($e) { $k, $v = $e -split '=', 2; Set-Item -Path "Env:$k" -Value $v } }
-$p = Start-Process -FilePath "$root\build\native\WiiCompiled.exe" -WorkingDirectory "$root\build\native" `
+$p = Start-Process -FilePath "$root\build\native\sinandpun.exe" -WorkingDirectory "$root\build\native" `
     -RedirectStandardOutput "$root\build\boot-out.log" -RedirectStandardError "$root\build\boot-err.log" -PassThru
 $t0 = Get-Date
 foreach ($s in (($At -split ',') | ForEach-Object { [int]$_ } | Sort-Object)) {

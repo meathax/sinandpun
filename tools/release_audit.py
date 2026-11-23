@@ -33,11 +33,11 @@ def audit(source, package, modules, require_launcher_clean=False):
     warnings = []
     checks = {}
 
-    source_exe = source / "WiiCompiled.exe"
-    package_exe = package / ("sinandpun.exe" if require_launcher_clean else "WiiCompiled.exe")
+    source_exe = source / "sinandpun.exe"
+    package_exe = package / "sinandpun.exe"
     checks["exe_matches_build"] = same_file(source_exe, package_exe)
     if not checks["exe_matches_build"]:
-        errors.append(f"{package_exe.name} is missing, stale, or differs from the build source")
+        errors.append(f"Executable {package_exe.name} is missing, stale, or differs from the build source")
 
     for asset in ("dsp_coef.bin", "initial_pipeline_cache.db"):
         checks[asset] = same_file(source / asset, package / asset)
@@ -79,6 +79,7 @@ def audit(source, package, modules, require_launcher_clean=False):
         source_bootstrap = sorted(
             path.relative_to(source / "wii_bootstrap").as_posix()
             for path in (source / "wii_bootstrap").rglob("*") if path.is_file()
+            and not (require_launcher_clean and path == source / "wii_bootstrap/README.md")
         )
         package_bootstrap = package / "wii_bootstrap"
         missing_bootstrap = [
@@ -101,6 +102,9 @@ def audit(source, package, modules, require_launcher_clean=False):
         try:
             profile = json.loads(manifest.read_text(encoding="utf-8"))
             checks["launcher_format"] = profile.get("format")
+            if require_launcher_clean and any(profile.get(mode, {}).get("program") != ["sinandpun.exe"]
+                                              for mode in ("start", "prepare")):
+                errors.append("RecompLauncher start and prepare must use sinandpun.exe")
             if profile.get("format") != 1:
                 errors.append("recomplauncher.json has an unsupported format")
             if profile.get("repo") != "meathax/sinandpun":
@@ -109,6 +113,8 @@ def audit(source, package, modules, require_launcher_clean=False):
             errors.append(f"recomplauncher.json is invalid JSON: {error}")
 
     if require_launcher_clean:
+        if sorted(p.relative_to(package).as_posix() for p in package.rglob("*.exe")) != ["sinandpun.exe"]:
+            errors.append("release must contain exactly one executable at the root: sinandpun.exe")
         if package_exe.is_file():
             # These diagnostics are emitted only by the native SDK dispatch code.
             if package_exe.stat().st_size:
@@ -126,16 +132,17 @@ def audit(source, package, modules, require_launcher_clean=False):
             errors.append("launcher release contains mutable or standalone-only state: " +
                           ", ".join(mutable))
 
-    build_info = package / "BUILD-INFO.txt"
-    if package_exe.is_file() and build_info.is_file():
-        executable_hash = sha256(package_exe)
-        checks["build_info_hash_matches"] = executable_hash in build_info.read_text(
-            encoding="utf-8", errors="replace"
-        )
-        if not checks["build_info_hash_matches"]:
-            errors.append("BUILD-INFO.txt does not contain the packaged executable SHA-256")
-    else:
-        errors.append("BUILD-INFO.txt is missing")
+    if not require_launcher_clean:
+        build_info = package / "BUILD-INFO.txt"
+        if package_exe.is_file() and build_info.is_file():
+            executable_hash = sha256(package_exe)
+            checks["build_info_hash_matches"] = executable_hash in build_info.read_text(
+                encoding="utf-8", errors="replace"
+            )
+            if not checks["build_info_hash_matches"]:
+                errors.append("BUILD-INFO.txt does not contain the packaged executable SHA-256")
+        else:
+            errors.append("BUILD-INFO.txt is missing")
 
     leaked = []
     for directory in ("sys", "files", "orig"):

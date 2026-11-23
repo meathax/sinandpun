@@ -139,8 +139,8 @@ class ReleaseAuditTests(unittest.TestCase):
         (self.package / "modules").mkdir(parents=True)
         self.modules.mkdir(parents=True)
 
-        (self.source / "WiiCompiled.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
-        (self.package / "WiiCompiled.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
+        (self.source / "sinandpun.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
+        (self.package / "sinandpun.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
         for asset in ("dsp_coef.bin", "initial_pipeline_cache.db"):
             (self.source / asset).write_bytes(b"asset")
             (self.package / asset).write_bytes(b"asset")
@@ -156,7 +156,7 @@ class ReleaseAuditTests(unittest.TestCase):
             name = f"stg0{index}.bin"
             (self.modules / name).write_bytes(index.to_bytes(1, "little"))
             (self.package / "modules" / name).write_bytes(index.to_bytes(1, "little"))
-        executable_hash = release_audit.sha256(self.package / "WiiCompiled.exe")
+        executable_hash = release_audit.sha256(self.package / "sinandpun.exe")
         (self.package / "BUILD-INFO.txt").write_text(
             f"SHA-256 : {executable_hash}\n", encoding="utf-8")
 
@@ -168,7 +168,7 @@ class ReleaseAuditTests(unittest.TestCase):
         self.assertEqual(report["errors"], [])
 
     def test_stale_executable_and_game_data_fail(self):
-        (self.package / "WiiCompiled.exe").write_bytes(b"old")
+        (self.package / "sinandpun.exe").write_bytes(b"old")
         (self.package / "sys").mkdir()
         report = release_audit.audit(self.source, self.package, self.modules)
         self.assertTrue(any("executable" in error.lower() for error in report["errors"]))

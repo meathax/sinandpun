@@ -47,7 +47,7 @@ $buildExit = $LASTEXITCODE
 "build: $([int]$sw.Elapsed.TotalSeconds)s total"
 if ($buildExit -ne 0) { throw "CMake build failed with exit $buildExit" }
 
-$exe = Join-Path $BuildDir "WiiCompiled.exe"
+$exe = Join-Path $BuildDir "sinandpun.exe"
 if (Test-Path $exe) {
     $h = (Get-FileHash $exe -Algorithm SHA256).Hash
     "exe: $exe  $((Get-Item $exe).Length) bytes  sha256 $h"
@@ -55,7 +55,7 @@ if (Test-Path $exe) {
     throw "Build exited successfully but did not produce $exe"
 }
 if (-not $Keep -and (Test-Path $exe)) {
-    Copy-Item $exe "build\WiiCompiled-clean.exe" -Force
+    Copy-Item $exe "build\sinandpun.exe" -Force
     Remove-Item -Recurse -Force $BuildDir
-    "build tree removed; exe copied to build\WiiCompiled-clean.exe"
+    "build tree removed; exe copied to build\sinandpun.exe"
 }

@@ -16,7 +16,7 @@ function Start-Game([hashtable]$Env, [string]$LogPath) {
     New-Item -ItemType Directory -Force (Split-Path $LogPath) | Out-Null
     foreach ($k in $Env.Keys) { Set-Item -Path "Env:$k" -Value ([string]$Env[$k]) }
     try {
-        return Start-Process -FilePath "$script:Root\build\native\WiiCompiled.exe" -WorkingDirectory "$script:Root\build\native" `
+        return Start-Process -FilePath "$script:Root\build\native\sinandpun.exe" -WorkingDirectory "$script:Root\build\native" `
             -RedirectStandardOutput "$LogPath.out" -RedirectStandardError $LogPath -PassThru
     } finally { foreach ($k in $Env.Keys) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue } }
 }

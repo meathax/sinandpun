@@ -9,10 +9,10 @@ param(
 # Usage (repo root): powershell -File tools\run_game.ps1 -Seconds 50 -Name m1 -Env SIN_VIRTUAL_REMOTE=1,SIN_CALLTRACE=1
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
-Get-Process WiiCompiled -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process sinandpun -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Remove-Item build\native\calltrace.txt -ErrorAction SilentlyContinue
 foreach ($e in ($Env | ForEach-Object { $_ -split ',' })) { $k, $v = $e -split '=', 2; Set-Item -Path "Env:$k" -Value $v }
-$p = Start-Process -FilePath "$root\build\native\WiiCompiled.exe" -WorkingDirectory "$root\build\native" `
+$p = Start-Process -FilePath "$root\build\native\sinandpun.exe" -WorkingDirectory "$root\build\native" `
     -RedirectStandardOutput "$root\build\boot-out.log" -RedirectStandardError "$root\build\boot-err.log" -PassThru
 Start-Sleep -Seconds $Seconds
 # Take the screenshot in a watchdog'd child: PrintWindow(PW_RENDERFULLCONTENT)

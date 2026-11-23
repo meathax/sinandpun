@@ -4,7 +4,7 @@
 // sample, so blocked threads do not dilute the picture. Every 10 s (after a 20 s boot skip, SIN_PROF_SKIP
 // overrides) the cumulative histogram is written to prof_samples.txt in the working directory:
 //   tid <id> total <n>            one block per thread, then lines "<count> <rva hex>"
-// Resolve RVAs to symbols offline with tools/prof_resolve.py (llvm-nm on WiiCompiled.exe).
+// Resolve RVAs to symbols offline with tools/prof_resolve.py (llvm-nm on sinandpun.exe).
 
 #if defined(_WIN32)
 #include <windows.h>

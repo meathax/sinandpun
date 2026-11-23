@@ -47,7 +47,7 @@ try {
     if ($Warp) { $envs.SIN_VMOUSE_WARP = "1" }
     foreach ($e in ($Env -split ',')) { if ($e) { $k, $v = $e -split '=', 2; $envs[$k] = $v } }
     foreach ($k in $envs.Keys) { Set-Item -Path "Env:$k" -Value $envs[$k]; $setEnv += $k }
-    $p = Start-Process -FilePath "$root\build\native\WiiCompiled.exe" -WorkingDirectory "$root\build\native" `
+    $p = Start-Process -FilePath "$root\build\native\sinandpun.exe" -WorkingDirectory "$root\build\native" `
         -RedirectStandardOutput "$dir\out.log" -RedirectStandardError "$dir\err.log" -PassThru
     $t0 = Get-Date
     $shotList = @(); if ($Shots) { $shotList = ($Shots -split ',') | ForEach-Object { [double]$_ } | Sort-Object }

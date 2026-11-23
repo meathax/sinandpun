@@ -24,7 +24,7 @@ foreach ($file in $graphicsFiles) {
         throw "Required graphics runtime file is missing or differs from the SDK: $path"
     }
 }
-foreach ($required in @("WiiCompiled.exe", "recomplauncher.json", "LICENSE", "wii_bootstrap")) {
+foreach ($required in @("LICENSE")) {
     if (-not (Test-Path (Join-Path $sourcePath $required))) {
         throw "release source is missing $required; refresh it with tools\update_ready.ps1 first"
     }
@@ -48,16 +48,14 @@ if (Test-Path $archivePath) {
 New-Item -ItemType Directory $stagePath | Out-Null
 # Copy only known release assets. Loose keys and foreign tools never enter staging.
 $nativePath = Join-Path $root $BuildDirectory
-$runtimeDlls = Get-ChildItem $nativePath -File -Filter "*.dll" | Select-Object -ExpandProperty Name
-$allowed = @("LICENSE", "wii_bootstrap", "dsp_coef.bin", "initial_pipeline_cache.db") + @($runtimeDlls)
-Get-ChildItem $sourcePath -Force | Where-Object {
-    $_.Name -in $allowed -and $_.Name -notmatch "^(sl\.|nvngx_|amd_fidelityfx_)"
-} | ForEach-Object {
-    Copy-Item $_.FullName $stagePath -Recurse -Force
+$runtimeDlls = @("SDL3.dll", "webgpu_dawn.dll", "dxcompiler.dll", "dxil.dll", "libc++.dll", "libpng16.dll", "libunwind.dll", "libzlib1.dll")
+foreach ($name in (@("sinandpun.exe", "dsp_coef.bin", "initial_pipeline_cache.db") + $runtimeDlls)) {
+    Copy-Item -LiteralPath (Join-Path $nativePath $name) -Destination $stagePath
 }
-Copy-Item -LiteralPath (Join-Path $nativePath "WiiCompiled.exe") -Destination (Join-Path $stagePath "sinandpun.exe")
+New-Item -ItemType Directory (Join-Path $stagePath "wii_bootstrap") | Out-Null
+Copy-Item -LiteralPath (Join-Path $root "runtime/assets/wii/shared2") -Destination (Join-Path $stagePath "wii_bootstrap/shared2") -Recurse
+Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $stagePath
 New-Item -ItemType Directory (Join-Path $stagePath "licenses") | Out-Null
-@('@echo off', 'cd /d "%~dp0"', 'start "" "%~dp0sinandpun.exe"') | Set-Content -Encoding ascii (Join-Path $stagePath "Play.bat")
 foreach ($notice in $graphicsNotices) {
     Copy-Item -LiteralPath (Join-Path $sourcePath "licenses/$notice") -Destination (Join-Path $stagePath "licenses")
 }
@@ -71,20 +69,6 @@ if (Test-Path -LiteralPath $achievementNotices) {
 
 Copy-Item (Join-Path $root "recomplauncher.json") (Join-Path $stagePath "recomplauncher.json") -Force
 Copy-Item (Join-Path $root "third_party\disc_codecs") (Join-Path $stagePath "disc_codec_licenses") -Recurse
-
-$exePath = Join-Path $stagePath "sinandpun.exe"
-$hash = (Get-FileHash $exePath -Algorithm SHA256).Hash
-@"
-Sin & Punishment: Star Successor - recomp
-Version : $cleanVersion
-System  : Windows x64
-Exe     : sinandpun.exe $((Get-Item $exePath).Length) bytes
-SHA-256 : $hash
-
-Stage module images are generated from the player's own copy during setup.
-RecompLauncher stores settings, saves, caches and imported game data under its managed recompdata folder.
-Manual launches use the normal per-user data folder unless --data is supplied.
-"@ | Set-Content (Join-Path $stagePath "BUILD-INFO.txt")
 
 & $Python (Join-Path $root "tools\release_audit.py") `
     --source $nativePath `
