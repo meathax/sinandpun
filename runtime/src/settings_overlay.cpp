@@ -1356,9 +1356,68 @@ void BuildGraphicsApplyAction(ListView& v) {
     }
 }
 
+// Visit the same fields for both selection and recognition, including after a config reload.
+template <typename Visit>
+void VisitEnhancementPreset(int tier, bool dlss, Visit visit) {
+    const bool medium = tier >= 1;
+    const bool high = tier >= 2;
+    const bool ultra = tier == 3;
+    visit(&GraphicsState::enhancementsEnabled, true);
+    visit(&GraphicsState::surfaceHighlights, true);
+    visit(&GraphicsState::enhancedBloom, medium);
+    visit(&GraphicsState::combatLight, medium);
+    visit(&GraphicsState::stageAtmosphere, medium);
+    visit(&GraphicsState::pixelLighting, medium);
+    visit(&GraphicsState::ambientOcclusion, high);
+    visit(&GraphicsState::globalIllumination, high);
+    visit(&GraphicsState::projectedCaustics, high);
+    visit(&GraphicsState::probeMaterials, high);
+    visit(&GraphicsState::contactShadow, high);
+    visit(&GraphicsState::strongBounce, high);
+    visit(&GraphicsState::rayTracedGi, ultra);
+    visit(&GraphicsState::retainCulledGi, ultra);
+    visit(&GraphicsState::textureReplacements, high);
+    visit(&GraphicsState::generateMips, high);
+    visit(&GraphicsState::msaa, ultra ? SystemSettings::kMsaaChoices.back() : 1);
+    constexpr int filtering[] = {2, 4, 8, SystemSettings::kAnisotropyChoices.back()};
+    visit(&GraphicsState::anisotropy, filtering[tier]);
+    visit(&GraphicsState::sharpeningEnabled, medium);
+    if (ultra && dlss) {
+        visit(&GraphicsState::upscaler, kUpscalerDlss);
+        visit(&GraphicsState::dlssMode, static_cast<int>(kDlssModeLabels.size()) - 1); // DLAA
+        visit(&GraphicsState::dlssMotion, true);
+        visit(&GraphicsState::dlssSharpness, 100.0f);
+    } else {
+        visit(&GraphicsState::upscaler, high ? kUpscalerTemporal : kUpscalerFsr1);
+        visit(&GraphicsState::fsrQuality, ultra ? 1 : medium ? kDefaultFsrQualityIndex : 4);
+        visit(&GraphicsState::fsrSharpness, ultra ? 100.0f : medium ? 50.0f : 0.0f);
+    }
+}
+
 void BuildEnhancementsPage(ListView& v) {
     BuildGraphicsApplyAction(v);
     v.Section("Enhancements");
+    constexpr int custom = 4;
+    int preset = custom;
+    for (int tier = 0; tier < custom; ++tier) {
+        bool matches = true;
+        VisitEnhancementPreset(tier, g_graphicsDraft.upscaler == kUpscalerDlss, [&](auto field, auto value) {
+            matches &= g_graphicsDraft.*field == value;
+        });
+        if (matches) {
+            preset = tier;
+            break;
+        }
+    }
+    if ((v.Choice("Enhancement preset", &preset, kPresetNames.data(), static_cast<int>(kPresetNames.size()), 1,
+                  "Sets effects, textures, filtering and upscaling together. Ultra enables every effect and uses DLAA when available. Apply to preview. Textures, MSAA and filtering take effect next launch.",
+                  game_ui::kRowConfirm) & kChanged) && preset < custom) {
+        AuroraDlssStatus status{};
+        aurora_get_dlss_status(&status);
+        VisitEnhancementPreset(preset, status.state == AURORA_DLSS_AVAILABLE, [&](auto field, auto value) {
+            g_graphicsDraft.*field = value;
+        });
+    }
     v.Toggle("Enable enhancements", &g_graphicsDraft.enhancementsEnabled, true,
              "Lighting, bloom and upscaling switch on Apply. Texture packs, MSAA and anisotropic filtering use this setting at launch.");
     v.Toggle("Ambient occlusion", &g_graphicsDraft.ambientOcclusion, false,
