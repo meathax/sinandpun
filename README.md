@@ -4,7 +4,7 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 
 **Windows x64 · Native PowerPC recompilation · In testing · [GPL-3.0](LICENSE)**
 
-[Getting started](#getting-started) · [Features](#features) · [Controls](#controls) · [Project status](#project-status) · [Building from source](#building-from-source)
+[Getting started](#getting-started) · [Features](#features) · [Enhanced local co-op](#enhanced-local-co-op) · [Controls](#controls) · [Project status](#project-status) · [Building from source](#building-from-source)
 
 <p align="center">
   <img src="docs/screenshots/gameplay.png" alt="Gameplay in Sin &amp; Punishment: Star Successor Recompiled" width="900">
@@ -44,6 +44,16 @@ The importer prepares the stage modules on first setup and leaves the key out of
 ### RecompLauncher
 
 The repository includes a [RecompLauncher manifest](recomplauncher.json). For launcher-managed disc-image import, set `SIN_WII_KEY_FILE` to your key file path before opening [RecompLauncher](https://recomplauncher.com/). The [launcher integration notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/RECOMPLAUNCHER-AUDIT.md) explain packaging and validation.
+
+## Enhanced local co-op
+
+In **Enhanced** mode, Player 1 picks Isa or Kachi as usual. Player 2 gets the other character and can move, aim, shoot, slash, and evade independently. The partner flies in when control becomes available and flies out for scripted sequences. **Original** mode keeps the Wii's assist-fire controls for Player 2.
+
+Both characters draw from **one health bar with 50% more base HP**. Standard characters share 150 HP. A hit on either player draws from that pool, and retrying a checkpoint does not stack the bonus.
+
+1. From the title or pause menu, open **Options → Local Co-op** and set **Co-op mode** to **Enhanced**.
+2. Choose **Player 2 input**. For two gamepads, select **Gamepad** and assign one controller to each player. For a mixed setup, select **Keyboard & Mouse** to give it to Player 2, or select **Gamepad** to leave keyboard and mouse with Player 1. Selecting the other player's controller swaps the assignments.
+3. Restart the game after changing the mode or Player 2 input source.
 
 ## Controls
 
