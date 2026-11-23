@@ -59,8 +59,8 @@ struct RuntimeUserConfig {
     std::optional<std::string> fsrQuality;
     std::optional<uint32_t> fsrSharpness;
     // video.dlss_mode (used when video.upscaler = "dlss"): ultra_performance, performance, balanced, quality or dlaa;
-    // video.dlss_sharpness: 0-100 (0 = no sharpening after DLSS); video.dlss_motion_vectors: estimate motion vectors from
-    // the images (the game has no velocity buffer; docs/DLSS-NOTES.md).
+    // video.dlss_sharpness: 0-100 (0 = no sharpening after DLSS); video.dlss_motion_vectors: enable image-based motion estimation
+    // for presentations without a GX velocity snapshot.
     std::optional<std::string> dlssMode;
     std::optional<uint32_t> dlssSharpness;
     std::optional<bool> dlssMotionVectors;
@@ -548,7 +548,7 @@ inline void EnsureConfigFile() {
               "fsr_sharpness = 80\n"
               "# NVIDIA DLSS (upscaler = \"dlss\"; Windows, Direct3D 12, RTX GPU, nvngx_dlss.dll next to the exe). dlss_mode:\n"
               "# ultra_performance (33%), performance (50%), balanced (58%), quality (67%), dlaa (100%, anti-aliasing only).\n"
-              "# dlss_motion_vectors: estimate motion vectors from the images (experimental; the game has no velocity buffer).\n"
+              "# dlss_motion_vectors: use image estimation when DLSS has no GX velocity buffer.\n"
               "dlss_mode = \"quality\"\n"
               "dlss_sharpness = 0\n"
               "dlss_motion_vectors = false\n"

@@ -35,6 +35,7 @@ struct ConvRequest {
   bool partialDst = false;
   uint32_t dstRectW = 0;
   uint32_t dstRectH = 0;
+  bool multisampledDepth = false;
 };
 
 bool needs_conversion(GXTexFmt fmt);

@@ -1,3 +1,4 @@
+#include "gx/native_scene.hpp"
 #include <aurora/aurora.h>
 #include <aurora/time.hpp>
 #include "audio.hpp"
@@ -118,6 +119,8 @@ struct DlssPresentState {
   wgpu::TextureView boundView;
   bool wasActive = false;
   bool hadSeparateHud = false;
+  bool hadVelocity = false;
+  std::array<float,4> lastVelocityRect{};
 };
 DlssPresentState g_dlss;
 
@@ -150,7 +153,13 @@ webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgp
   params.fsr = settings.mode == AURORA_UPSCALER_FSR3;
   params.color = source.view;
   params.depth = separateHud && hud.depth ? hud.depth : hud.temporalDepth;
+  // Both display paths apply the GX copy rectangle before temporal upscaling.
   params.depthRect = hud.depthRect;
+  params.velocity = separateHud ? hud.hudVelocity : hud.velocity;
+  if (gx::g_velocityWeight == 1.f && gx::g_nativeSceneWeight < 0.f &&
+      gx::g_velocityFrame == gx::g_presentedVelocityFrame)
+    params.previousNativeWeight = gx::g_presentedVelocityWeight;
+  params.velocityRect = params.depthRect;
   params.reversedDepth = gx::UseReversedZ;
   params.renderWidth = source.size.width;
   params.renderHeight = source.size.height;
@@ -165,15 +174,23 @@ webgpu::upscale::Result dlss_dispatch(wgpu::CommandEncoder& encoder, const webgp
     params.outputHeight = static_cast<uint32_t>(std::lround(params.renderHeight * ratio));
   }
   params.sharpness = settings.sharpness;
-  params.reset = !g_dlss.wasActive || g_dlss.hadSeparateHud != separateHud;
+  const bool skippedHistory = params.velocity && gx::g_presentedVelocityFrame != UINT64_MAX &&
+      gx::g_velocityFrame != gx::g_presentedVelocityFrame && gx::g_velocityFrame != gx::g_presentedVelocityFrame + 1;
+  const bool changedVelocity = g_dlss.hadVelocity != static_cast<bool>(params.velocity) ||
+      (params.velocity && params.velocityRect != g_dlss.lastVelocityRect);
+  params.reset = !g_dlss.wasActive || g_dlss.hadSeparateHud != separateHud || skippedHistory || changedVelocity;
   webgpu::dlss::set_jitter_enabled(true, params.renderWidth, params.outputWidth);
   if (!webgpu::dlss::dispatch(encoder, params, g_dlss.output)) {
     g_dlss.wasActive = false;
     webgpu::dlss::set_jitter_enabled(false, 0, 0);
     return {};
   }
+  gx::g_presentedVelocityFrame = gx::g_velocityFrame;
+  gx::g_presentedVelocityWeight = gx::g_velocityWeight;
   g_dlss.wasActive = true;
   g_dlss.hadSeparateHud = separateHud;
+  g_dlss.hadVelocity = static_cast<bool>(params.velocity);
+  g_dlss.lastVelocityRect = params.velocityRect;
   if (!g_dlss.bindGroup || g_dlss.boundView.Get() != g_dlss.output.view.Get()) {
     g_dlss.image = webgpu::TextureWithSampler{.texture = g_dlss.output.texture,
                                               .view = g_dlss.output.view,
@@ -1002,6 +1019,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
       const uint64_t encodeStart = gfx::presentation::now_nanos();
       const wgpu::CommandEncoderDescriptor slotDescriptor{.label = "Interpolated frame encoder"};
       auto slotEncoder = g_device.CreateCommandEncoder(&slotDescriptor);
+      gx::g_velocityWeight = plan.weight[slot];
       if (!replay.encode(slotEncoder, slot)) {
         replayUnavailable = true;
         break;
@@ -1018,6 +1036,7 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
     if (nativeShown || replayUnavailable) {
       const uint64_t due = replayUnavailable ? 0 : deadline(1.f);
       if (!replay.nativeUncapped) gfx::presentation::pace_present(due);
+      if (!replay.scenePresentOnly) gx::g_velocityWeight = 1.f;
       present(encoder, !replay.scenePresentOnly, admit(due));
     } else {
       present(encoder, true, false);

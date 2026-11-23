@@ -12,6 +12,7 @@
 //     tools/dlss_probe/probe_e2e.cpp aurora-main/lib/webgpu/dlss.cpp aurora-main/lib/webgpu/motion_flow.cpp \
 //     -o build/tmp_dlss/probe_e2e.exe <dawn>/lib/webgpu_dawn.lib -lole32 -luuid
 // Run: build/tmp_dlss/probe_e2e.exe <quality|balanced|performance|ultra|dlaa> [frames] [nomotion]
+#include "../../aurora-main/lib/gx/velocity_wgsl.hpp"
 #include "../../aurora-main/lib/webgpu/dlss.hpp"
 #include "../../aurora-main/lib/webgpu/motion_flow.hpp"
 
@@ -206,6 +207,60 @@ static double psnr(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b,
     return mse < 1e-9 ? 99.0 : 10.0 * std::log10(255.0 * 255.0 / mse);
 }
 
+static bool testRasterVelocity() {
+    constexpr unsigned width = 64, height = 32;
+    const auto shader = module(std::string(aurora::gx::RasterVelocityWGSL) + R"(
+struct V { @builtin(position) position: vec4f, @location(0) now: vec4f, @location(1) before: vec4f };
+@vertex fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) layer: u32) -> V {
+    let xy = array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3))[i];
+    let w = array<f32,3>(1, 2, 4)[i];
+    let motion = array<vec2f,3>(vec2f(0), vec2f(-3,2), vec2f(4,-1))[layer];
+    let now = vec4f(xy*w, 0, w);
+    let before = vec4f((xy + motion*vec2f(2.0/64,-2.0/32))*w, 0, w);
+    return V(now, now, before);
+}
+@fragment fn fs(in: V) -> @location(0) vec4f {
+    return raster_velocity(in.before, in.now, vec2f(64,32), 1.0);
+}
+)");
+    wgpu::ColorTargetState ct{.format = wgpu::TextureFormat::RGBA16Float};
+    wgpu::FragmentState fs{.module = shader, .entryPoint = "fs", .targetCount = 1, .targets = &ct};
+    wgpu::RenderPipelineDescriptor pd{};
+    pd.vertex.module = shader;
+    pd.vertex.entryPoint = "vs";
+    pd.fragment = &fs;
+    auto pipe = g_device.CreateRenderPipeline(&pd);
+    auto texture = makeTex(width,height,ct.format,wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc);
+    const wgpu::RenderPassColorAttachment attachment{.view = texture.CreateView(), .loadOp = wgpu::LoadOp::Clear,
+                                                    .storeOp = wgpu::StoreOp::Store};
+    const wgpu::RenderPassDescriptor desc{.colorAttachmentCount = 1, .colorAttachments = &attachment};
+    auto enc = g_device.CreateCommandEncoder();
+    auto pass = enc.BeginRenderPass(&desc);
+    pass.SetPipeline(pipe);
+    pass.Draw(3);
+    pass.SetScissorRect(8,4,44,24);
+    pass.Draw(3,1,0,1);
+    pass.SetScissorRect(24,9,12,11);
+    pass.Draw(3,1,0,2);
+    pass.End();
+    auto cb = enc.Finish();
+    g_queue.Submit(1,&cb);
+    std::vector<uint8_t> data;
+    if (!readback(texture,width,height,8,data)) return false;
+    unsigned errors = 0;
+    for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
+        const bool foreground = x >= 24 && x < 36 && y >= 9 && y < 20;
+        const bool middle = x >= 8 && x < 52 && y >= 4 && y < 28;
+        const int dx = foreground ? 4 : middle ? -3 : 0;
+        const int dy = foreground ? -1 : middle ? 2 : 0;
+        uint16_t xy[2];
+        memcpy(xy,data.data()+(y*width+x)*8,sizeof xy);
+        if (std::abs(half2f(xy[0])-dx) > 0.005f || std::abs(half2f(xy[1])-dy) > 0.005f) ++errors;
+    }
+    printf("GX raster velocity: %u wrong pixels of %u\n",errors,width*height);
+    return errors == 0;
+}
+
 static int testFlow(SceneRenderer& scene) {
     printf("== motion flow accuracy (640x360 render, previous minus current, render pixels)\n");
     const uint32_t W = 640, H = 360;
@@ -274,6 +329,7 @@ int main(int argc, char** argv) {
 
     SceneRenderer scene;
     scene.init();
+    if (!testRasterVelocity()) return 7;
     int rc = testFlow(scene);
 
     char full[MAX_PATH];
@@ -295,6 +351,12 @@ int main(int argc, char** argv) {
     dlss::set_jitter_enabled(true, RW, OW);
 
     auto low = makeTex(std::max<uint32_t>(RW, uint32_t(std::lround(OW / 1.0f))), std::max<uint32_t>(RH, uint32_t(std::lround(OH / 1.0f))), wgpu::TextureFormat::RGBA8Unorm, wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding);
+    // Exercise the game's cropped EFB-to-XFB velocity path with a known signed displacement.
+    wgpu::Texture geometryMotion;
+    if (getenv("DLSS_GEOMETRY_MV")) {
+        geometryMotion = makeTex(2*OW+3, 2*OH+5, wgpu::TextureFormat::RGBA16Float,
+                                 wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding);
+    }
     auto lowRef = makeTex(RW, RH, wgpu::TextureFormat::RGBA8Unorm, wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding);
     auto gt = makeTex(OW, OH, wgpu::TextureFormat::RGBA8Unorm, wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc);
     auto base = makeTex(OW, OH, wgpu::TextureFormat::RGBA8Unorm, wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc);
@@ -343,6 +405,16 @@ int main(int argc, char** argv) {
         auto enc = g_device.CreateCommandEncoder();
         scene.draw(enc, low.CreateView(), curRW, curRH, OW, OH, jx, jy, shx, shy);       // jittered render, what the game would produce
         dlss::DispatchParams dp;
+        if (geometryMotion) {
+            const float ratio = dlss::mode_scale_factor(curMode);
+            const wgpu::RenderPassColorAttachment mv{.view = geometryMotion.CreateView(),
+                .loadOp = wgpu::LoadOp::Clear, .storeOp = wgpu::StoreOp::Store,
+                .clearValue = {2*vxEnv/ratio, 2*vyEnv/ratio, 1, 1}};
+            const wgpu::RenderPassDescriptor rd{.colorAttachmentCount = 1, .colorAttachments = &mv};
+            enc.BeginRenderPass(&rd).End();
+            dp.velocity = geometryMotion.CreateView();
+            dp.velocityRect = {3,5,2,2};
+        }
         dp.fsr = modeArg == "fsr";
         dp.color = low.CreateView();
         dp.renderWidth = curRW; dp.renderHeight = curRH; dp.outputWidth = OW; dp.outputHeight = OH;
@@ -386,6 +458,7 @@ int main(int argc, char** argv) {
             }
         }
         dlss::after_submit();
+        g_inst.ProcessEvents();
         }
     }
     if (getenv("DLSS_BENCH")) {
@@ -394,7 +467,7 @@ int main(int argc, char** argv) {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - benchStart).count();
         printf("BENCH %s %ux%u -> %ux%u: %.2f ms/frame (scene render + flow + DLSS, %d frames, GPU-bound)\n", dlss::mode_name(mode), RW, RH, OW, OH, ms / frames, frames);
     }
-    if (counted) printf("RESULT %s%s: mean PSNR over last %d frames: %.2f dB, bilinear low-res %.2f dB\n", dlss::mode_name(mode), noMotion ? " (no motion)" : "", counted, sumDlss / counted, sumBase / counted);
+    if (counted) printf("RESULT %s%s: mean PSNR over last %d frames: %.2f dB, bilinear low-res %.2f dB\n", dlss::mode_name(mode), geometryMotion ? " (GX velocity input)" : noMotion ? " (no motion)" : "", counted, sumDlss / counted, sumBase / counted);
     dlss::shutdown();
     return rc;
 }

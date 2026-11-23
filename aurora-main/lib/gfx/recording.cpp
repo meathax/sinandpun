@@ -114,6 +114,8 @@ std::string pass_label(std::string_view kind) {
   return std::string{kind};
 }
 
+wgpu::Texture velocityTarget, resolvedVelocity;
+
 void set_efb_targets(RenderPass& pass) {
   const auto layout = scene_render_target_layout();
   pass.colorAttachmentCount = layout.colorAttachmentCount;
@@ -130,6 +132,26 @@ void set_efb_targets(RenderPass& pass) {
     if (color.semantic == ColorAttachmentSemantic::Normal) {
       color.size = webgpu::g_normalBuffer.size;
       color.view = webgpu::g_normalBuffer.view;
+    } else if (color.semantic == ColorAttachmentSemantic::Velocity) {
+      const auto samples = layout.sampleCount;
+      const auto size = webgpu::g_frameBuffer.size;
+      if (!velocityTarget || velocityTarget.GetWidth() != size.width || velocityTarget.GetHeight() != size.height ||
+          velocityTarget.GetSampleCount() != samples) {
+        wgpu::TextureDescriptor desc{.label = "GX velocity", .usage = wgpu::TextureUsage::RenderAttachment,
+            .size = size, .format = color.format, .sampleCount = samples};
+        if (samples == 1) desc.usage |= wgpu::TextureUsage::CopySrc;
+        velocityTarget = webgpu::g_device.CreateTexture(&desc);
+        resolvedVelocity = {};
+        if (samples > 1) {
+          desc.sampleCount = 1;
+          desc.usage |= wgpu::TextureUsage::CopySrc;
+          resolvedVelocity = webgpu::g_device.CreateTexture(&desc);
+        }
+      }
+      color.size = size;
+      color.view = velocityTarget.CreateView();
+      if (resolvedVelocity) color.resolveView = resolvedVelocity.CreateView();
+      pass.velocitySource = resolvedVelocity ? resolvedVelocity : velocityTarget;
     } else {
       AURORA_ASSERT(false, "Scene render-target attachment {} has no backing texture", i);
     }
@@ -191,6 +213,7 @@ struct PassSnapshotEntry {
   webgpu::TextureWithSampler color;
   webgpu::TextureWithSampler depth; // R32Float raw depth
   webgpu::TextureWithSampler normal;
+  wgpu::Texture velocity;
 };
 struct PassSnapshotPool {
   std::vector<PassSnapshotEntry> entries;
@@ -267,6 +290,20 @@ PassSnapshotEntry& acquire_pass_snapshot(uint32_t width, uint32_t height, bool w
     };
   }
   return entry;
+}
+
+wgpu::TextureView snapshot_velocity(RenderPass& pass) {
+  if (!pass.velocitySource) return {};
+  const auto size = pass.colorAttachments[SceneColorAttachmentIndex].size;
+  auto& snapshot = acquire_pass_snapshot(size.width, size.height, false, false, false).velocity;
+  if (!snapshot || snapshot.GetWidth() != size.width || snapshot.GetHeight() != size.height) {
+    const wgpu::TextureDescriptor desc{.label = "Display velocity snapshot",
+        .usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding,
+        .size = size, .format = wgpu::TextureFormat::RGBA16Float};
+    snapshot = webgpu::g_device.CreateTexture(&desc);
+  }
+  pass.velocitySnapshot = snapshot;
+  return snapshot.CreateView();
 }
 
 void snapshot_current_pass_color(webgpu::TextureWithSampler& output, wgpu::TextureView& depth) {
@@ -496,6 +533,7 @@ void resume_efb_pass_loading(const RenderPass& prevPass) {
       .copySourceView = prevPass.copySourceView,
       .copySourceDepthView = prevPass.copySourceDepthView,
       .copySourceNormalTexture = prevPass.copySourceNormalTexture,
+      .velocitySource = prevPass.velocitySource,
       .msaaSamples = prevPass.msaaSamples,
       .clearDepth = false,
       .hasDepth = prevPass.hasDepth,
@@ -735,6 +773,8 @@ RecordedFrame end_recording() {
 }
 
 void shutdown_recording() {
+  velocityTarget = {};
+  resolvedVelocity = {};
   clear_scene_texture_pool();
   for (auto& pool : g_passSnapshotPools) {
     pool = {};
@@ -998,6 +1038,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
       .copySourceView = prevPass.copySourceView,
       .copySourceDepthView = prevPass.copySourceDepthView,
       .copySourceNormalTexture = prevPass.copySourceNormalTexture,
+      .velocitySource = prevPass.velocitySource,
       .msaaSamples = msaaSamples,
       .clearDepthValue = clearDepthValue,
       .clearDepth = clearDepth && fullTarget,
@@ -1010,7 +1051,8 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
   for (uint32_t i = 0; i < newPass.colorAttachmentCount; ++i) {
     auto& color = newPass.colorAttachments[i];
     color.loadOp = wgpu::LoadOp::Undefined;
-    if (color.semantic == ColorAttachmentSemantic::Normal && clearDepth && fullTarget) {
+    if (fullTarget && ((color.semantic == ColorAttachmentSemantic::Normal && clearDepth) ||
+                       (color.semantic == ColorAttachmentSemantic::Velocity && clearColor))) {
       color.clear = true;
     } else {
       color.clear = false;
@@ -1294,12 +1336,13 @@ bool note_projection_draw(bool orthographic) noexcept {
   const bool scaled = output.width != static_cast<float>(size.width) ||
                       output.height != static_cast<float>(size.height) || mode != AURORA_UPSCALER_OFF ||
                       (xfb && (xfb->size.width != size.width || xfb->size.height != size.height));
-  const bool sceneEffects = aurora_ambient_occlusion_enabled() || aurora_enhanced_bloom_enabled();
+  const bool sceneEffects = aurora_enhanced_bloom_enabled();
   if ((!scaled && !sceneEffects) || output.width <= 0.f || output.height <= 0.f || !previous.copySourceTexture ||
       previous.snapshotColorDst) {
     return false;
   }
   snapshot_current_pass_color(frame.hudBackground, frame.hudDepth);
+  frame.hudVelocity = snapshot_velocity(previous);
   previous.discardable = false;
   enqueue_pass(frame, g_recorder.currentRenderPass);
   resume_efb_pass_loading(previous);
@@ -1351,6 +1394,12 @@ void capture_pixel_perfect_gui_scene(const ClipRect& source, const wgpu::Extent3
                source.width, source.height, source.x, source.y, size.width, size.height, destination.width,
                destination.height, filter[0], filter[1], filter[2], terminalHud, independent, frame.displayHud.pass != nullptr);
     }
+  }
+  if (pass.velocitySource) {
+    frame.displayHud.hudVelocity = frame.hudVelocity;
+    frame.displayHud.velocity = snapshot_velocity(pass);
+    frame.displayHud.depthRect = {float(source.x), float(source.y), float(source.width)/destination.width,
+                                  float(source.height)/destination.height};
   }
   frame.hudCandidate = nullptr;
   frame.hudBackground = {};
@@ -1560,11 +1609,12 @@ const uint8_t* uniform_data(const Range& range) noexcept {
 
 const uint8_t* vertex_data(const Range& range) noexcept { return current_frame_packet().verts.data() + range.offset; }
 
-Range reserve_scene_storage(size_t length) {
+Range reserve_scene_storage(size_t length, uint32_t appendAt) {
   if (!g_recorder.active()) return {};
   auto& storage = current_frame_packet().storage;
   if (!storage.owned() && storage.size() + length + 256 > storage.capacity()) return {};
-  const size_t aligned = AURORA_ALIGN(storage.size(), 256);
+  if (appendAt != UINT32_MAX && appendAt != storage.size()) return {};
+  const size_t aligned = appendAt == UINT32_MAX ? AURORA_ALIGN(storage.size(), 256) : appendAt;
   storage.append_zeroes(aligned-storage.size());
   storage.append_uninitialized(length);
   return {static_cast<uint32_t>(aligned), static_cast<uint32_t>(length)};

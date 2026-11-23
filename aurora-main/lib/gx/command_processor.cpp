@@ -650,13 +650,18 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
       state.depthUpdate && state.colorUpdate && state.blendMode == GX_BM_NONE) {
     record_ray_trace_geometry(cache.config.shaderConfig, prim, sourceVertices, vtxCount);
   }
+  end_velocity_batch();
   NativeSceneDraw* scene = nullptr;
-  if (nativeScene && !directParticles) {
+  const bool wantVelocity = velocity_capture_enabled() && state.colorUpdate && !gfx::is_offscreen() &&
+                            (!directParticles || state.projType == GX_ORTHOGRAPHIC);
+  if ((nativeScene && !directParticles) || wantVelocity) {
     const size_t projOffset = 16 + (cache.shaderInfo.lineMode != 0 ? 16 : 0);
     Mat4x4<float> projection;
     std::memcpy(&projection, gfx::uniform_data(cache.uniformRange) + projOffset, sizeof(projection));
     const HashType material = xxh3_hash_s(&cache.bindGroups.textureBindGroup, sizeof(cache.bindGroups.textureBindGroup), cache.pipelineRef);
-    scene = record_native_scene(cache.config.shaderConfig, prim, sourceVertices, vtxCount, projection, material,
+    if (wantVelocity)
+      immediates._pad = record_previous_clip(cache.config.shaderConfig, prim, sourceVertices, vtxCount, projection, material);
+    if (nativeScene) scene = record_native_scene(cache.config.shaderConfig, prim, sourceVertices, vtxCount, projection, material,
                                 translucent);
   }
   cache.lastDrawFmt = fmt;
@@ -767,6 +772,7 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& 
         g_gxState.depthUpdate && g_gxState.colorUpdate && g_gxState.blendMode == GX_BM_NONE) {
       record_ray_trace_geometry(sDrawCache.config.shaderConfig, prim, vertexData.data(), vtxCount);
     }
+    append_velocity_chunk(sDrawCache.config.shaderConfig, prim, vertexData.data(), vtxCount, lastDraw->immediateData._pad);
     if (lastDraw->scene) {
       append_native_scene(sDrawCache.config.shaderConfig, vertexData.data(), vtxCount);
     }

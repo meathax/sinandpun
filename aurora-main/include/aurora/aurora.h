@@ -256,8 +256,6 @@ typedef struct {
 } AuroraDlssStatus;
 
 void aurora_get_dlss_status(AuroraDlssStatus* status);
-// The game has no velocity buffer: true uses motion vectors estimated from the images (optical flow), false sends zero
-// vectors (DLSS then rejects history by itself). Takes effect on the next frame.
 bool aurora_reflex_active(void);
 bool aurora_frame_generation_requested(void);
 bool aurora_frame_generation_active(void);

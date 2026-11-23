@@ -350,9 +350,6 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
     const bool needsScaling = !partialDst && (dstSize.width != static_cast<uint32_t>(passInfo.resolveRect.width) ||
                               dstSize.height != static_cast<uint32_t>(passInfo.resolveRect.height));
     const bool isDepth = gx::is_depth_format(passInfo.resolveFormat);
-    if (isDepth && passInfo.msaaSamples > 1) {
-      Log.fatal("Depth tex copies from multisampled EFB targets are not supported");
-    }
     const tex_copy_conv::ConvRequest convReq{
         .fmt = passInfo.resolveFormat,
         .srcFmt = passInfo.resolveSourceFormat,
@@ -365,6 +362,7 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
         .partialDst = partialDst,
         .dstRectW = static_cast<uint32_t>(passInfo.resolveRect.width),
         .dstRectH = static_cast<uint32_t>(passInfo.resolveRect.height),
+        .multisampledDepth = isDepth && passInfo.msaaSamples > 1,
     };
     const bool needsOpaqueAlpha = !isDepth && !gx::efb_has_alpha(convReq.srcFmt);
     const bool sameFormat =
@@ -412,6 +410,11 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
   }
   if (passInfo.snapshotDepthDst) {
     tex_copy_conv::snapshot_depth(cmd, passInfo.copySourceDepthView, passInfo.msaaSamples, passInfo.snapshotDepthDst);
+  }
+  if (passInfo.velocitySnapshot) {
+    const wgpu::TexelCopyTextureInfo src{.texture = passInfo.velocitySource};
+    const wgpu::TexelCopyTextureInfo dst{.texture = passInfo.velocitySnapshot};
+    cmd.CopyTextureToTexture(&src, &dst, &passInfo.colorAttachments[SceneColorAttachmentIndex].size);
   }
   if (passInfo.snapshotNormalDst) {
     const webgpu::gpu_prof::Zone zone{cmd, "Normal snapshot"};

@@ -513,6 +513,11 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
   };
   const auto blendState = to_blend_state(config.blendMode, config.blendFacSrc, config.blendFacDst, config.blendOp,
                                          config.dstAlpha, options.dstAlphaMode == DstAlphaMode::DualSource);
+  const bool alphaComposite = config.blendMode == GX_BM_BLEND && config.blendFacSrc == GX_BL_SRCALPHA &&
+                              config.blendFacDst == GX_BL_INVSRCALPHA;
+  const wgpu::BlendComponent coverage{.operation = wgpu::BlendOperation::Add,
+      .srcFactor = wgpu::BlendFactor::SrcAlpha, .dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha};
+  const wgpu::BlendState velocityBlend{.color = coverage, .alpha = coverage};
   std::array<wgpu::ColorTargetState, gfx::MaxColorAttachments> colorTargets{};
   for (uint32_t i = 0; i < layout.colorAttachmentCount; ++i) {
     colorTargets[i] = {
@@ -521,6 +526,11 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
                          ? wgpu::ColorWriteMask::All
                          : wgpu::ColorWriteMask::None,
     };
+    if (layout.colorAttachments[i].semantic == gfx::ColorAttachmentSemantic::Velocity && options.colorUpdate &&
+        (writesDepth || config.blendMode == GX_BM_NONE || alphaComposite)) {
+      colorTargets[i].writeMask = wgpu::ColorWriteMask::All;
+      if (alphaComposite && !writesDepth) colorTargets[i].blend = &velocityBlend;
+    }
   }
   colorTargets[gfx::SceneColorAttachmentIndex].blend = &blendState;
   colorTargets[gfx::SceneColorAttachmentIndex].writeMask = to_write_mask(options.colorUpdate, options.alphaUpdate);

@@ -14,7 +14,8 @@ if ($Only -contains 'probe_dawn_share') {
     & $cc -std=gnu++20 -O1 -DNOMINMAX -DWEBGPU_DAWN -w $sl -isystem "$dawn/include" tools/dlss_probe/probe_dawn_share.cpp -o build/tmp_dlss/probe_dawn_share.exe "$dawn/lib/webgpu_dawn.lib" -ld3d12 -ldxgi -ldxguid -lole32
 }
 if ($Only -contains 'probe_e2e') {
-    & $cc -std=gnu++20 -O1 -DNOMINMAX -DWEBGPU_DAWN -w $sl -Ithird_party/amd/FidelityFX-SDK/Kits/FidelityFX/api/include -Ithird_party/amd/FidelityFX-SDK/Kits/FidelityFX/upscalers/include -isystem "$dawn/include" tools/dlss_probe/probe_e2e.cpp aurora-main/lib/webgpu/dlss.cpp aurora-main/lib/webgpu/motion_flow.cpp -o build/tmp_dlss/probe_e2e.exe "$dawn/lib/webgpu_dawn.lib" -lole32 -luuid
+    & $cc -std=gnu++20 -O1 -DNOMINMAX -DWEBGPU_DAWN -w $sl -Ithird_party/amd/FidelityFX-SDK/Kits/FidelityFX/api/include -Ithird_party/amd/FidelityFX-SDK/Kits/FidelityFX/upscalers/include -isystem "$dawn/include" tools/dlss_probe/probe_e2e.cpp aurora-main/lib/webgpu/dlss.cpp aurora-main/lib/webgpu/motion_flow.cpp aurora-main/lib/webgpu/reflex.cpp -o build/tmp_dlss/probe_e2e.exe "$dawn/lib/webgpu_dawn.lib" -lole32 -luuid
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 foreach ($f in 'webgpu_dawn.dll', 'dxil.dll', 'dxcompiler.dll', 'libc++.dll', 'libunwind.dll') {
     if (Test-Path "ready/$f") { Copy-Item "ready/$f" build/tmp_dlss/ -Force }

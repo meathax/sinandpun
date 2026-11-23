@@ -588,7 +588,7 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
                                     wgpu::ShaderModule shader, const char* label) noexcept;
 std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
-                                uint32_t normalAttachment = UINT32_MAX) noexcept;
+                                uint32_t normalAttachment = UINT32_MAX, uint32_t velocityAttachment = UINT32_MAX) noexcept;
 wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
                                 DstAlphaMode dstAlphaMode) noexcept;
 GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept;

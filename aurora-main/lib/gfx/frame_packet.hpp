@@ -103,6 +103,7 @@ struct RenderPass {
   std::array<float, 2> giScreenCenter{};
   webgpu::TextureWithSampler giDepth;
   wgpu::Texture copySourceNormalTexture;
+  wgpu::Texture velocitySource;
   uint32_t msaaSamples = 1;
 
   TextureHandle resolveTarget;
@@ -113,6 +114,7 @@ struct RenderPass {
   bool resolveCopyFilterActive = false;
   wgpu::Texture snapshotColorDst;
   wgpu::TextureView snapshotDepthDst;
+  wgpu::Texture velocitySnapshot;
   wgpu::Texture snapshotNormalDst;
   float clearDepthValue = 1.f;
   wgpu::LoadOp depthLoadOp = wgpu::LoadOp::Undefined;
@@ -133,7 +135,7 @@ struct RenderPass {
   std::vector<tex_palette_conv::ConvRequest> paletteConvs;
 
   RenderTargetLayout target_layout() const noexcept;
-  bool has_consumer() const { return resolveTarget || snapshotColorDst || snapshotDepthDst || snapshotNormalDst; }
+  bool has_consumer() const { return resolveTarget || snapshotColorDst || snapshotDepthDst || snapshotNormalDst || velocitySnapshot; }
   bool has_content() const {
     if (hasDraws || clearDepth) {
       return true;
@@ -230,6 +232,7 @@ struct FramePacket {
   std::deque<FrameOp> ops;
   std::deque<TextureUpload> textureUploads;
   webgpu::TextureWithSampler hudBackground;
+  wgpu::TextureView hudVelocity;
   wgpu::TextureView hudDepth;
   const RenderPass* hudCandidate = nullptr;
   PixelPerfectGuiPresent displayHud;

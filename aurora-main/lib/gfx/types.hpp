@@ -25,6 +25,7 @@ struct PixelPerfectGuiPresent {
   wgpu::TextureView depth;
   wgpu::TextureView temporalDepth;
   std::array<float,4> depthRect{};
+  wgpu::TextureView velocity, hudVelocity;
 };
 using BindGroupRef = HashType;
 using PipelineRef = HashType;

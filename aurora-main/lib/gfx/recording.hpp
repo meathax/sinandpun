@@ -104,7 +104,7 @@ Range push_uniform(const T& data) {
   return push_uniform(reinterpret_cast<const uint8_t*>(&data), sizeof(T));
 }
 Range push_storage(const uint8_t* data, size_t length);
-Range reserve_scene_storage(size_t length);
+Range reserve_scene_storage(size_t length, uint32_t appendAt = UINT32_MAX);
 uint8_t* scene_storage_data(Range range);
 template <typename T>
 Range push_storage(ArrayRef<T> data) {

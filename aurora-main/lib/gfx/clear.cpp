@@ -46,7 +46,8 @@ fn vs_main(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
     values += "    out.color = vec4f(1.0);\n";
   }
   for (uint32_t i = 0; i < layout.colorAttachmentCount; ++i) {
-    if (config.clearDepth && layout.colorAttachments[i].semantic == ColorAttachmentSemantic::Normal) {
+    if (((config.clearDepth && layout.colorAttachments[i].semantic == ColorAttachmentSemantic::Normal) ||
+        (config.clearColor && layout.colorAttachments[i].semantic == ColorAttachmentSemantic::Velocity))) {
       outputs += fmt::format("    @location({0}) normal{0}: vec4f,\n", i);
       values += fmt::format("    out.normal{} = vec4f(0.0);\n", i);
     }
@@ -106,7 +107,8 @@ wgpu::RenderPipeline create_pipeline(const PipelineConfig& config, const RenderT
   for (uint32_t i = 0; i < layout.colorAttachmentCount; ++i) {
     colorTargets[i] = {
         .format = layout.colorAttachments[i].format,
-        .writeMask = config.clearDepth && layout.colorAttachments[i].semantic == ColorAttachmentSemantic::Normal
+        .writeMask = ((config.clearDepth && layout.colorAttachments[i].semantic == ColorAttachmentSemantic::Normal) ||
+        (config.clearColor && layout.colorAttachments[i].semantic == ColorAttachmentSemantic::Velocity))
                          ? wgpu::ColorWriteMask::All
                          : wgpu::ColorWriteMask::None,
     };

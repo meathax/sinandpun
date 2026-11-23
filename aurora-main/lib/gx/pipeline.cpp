@@ -69,7 +69,22 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
   auto immediates = data.immediateData;
   if (g_nativeSceneWeight >= 0.f && data.scene && data.scene->base != 0) {
     immediates._pad = data.scene->base;
-    immediates.currentPnMtx |= static_cast<uint32_t>(std::clamp(g_nativeSceneWeight, 0.f, 1.f) * 16777215.f) << 8;
+    if (data.scene->velocity) {
+      const bool same = g_presentedVelocityFrame == g_velocityFrame;
+      const bool adjacent = g_presentedVelocityFrame != UINT64_MAX && g_presentedVelocityFrame + 1 == g_velocityFrame;
+      const float before = same || adjacent ? g_presentedVelocityWeight : g_nativeSceneWeight;
+      const auto quantize = [](float t) { return static_cast<uint32_t>(std::clamp(t,0.f,1.f)*2047.f + 0.5f); };
+      immediates.currentPnMtx |= 0x80000000u | (adjacent ? 0x40000000u : 0u) |
+                                 (quantize(before) << 19) | (quantize(g_nativeSceneWeight) << 8);
+    } else immediates.currentPnMtx |= static_cast<uint32_t>(std::clamp(g_nativeSceneWeight, 0.f, 1.f) * 16777215.f) << 8;
+  }
+  if (g_interpolationEncodeSlot >= 0 && (immediates._pad & 0x80000000u)) {
+    const bool same = g_presentedVelocityFrame == g_velocityFrame;
+    const bool adjacent = g_presentedVelocityFrame != UINT64_MAX && g_presentedVelocityFrame + 1 == g_velocityFrame;
+    if (same || adjacent) {
+      const auto weight = static_cast<uint32_t>(std::clamp(g_presentedVelocityWeight,0.f,1.f)*2047.f + 0.5f);
+      immediates.currentPnMtx |= 0x80000000u | (adjacent ? 0x40000000u : 0u) | (weight << 19);
+    } else immediates._pad = 0;
   }
   pass.SetImmediates(0, &immediates, sizeof(immediates));
   uint32_t uniformOffset = data.uniformRange.offset;

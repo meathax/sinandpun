@@ -75,7 +75,10 @@ struct DispatchParams {
   Mode mode = Mode::Quality;
   float sharpness = 0.f;     // 0..1, post-DLSS contrast-adaptive sharpening (0 = off)
   wgpu::TextureView depth;
+  wgpu::TextureView velocity;
+  std::array<float,4> velocityRect{0,0,1,1};
   std::array<float,4> depthRect{};
+  float previousNativeWeight = 0.f;
   bool reversedDepth = false;
   bool fsr = false;
   bool reset = false;        // drop temporal history (scene cut, mode change, ...)
@@ -105,7 +108,7 @@ wgpu::Texture fg_target(unsigned width, unsigned height, wgpu::TextureFormat for
 void present_fg(bool vsync) noexcept;
 void after_submit() noexcept;
 
-// A/B switch: with false the motion vectors are all zero (DLSS then relies on its own history rectification).
+// Enable optical flow when a presentation has no GX velocity snapshot.
 void set_motion_vectors_enabled(bool enabled) noexcept;
 // Test hook (probes): every pixel gets this motion vector (render pixels, previous minus current).
 void debug_constant_motion(bool enabled, float x, float y) noexcept;

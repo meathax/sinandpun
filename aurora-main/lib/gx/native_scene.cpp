@@ -1,5 +1,7 @@
 #include "native_scene.hpp"
 #include "scene_pose.hpp"
+#include "../webgpu/upscale.hpp"
+#include "../webgpu/dlss.hpp"
 #include "frame_interpolation.hpp"
 #include "../gfx/recording.hpp"
 #include <algorithm>
@@ -16,6 +18,8 @@
 
 namespace aurora::gx {
 thread_local float g_nativeSceneWeight = -1.f;
+thread_local uint64_t g_velocityFrame = 0, g_presentedVelocityFrame = UINT64_MAX;
+thread_local float g_velocityWeight = 1.f, g_presentedVelocityWeight = 1.f;
 namespace {
 using Pose = ScenePose;
 struct Draw {
@@ -25,6 +29,7 @@ struct Draw {
   Mat4x4<float> projection;
   std::shared_ptr<NativeSceneDraw> output;
   std::vector<Pose> pose;
+  std::vector<std::array<float,4>> priorClip;
   std::vector<uint32_t> vertexPoses;
   std::vector<uint32_t> joins;
   size_t previousIndex = SIZE_MAX;
@@ -36,6 +41,20 @@ std::unordered_map<HashType, std::vector<size_t>> history;
 // A merged draw has one immutable matrix palette and attribute-array state.
 // Cache indexed vertices only within that draw, across its primitive chunks.
 absl::flat_hash_map<uint64_t, uint32_t> vertexCache;
+struct VelocityDraw {
+  std::vector<std::array<float,4>> clip;
+  std::vector<std::array<float,4>> prior;
+  std::array<float,3> center;
+  std::vector<HashType> topology;
+  bool used = false;
+};
+using VelocityHistory = std::unordered_map<HashType, std::vector<VelocityDraw>>;
+std::atomic<bool> captureVelocity{false};
+VelocityHistory previousVelocity, currentVelocity;
+VelocityDraw* recordingVelocity = nullptr;
+VelocityDraw* matchedVelocity = nullptr;
+Mat4x4<float> velocityProjection;
+
 bool safe = true;
 uint32_t rejected = 0;
 double captureMs = 0;
@@ -172,6 +191,9 @@ bool native_scene_enabled() noexcept {
   return mode == AURORA_FRAME_RATE_UNCAPPED;
 }
 void begin_native_scene() noexcept {
+  recordingVelocity = matchedVelocity = nullptr;
+  previousVelocity.swap(currentVelocity);
+  currentVelocity.clear();
   current.clear();
   history.clear();
   safe = true;
@@ -269,6 +291,127 @@ bool capture_scene_vertices(Draw& draw, const ShaderConfig& config, const uint8_
     captureMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
   return true;
 }
+void begin_velocity_frame() noexcept {
+  captureVelocity.store(webgpu::upscale::settings().mode == AURORA_UPSCALER_DLSS && webgpu::dlss::ready(), std::memory_order_relaxed);
+}
+
+bool velocity_capture_enabled() noexcept {
+  return captureVelocity.load(std::memory_order_relaxed);
+}
+
+// First and subsequent primitive chunks use the same GX batch. The CPU keeps
+// their topology separately so a changed chunk never borrows unrelated vertices.
+static HashType velocity_topology(const ShaderConfig& config, GXPrimitive prim,
+                                  const uint8_t* vertices, uint16_t count) {
+  Hasher hash;
+  hash.update(prim);
+  hash.update(count);
+  for (auto attr : {GX_VA_POS, GX_VA_TEX0}) {
+    const auto& a = config.attrs[attr];
+    unsigned bytes = a.attrType == GX_INDEX8 ? 1 : a.attrType == GX_INDEX16 ? 2 : 0;
+    if (attr == GX_VA_TEX0 && a.attrType == GX_DIRECT)
+      bytes = a.cnt * (a.compType == GX_F32 ? 4 : a.compType == GX_S16 || a.compType == GX_U16 ? 2 : 1);
+    if (bytes) for (unsigned i = 0; i < count; ++i)
+      hash.update(vertices + size_t(i) * config.vtxStride + a.offset, bytes);
+  }
+  return hash.digest();
+}
+
+struct ClipHistory { std::array<float,4> older, before, current; };
+
+static uint32_t velocity_chunk(const ShaderConfig& config, const uint8_t* vertices, uint16_t count,
+                               HashType topology, uint32_t base, bool first) {
+  if (!recordingVelocity) return 0;
+  auto& draw = *recordingVelocity;
+  const auto offset = draw.clip.size(), chunk = draw.topology.size();
+  topology = xxh3_hash(offset, topology);
+  draw.topology.push_back(topology);
+  const bool match = matchedVelocity && chunk < matchedVelocity->topology.size() &&
+                     matchedVelocity->topology[chunk] == topology &&
+                     offset + count <= matchedVelocity->clip.size();
+  draw.clip.resize(offset + count);
+  draw.prior.resize(offset + count);
+  const auto& idx = config.attrs[GX_VA_PNMTXIDX];
+  for (unsigned i = 0; i < count; ++i) {
+    const auto* v = vertices + size_t(i)*config.vtxStride;
+    unsigned matrix = idx.attrType == GX_NONE ? g_gxState.currentPnMtx : (v[idx.offset] & 63u) / 3u;
+    float local[3]{};
+    if (matrix >= MaxPnMtx || !attribute(config, v, GX_VA_POS, local, 3)) {
+      draw.topology.back() = 0;
+      recordingVelocity = nullptr;
+      return 0;
+    }
+    const auto eye = transform(g_gxState.pnMtx[matrix].pos, local, 1.f);
+    auto& clip = draw.clip[offset+i];
+    const auto project = [&](const auto& r) { return r[0]*eye[0]+r[1]*eye[1]+r[2]*eye[2]+r[3]; };
+    clip = {project(velocityProjection.m0), project(velocityProjection.m1),
+            project(velocityProjection.m2), project(velocityProjection.m3)};
+    draw.prior[offset+i] = match ? matchedVelocity->clip[offset+i] : clip;
+  }
+  if (!matchedVelocity || (!first && !base)) return 0;
+  const auto end = first ? UINT32_MAX : (base & 0x7fffffffu)*4 + offset*sizeof(ClipHistory);
+  const auto range = gfx::reserve_scene_storage(count*sizeof(ClipHistory), static_cast<uint32_t>(end));
+  if (!range.size) return 0;
+  auto* dst = gfx::scene_storage_data(range);
+  for (unsigned i = 0; i < count; ++i) {
+    const auto j = offset+i;
+    const ClipHistory vertex{match ? matchedVelocity->prior[j] : draw.clip[j], draw.prior[j], draw.clip[j]};
+    std::memcpy(dst + i*sizeof(vertex), &vertex, sizeof(vertex));
+  }
+  return first ? 0x80000000u | (range.offset / 4) : base;
+}
+
+void append_velocity_chunk(const ShaderConfig& config, GXPrimitive prim, const uint8_t* vertices,
+                           uint16_t count, uint32_t& base) {
+  if (recordingVelocity)
+    base = velocity_chunk(config, vertices, count, velocity_topology(config, prim, vertices, count), base, false);
+}
+
+void end_velocity_batch() { recordingVelocity = matchedVelocity = nullptr; }
+
+uint32_t record_previous_clip(const ShaderConfig& config, GXPrimitive prim, const uint8_t* vertices,
+                              uint16_t count, const Mat4x4<float>& projection, HashType material) {
+  if (!vertices || !count) return 0;
+  const auto topology = velocity_topology(config, prim, vertices, count);
+  Hasher key;
+  key.update(config);
+  key.update(material);
+  key.update(g_gxState.projType);
+  key.update(topology);
+  const auto& vp = g_gxState.renderViewport;
+  const std::array viewport{vp.left, vp.top, vp.width, vp.height};
+  key.update(viewport.data(), sizeof(viewport));
+  const auto& pos = config.attrs[GX_VA_POS];
+  if (pos.attrType == GX_INDEX8 || pos.attrType == GX_INDEX16)
+    key.update(g_gxState.arrays[GX_VA_POS].data);
+  const auto identity = key.digest();
+  auto& now = currentVelocity[identity].emplace_back();
+  const auto& idx = config.attrs[GX_VA_PNMTXIDX];
+  const unsigned matrix = idx.attrType == GX_NONE ? g_gxState.currentPnMtx : (vertices[idx.offset] & 63u) / 3u;
+  float local[3]{};
+  if (matrix >= MaxPnMtx || !attribute(config, vertices, GX_VA_POS, local, 3)) return 0;
+  now.center = transform(g_gxState.pnMtx[matrix].pos, local, 1.f);
+  const auto hits = previousVelocity.find(identity);
+  float nearest = 1500.f * 1500.f;
+  if (hits != previousVelocity.end()) for (auto& old : hits->second) {
+    if (old.used || old.clip.empty()) continue;
+    float distance = 0.f;
+    for (unsigned i = 0; i < 3; ++i) {
+      const auto delta = now.center[i] - old.center[i];
+      distance += delta * delta;
+    }
+    if (distance < nearest) { matchedVelocity = &old; nearest = distance; }
+  }
+  if (matchedVelocity) {
+    matchedVelocity->used = true;
+    now.clip.reserve(matchedVelocity->clip.size());
+    now.prior.reserve(matchedVelocity->clip.size());
+  }
+  recordingVelocity = &now;
+  velocityProjection = projection;
+  return velocity_chunk(config, vertices, count, topology, 0, true);
+}
+
 NativeSceneDraw* record_native_scene(const ShaderConfig& config, GXPrimitive prim, const uint8_t* vertices,
                                      uint16_t count, const Mat4x4<float>& projection, HashType material,
                                      bool translucent) noexcept {
@@ -413,12 +556,29 @@ bool seal_native_scene() noexcept {
   const auto beforePose = [](const Draw& draw, size_t v) -> const Pose& {
     return draw.matched ? previous[draw.previousIndex].pose[v] : draw.pose[v];
   };
+  const bool velocity = velocity_capture_enabled();
+  struct VelocityPair { ScenePosePair pair; std::array<float,4> older; };
+  std::vector<VelocityPair> motionPairs;
+  if (velocity) {
+    motionPairs.reserve(totalPoses);
+    for (auto& draw : current) {
+      draw.priorClip.reserve(draw.pose.size());
+      for (size_t v = 0; v < draw.pose.size(); ++v)
+        draw.priorClip.push_back(beforePose(draw,v).clip);
+    }
+  }
+  auto olderClip = [&](const Draw& draw, size_t v) {
+    if (draw.matched && v < previous[draw.previousIndex].priorClip.size())
+      return previous[draw.previousIndex].priorClip[v];
+    return beforePose(draw, v).clip;
+  };
   static std::vector<ScenePosePair> packed;
   packed.clear();
   packed.reserve(totalPoses);
   for (const auto& owner : owners) {
     const auto& draw = current[owner.draw];
     packed.push_back(scene_pair(beforePose(draw, owner.vertex), draw.pose[owner.vertex]));
+    if (velocity) motionPairs.push_back({packed.back(), olderClip(draw,owner.vertex)});
   }
   for (auto& draw : current) {
     matched += draw.matched;
@@ -435,12 +595,14 @@ bool seal_native_scene() noexcept {
       if (before.normal != canonicalBefore.normal || now.normal != canonicalNow.normal) {
         draw.joins[v] = static_cast<uint32_t>(packed.size());
         packed.push_back(joined_scene_pair(before, now, canonicalBefore, canonicalNow));
+        if (velocity) motionPairs.push_back({packed.back(), olderClip(canonical,owner.vertex)});
       }
       welded += &draw != &canonical || v != owner.vertex;
     }
   }
   static std::vector<uint32_t> upload;
-  const size_t words = vertices + packed.size() * 20;
+  const size_t stride = (velocity ? sizeof(VelocityPair) : sizeof(ScenePosePair)) / sizeof(uint32_t);
+  const size_t words = vertices + packed.size() * stride;
   upload.resize(words);
   const auto storage = gfx::reserve_scene_storage(words * sizeof(uint32_t));
   if (!storage.size) {
@@ -451,11 +613,13 @@ bool seal_native_scene() noexcept {
   const uint32_t recordBase = storage.offset / 4 + static_cast<uint32_t>(vertices);
   size_t cursor = 0;
   for (auto& draw : current) {
+    draw.output->velocity = velocity;
     draw.output->base = storage.offset / 4 + static_cast<uint32_t>(cursor) + 1;
     for (uint32_t pose : draw.vertexPoses)
-      upload[cursor++] = recordBase + draw.joins[pose] * 20;
+      upload[cursor++] = recordBase + draw.joins[pose] * stride;
   }
-  std::memcpy(upload.data() + vertices, packed.data(), packed.size() * sizeof(ScenePosePair));
+  if (velocity) std::memcpy(upload.data()+vertices, motionPairs.data(), motionPairs.size()*sizeof(VelocityPair));
+  else std::memcpy(upload.data() + vertices, packed.data(), packed.size() * sizeof(ScenePosePair));
   std::memcpy(gfx::scene_storage_data(storage), upload.data(), words * sizeof(uint32_t));
   static uint64_t frames = 0;
   if (++frames % 60 == 0)

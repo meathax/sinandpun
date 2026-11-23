@@ -446,6 +446,24 @@ struct Mapping { rect: vec4f, convention: vec4f };
 }
 )"sv;
 
+constexpr std::string_view kVelocityShader = R"(
+@group(0) @binding(0) var src: texture_2d<f32>;
+struct Mapping { rect: vec4f, temporal: vec4f };
+@group(0) @binding(1) var<uniform> mapping: Mapping;
+@vertex fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4f {
+    var q = array<vec2f,3>(vec2f(-1,1), vec2f(-1,-3), vec2f(3,1));
+    return vec4f(q[idx], 0, 1);
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec2f {
+    let xy = vec2i(mapping.rect.xy + p.xy * mapping.rect.zw);
+    let sampleMV = textureLoad(src, clamp(xy, vec2i(0), vec2i(textureDimensions(src))-1), 0);
+    let t = mapping.temporal.x;
+    let prior = (1.0 - t) * sampleMV.z;
+    let fraction = select(1.0, prior / max(0.00001, prior + t), t > 0.0);
+    return sampleMV.xy * fraction / mapping.rect.zw;
+}
+)"sv;
+
 // Contrast adaptive sharpening (the published CAS algorithm: weights from local min/max, cross pattern).
 constexpr std::string_view kCasShader = R"(
 struct U { sharp: f32, pad0: f32, pad1: f32, pad2: f32 };
@@ -487,7 +505,8 @@ struct DawnPipelines {
   wgpu::BindGroupLayout blitLayout, casLayout;
   wgpu::BindGroupLayout depthLayout;
   wgpu::Buffer depthUniform;
-  wgpu::RenderPipeline depthCopy;
+  wgpu::RenderPipeline depthCopy, velocityCopy;
+  wgpu::Buffer velocityUniform;
   wgpu::RenderPipeline blit;
   wgpu::RenderPipeline cas;
   wgpu::Buffer casUniform;
@@ -542,6 +561,9 @@ bool ensure_pipelines() {
   g_pipes.depthLayout = g_rt.dawn.CreateBindGroupLayout(&depthLayout);
   auto depthUniform = ub;
   depthUniform.size = 32;
+  g_pipes.velocityUniform = g_rt.dawn.CreateBuffer(&depthUniform);
+  g_pipes.velocityCopy = make_pipeline(make_module(kVelocityShader, "GX velocity copy"), g_pipes.depthLayout,
+                                       wgpu::TextureFormat::RG16Float, "GX velocity copy");
   g_pipes.depthUniform = g_rt.dawn.CreateBuffer(&depthUniform);
   g_pipes.depthCopy = make_pipeline(make_module(kDepthShader, "Temporal depth"), g_pipes.depthLayout,
                                     wgpu::TextureFormat::R32Float, "Temporal scene depth");
@@ -550,7 +572,7 @@ bool ensure_pipelines() {
                                    .addressModeV = wgpu::AddressMode::ClampToEdge, .addressModeW = wgpu::AddressMode::ClampToEdge,
                                    .magFilter = wgpu::FilterMode::Linear, .minFilter = wgpu::FilterMode::Linear};
   g_pipes.sampler = g_rt.dawn.CreateSampler(&sd);
-  if (!g_pipes.depthCopy || !g_pipes.depthUniform || !g_pipes.blit || !g_pipes.cas || !g_pipes.casUniform || !g_pipes.sampler) {
+  if (!g_pipes.velocityCopy || !g_pipes.velocityUniform || !g_pipes.depthCopy || !g_pipes.depthUniform || !g_pipes.blit || !g_pipes.cas || !g_pipes.casUniform || !g_pipes.sampler) {
     g_pipes.failed = true;
     log(2, "DLSS: Dawn pipeline creation failed");
     return false;
@@ -904,7 +926,7 @@ bool record_dlss(Instance& inst, const DispatchParams& p, uint32_t frameIndex) {
   c.orthographicProjection = sl::Boolean::eFalse;
   c.motionVectorsDilated = sl::Boolean::eFalse;
   c.motionVectorsJittered = sl::Boolean::eFalse;
-  c.motionVectorsInvalidValue = 0.0f;
+  // Zero is valid screen-space motion on stationary surfaces.
   bool ok = slSetConstants(c, *token, kViewport) == sl::Result::eOk;
 
   const uint32_t common = static_cast<uint32_t>(D3D12_RESOURCE_STATE_COMMON); // simultaneous-access resources
@@ -1108,7 +1130,7 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
   current_jitter(jx, jy);
   const bool constantMotion = g_constantMotion.load();
   const bool estimateMotion = p.fsr || fgRequested.load() || g_motionEnabled.load();
-  if (constantMotion || !estimateMotion) {
+  if (constantMotion || p.velocity || !estimateMotion) {
     // test hook: every pixel moves by the same known vector
     const wgpu::RenderPassColorAttachment attachment{.view = inst.mv.view, .loadOp = wgpu::LoadOp::Clear,
                                                      .storeOp = wgpu::StoreOp::Store,
@@ -1117,14 +1139,14 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
                                                                     0, 0}};
     const wgpu::RenderPassDescriptor rd{.label = "DLSS constant motion", .colorAttachmentCount = 1, .colorAttachments = &attachment};
     auto pass = encoder.BeginRenderPass(&rd);
-    if (p.depth) {
-      const float mapping[8]{p.depthRect[0], p.depthRect[1], p.depthRect[2], p.depthRect[3], p.reversedDepth ? 1.f : 0.f};
-      g_rt.dawnQueue.WriteBuffer(g_pipes.depthUniform, 0, mapping, sizeof mapping);
-      const std::array entries{wgpu::BindGroupEntry{.binding=0, .textureView=p.depth},
-                               wgpu::BindGroupEntry{.binding=1, .buffer=g_pipes.depthUniform, .size=sizeof mapping}};
-      const wgpu::BindGroupDescriptor bind{.layout=g_pipes.depthLayout, .entryCount=entries.size(), .entries=entries.data()};
-      pass.SetPipeline(g_pipes.depthCopy);
-      pass.SetBindGroup(0, g_rt.dawn.CreateBindGroup(&bind));
+    if (p.velocity && !inst.needReset && !constantMotion) {
+      const float mapping[8]{p.velocityRect[0],p.velocityRect[1],p.velocityRect[2],p.velocityRect[3],p.previousNativeWeight};
+      g_rt.dawnQueue.WriteBuffer(g_pipes.velocityUniform, 0, mapping, sizeof(mapping));
+      const std::array entries{wgpu::BindGroupEntry{.binding = 0, .textureView = p.velocity},
+                               wgpu::BindGroupEntry{.binding = 1, .buffer = g_pipes.velocityUniform, .size = sizeof(mapping)}};
+      const wgpu::BindGroupDescriptor bg{.layout = g_pipes.depthLayout, .entryCount = entries.size(), .entries = entries.data()};
+      pass.SetPipeline(g_pipes.velocityCopy);
+      pass.SetBindGroup(0, g_rt.dawn.CreateBindGroup(&bg));
       pass.Draw(3);
     }
     pass.End();
@@ -1136,11 +1158,38 @@ bool dispatch(wgpu::CommandEncoder& encoder, const DispatchParams& p, Output& ou
   inst.prevJitter[0] = jx;
   inst.prevJitter[1] = jy;
 
+  static const char* motionCapture = std::getenv("SIN_DLSS_CAPTURE_MOTION");
+  wgpu::Buffer motionReadback;
+  const uint32_t pitch = (inst.rw * 4 + 255) & ~255u;
+  if (motionCapture && *motionCapture && p.velocity && g_rt.frameIndex % 120 == 0) {
+    const wgpu::BufferDescriptor desc{.label = "GX motion readback",
+        .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst, .size = uint64_t(pitch) * inst.rh};
+    motionReadback = g_rt.dawn.CreateBuffer(&desc);
+    const wgpu::TexelCopyTextureInfo src{.texture = inst.mv.texture};
+    const wgpu::TexelCopyBufferInfo dst{.layout = {.bytesPerRow = pitch}, .buffer = motionReadback};
+    const wgpu::Extent3D extent{inst.rw, inst.rh, 1};
+    encoder.CopyTextureToBuffer(&src, &dst, &extent);
+  }
   const wgpu::CommandBufferDescriptor cbd{.label = "DLSS input command buffer"};
   const auto buffer = encoder.Finish(&cbd);
   g_rt.dawnQueue.Submit(1, &buffer);
   encoder = g_rt.dawn.CreateCommandEncoder();
 
+  if (motionReadback) {
+    const auto width = inst.rw, height = inst.rh, frame = g_rt.frameIndex;
+    motionReadback.MapAsync(wgpu::MapMode::Read, 0, uint64_t(pitch) * height, wgpu::CallbackMode::AllowProcessEvents,
+        [motionReadback,width,height,pitch,frame](wgpu::MapAsyncStatus status, wgpu::StringView) {
+          if (status != wgpu::MapAsyncStatus::Success) return;
+          const std::string path = std::string(motionCapture) + "-" + std::to_string(frame) + "-" +
+                                   std::to_string(width) + "x" + std::to_string(height) + ".rg16f";
+          if (auto* file = std::fopen(path.c_str(),"wb")) {
+            const auto* bytes = static_cast<const uint8_t*>(motionReadback.GetConstMappedRange());
+            for (uint32_t y = 0; y < height; ++y) std::fwrite(bytes + y*pitch,4,width,file);
+            std::fclose(file);
+          }
+          motionReadback.Unmap();
+        });
+  }
   std::vector<FenceWait> waits;
   end_access(inst.color, waits);
   end_access(inst.mv, waits);

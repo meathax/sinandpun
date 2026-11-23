@@ -364,6 +364,11 @@ RenderTargetLayout scene_render_target_layout() noexcept {
         .height = webgpu::g_normalBuffer.size.height,
     };
   }
+  if (gx::velocity_capture_enabled()) {
+    layout.colorAttachments[layout.colorAttachmentCount++] = {
+        .semantic = ColorAttachmentSemantic::Velocity, .format = wgpu::TextureFormat::RGBA16Float,
+        .width = webgpu::g_frameBuffer.size.width, .height = webgpu::g_frameBuffer.size.height};
+  }
   finalize_render_target_layout(layout);
   return layout;
 }
@@ -759,6 +764,7 @@ bool begin_frame() {
     mapBuffer(frame.textureUpload, TextureUploadSize);
   }
 
+  gx::begin_velocity_frame();
   begin_recording(frame, frameSlot);
   begin_pipeline_frame();
   gx::begin_frame_interpolation();
@@ -851,6 +857,8 @@ void end_frame(EndFrameCallback callback) {
     g_resources.stats.lastStorageSize = stats.lastStorageSize;
     g_resources.stats.lastTextureUploadSize = stats.lastTextureUploadSize;
 
+    gx::g_velocityFrame = packet.frameId;
+    gx::g_velocityWeight = 1.f;
     if (callback) {
       callback(encoder, std::move(afterSubmitCallbacks), replay);
     }
@@ -898,14 +906,16 @@ void end_frame(EndFrameCallback callback) {
           }
           const wgpu::CommandEncoderDescriptor desc{.label="Native uncapped scene"};
           auto cmd=g_device.CreateCommandEncoder(&desc);
+          gx::g_velocityFrame = g_framePackets[frameSlot].frameId;
+          gx::g_velocityWeight = weight < 0.f ? 1.f : weight;
           gx::g_nativeSceneWeight=weight;
           auto& retained=g_framePackets[frameSlot];
           detail::restore_scene_textures(cmd,retained,false);
           for(const auto& op:retained.ops) detail::encode_replay_op(cmd,retained,op);
-          gx::g_nativeSceneWeight=-1.f;
           if (!capture.empty()) webgpu::upscale::request_capture(capture);
           InterpolationReplay replay; replay.nativeUncapped=true; replay.scenePresentOnly=true;
           callback(cmd,{},replay);
+          gx::g_nativeSceneWeight=-1.f;
         };
         // Explicit diagnostic: freeze one retained scene and capture identical
         // samples twice to detect feedback/state leakage independently of motion.

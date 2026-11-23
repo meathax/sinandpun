@@ -1337,8 +1337,8 @@ void BuildUpscalingSection(ListView& v) {
                      static_cast<float>(RuntimeConfigFile::kDefaultDlssSharpness),
                      "Contrast-adaptive sharpening after DLSS. 0% turns it off. Applied together with the other pending settings.")) {
         }
-        if (v.Toggle("Estimated motion vectors", &g_graphicsDraft.dlssMotion, false,
-                     "Estimates per-pixel motion from consecutive frames and gives it to DLSS. Off sends zero motion, so DLSS rejects history on its own (softer in motion, no wrong-vector smearing). Experimental: the estimate is noisy.",
+        if (v.Toggle("Estimate missing velocity buffers", &g_graphicsDraft.dlssMotion, false,
+                     "DLSS uses game geometry for motion. When a display copy has no velocity buffer, this option estimates motion from consecutive images.",
                      game_ui::kRowExperimental, "Off") & kChanged) {
         }
         AuroraWindowSize window = aurora_get_window_size();

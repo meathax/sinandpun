@@ -16,6 +16,7 @@ enum class ColorAttachmentSemantic : uint8_t {
   SceneColor,
   Normal,
   Auxiliary,
+  Velocity,
 };
 
 struct ColorAttachmentLayout {

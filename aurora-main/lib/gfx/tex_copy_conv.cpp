@@ -96,8 +96,6 @@ fn quantize4(v: f32) -> f32 {
 )"sv;
 
 static constexpr std::string_view DepthShaderPreambleBody = R"(
-@group(0) @binding(0) var src: texture_depth_2d;
-
 struct UVTransform {
     offset: vec2f,
     scale: vec2f,
@@ -171,7 +169,13 @@ fn z_byte(z24: u32, shift: u32) -> f32 {
 }
 )"sv;
 
-static const std::string DepthShaderPreamble = std::string{efb_wgsl::z24()} + std::string{DepthShaderPreambleBody};
+static std::string depth_copy_preamble(bool multisampled) {
+  const char* source = multisampled ? "@group(0) @binding(0) var src: texture_depth_multisampled_2d;\n"
+                                    : "@group(0) @binding(0) var src: texture_depth_2d;\n";
+  // textureLoad's final zero selects sample zero on MSAA EFBs (the GX peek
+  // and snapshot convention), and mip zero on single-sample EFBs.
+  return std::string{efb_wgsl::z24()} + source + std::string{DepthShaderPreambleBody};
+}
 
 // Passthrough blit (for scaling)
 static constexpr std::string_view FragPassthrough = R"(
@@ -430,10 +434,11 @@ static constexpr std::array DepthConvPipelines{
 };
 
 static wgpu::BindGroupLayout g_bindGroupLayout;
-static wgpu::BindGroupLayout g_depthBindGroupLayout;
+static wgpu::BindGroupLayout g_depthBindGroupLayout, g_depthBindGroupLayoutMS;
 static wgpu::Sampler g_nearestSampler;
 static wgpu::Sampler g_linearSampler;
 static absl::flat_hash_map<GXTexFmt, wgpu::RenderPipeline> g_pipelines;
+static decltype(g_pipelines) g_depthPipelinesMS;
 static wgpu::RenderPipeline g_blitPipeline;
 static wgpu::BindGroupLayout g_depthSnapshotBindGroupLayout;
 static wgpu::BindGroupLayout g_depthSnapshotBindGroupLayoutMS;
@@ -628,8 +633,17 @@ void initialize() {
   }
   // Skip depth copies in compatibility mode
   if (webgpu::g_hasCoreFeatures) {
+    auto msEntries = depthBindGroupLayoutEntries;
+    msEntries[0].texture.multisampled = true;
+    auto msLayout = depthBindGroupLayoutDescriptor;
+    msLayout.label = "TexCopyConv multisampled depth layout";
+    msLayout.entries = msEntries.data();
+    g_depthBindGroupLayoutMS = g_device.CreateBindGroupLayout(&msLayout);
+    const auto single = depth_copy_preamble(false);
+    const auto multi = depth_copy_preamble(true);
     for (const auto& conv : DepthConvPipelines) {
-      g_pipelines[conv.fmt] = create_pipeline(conv, DepthShaderPreamble, g_depthBindGroupLayout);
+      g_pipelines[conv.fmt] = create_pipeline(conv, single, g_depthBindGroupLayout);
+      g_depthPipelinesMS[conv.fmt] = create_pipeline(conv, multi, g_depthBindGroupLayoutMS);
       if (conv.outputFormat != to_wgpu(conv.fmt)) {
         Log.fatal("Output format mismatch for {}", conv.fmt);
       }
@@ -659,6 +673,8 @@ void initialize() {
 
 void shutdown() {
   g_pipelines.clear();
+  g_depthPipelinesMS.clear();
+  g_depthBindGroupLayoutMS = {};
   g_blitPipeline = {};
   g_bindGroupLayout = {};
   g_depthBindGroupLayout = {};
@@ -693,7 +709,7 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
         },
     };
     const wgpu::BindGroupDescriptor bindGroupDescriptor{
-        .layout = g_depthBindGroupLayout,
+        .layout = req.multisampledDepth ? g_depthBindGroupLayoutMS : g_depthBindGroupLayout,
         .entryCount = bindGroupEntries.size(),
         .entries = bindGroupEntries.data(),
     };
@@ -750,8 +766,17 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
 }
 
 void run(const wgpu::CommandEncoder& cmd, const ConvRequest& req) {
-  const auto it = g_pipelines.find(req.fmt);
-  if (it == g_pipelines.end()) {
+  if (req.multisampledDepth) {
+    static bool reported = false;
+    if (!reported) {
+      Log.info("GX multisampled depth copy: format {}, {}x{}, EFB sample 0",
+               static_cast<int>(req.fmt), req.dstRectW, req.dstRectH);
+      reported = true;
+    }
+  }
+  const auto& pipelines = req.multisampledDepth ? g_depthPipelinesMS : g_pipelines;
+  const auto it = pipelines.find(req.fmt);
+  if (it == pipelines.end()) {
     Log.fatal("No copy conversion pipeline for format {}", static_cast<int>(req.fmt));
   }
   execute(cmd, req, it->second);

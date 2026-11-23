@@ -16,3 +16,7 @@ pwsh tools/dlss_probe/syntax_check.ps1             # clang -fsyntax-only of the 
 output px/frame), `DLSS_TRUEMV=1` (exact constant vectors), `DLSS_OW`/`DLSS_OH` (output size), `DLSS_RWADJ` (render size offset),
 `DLSS_SWITCH=<mode>` (change mode halfway), `DLSS_REPEAT=2` (two dispatches per frame), `DLSS_DUMP=<prefix>` (PPM of the last
 frame: ground truth / DLSS / bilinear), `DLSS_BENCH=1` (timing, no read-back), `AURORA_DLSS_JITTER_SIGN=-1`.
+
+The probe also checks the GX velocity shader on the GPU. It draws a stationary background and two overlapping layers with different signed velocities and nonuniform clip W, then checks all 2,048 pixels.
+
+Set `DLSS_GEOMETRY_MV=1` to exercise the game's EFB crop and pixel-unit conversion with a known vector texture. For example, use `DLSS_OW=960`, `DLSS_OH=540`, `DLSS_VX=3` and `DLSS_VY=-1.5` with `quality 124 nomotion`. At Quality the expected SDK input is (+2, -1) render pixels after reset. With `SIN_DLSS_CAPTURE_MOTION=<path-prefix>`, the game and probe write every 120th GX-sourced SDK input to `<prefix>-<frame>-<width>x<height>.rg16f`. Each row contains little-endian binary16 XY pairs without padding.

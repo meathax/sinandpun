@@ -1,3 +1,4 @@
+#include "velocity_wgsl.hpp"
 #include "../gfx/hash.hpp"
 #include "../gfx/types.hpp"
 
@@ -1009,7 +1010,7 @@ bool is_new_shader(gfx::ShaderRef hash) {
 } // namespace
 
 std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
-                                uint32_t normalAttachment) noexcept {
+                                uint32_t normalAttachment, uint32_t velocityAttachment) noexcept {
   ZoneScoped;
   const auto hash = xxh3_hash(dstAlphaMode, xxh3_hash(normalAttachment, xxh3_hash(config)));
   const auto info = build_shader_info(config);
@@ -1114,7 +1115,7 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
           "\n    let in_pos = {};"
           "\n    let in_pnmtxidx = {};"
           "\n    var mv_pos = vec4f(in_pos, 1.0) * ubuf.postex_mtx[in_pnmtxidx];"
-          "\n    if (imm._pad != 0u) {{ mv_pos = scene_vec3(in_vidx, 8u); }}",
+          "\n    if (imm._pad != 0u && imm._pad < 0x80000000u) {{ mv_pos = scene_vec3(in_vidx, 8u); }}",
           attr_load(config, GX_VA_POS, "in_vidx"sv), attr_load(config, GX_VA_PNMTXIDX, "in_vidx"sv));
     } else {
       // GX_LINES / GX_LINESTRIP: each instance = two vertices, expand to quad
@@ -1132,7 +1133,7 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
           "\n    let mv_pos_a = vec4f(pos_a, 1.0) * ubuf.postex_mtx[pnmtxidx_a];"
           "\n    let mv_pos_b = vec4f(pos_b, 1.0) * ubuf.postex_mtx[pnmtxidx_b];"
           "\n    var mv_pos = select(mv_pos_a, mv_pos_b, use_b);"
-          "\n    if (imm._pad != 0u) {{ mv_pos = scene_vec3(in_vidx, 8u); }}",
+          "\n    if (imm._pad != 0u && imm._pad < 0x80000000u) {{ mv_pos = scene_vec3(in_vidx, 8u); }}",
           config.lineMode == 1 ? 2 : 1, attr_load(config, GX_VA_POS, "vidx_a"sv),
           attr_load(config, GX_VA_POS, "vidx_b"sv), attr_load(config, GX_VA_PNMTXIDX, "vidx_a"sv),
           attr_load(config, GX_VA_PNMTXIDX, "vidx_b"sv));
@@ -1184,13 +1185,13 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     vtxXfrAttrsPre += fmt::format(
         "\n    var mv_pos = vec4f({}, 1.0) * ubuf.postex_mtx[in_pnmtxidx];"
         "\n    out.pos = vec4f(mv_pos, 1.0) * ubuf.proj;"
-        "\n    if (imm._pad != 0u) {{ mv_pos = scene_vec3(vidx, 8u); out.pos = scene_clip(vidx); }}",
+        "\n    if (imm._pad != 0u && imm._pad < 0x80000000u) {{ mv_pos = scene_vec3(vidx, 8u); out.pos = scene_clip(vidx); }}",
         vtx_attr(config, GX_VA_POS));
   } else if (config.lineMode == 3) {
     // GX_POINTS: expand single vertex to axis-aligned screen-space square
     vtxXfrAttrsPre +=
         "\n    var clip = vec4f(mv_pos, 1.0) * ubuf.proj;"
-        "\n    if (imm._pad != 0u) { clip = scene_clip(in_vidx); }"
+        "\n    if (imm._pad != 0u && imm._pad < 0x80000000u) { clip = scene_clip(in_vidx); }"
         "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
         "\n    let point_size = ubuf.line_width * min(viewport_scale.x, viewport_scale.y);"
         "\n    let x_sign = select(-1.0, 1.0, (vidx & 1u) != 0u);"
@@ -1203,7 +1204,7 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     vtxXfrAttrsPre +=
         "\n    var clip_a = vec4f(mv_pos_a, 1.0) * ubuf.proj;"
         "\n    var clip_b = vec4f(mv_pos_b, 1.0) * ubuf.proj;"
-        "\n    if (imm._pad != 0u) { clip_a = scene_clip(vidx_a); clip_b = scene_clip(vidx_b); }"
+        "\n    if (imm._pad != 0u && imm._pad < 0x80000000u) { clip_a = scene_clip(vidx_a); clip_b = scene_clip(vidx_b); }"
         "\n    let ndc_a = clip_a.xy / clip_a.w;"
         "\n    let ndc_b = clip_b.xy / clip_b.w;"
         "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
@@ -1219,7 +1220,7 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
 
   vtxXfrAttrsPre += fmt::format(
       "\n    var nrm_tmp = vec4f({0}, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
-      "\n    if (imm._pad != 0u) {{ nrm_tmp = scene_vec3({1}, 14u); }}"
+      "\n    if (imm._pad != 0u && imm._pad < 0x80000000u) {{ nrm_tmp = scene_vec3({1}, 14u); }}"
       "\n    let mv_nrm = select(nrm_tmp, normalize(nrm_tmp), dot(nrm_tmp, nrm_tmp) > 1e-10);",
       vtx_attr(config, GX_VA_NRM), vidxAttr);
   const bool useNormalTarget = normalAttachment != UINT32_MAX && config.attrs[GX_VA_NRM].attrType != GX_NONE;
@@ -2022,6 +2023,57 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     fragmentReturn = "\n    return FragmentOutput(vec4f(prev.rgb, 1.0), prev);";
   }
 
+  if (velocityAttachment != UINT32_MAX) {
+    if (fragmentOutput.empty()) {
+      fragmentOutput = "\nstruct FragmentOutput {\n    @location(0) color: vec4f,\n};\n";
+      fragmentOutputType = "FragmentOutput"sv;
+      fragmentReturn = "\n    var out: FragmentOutput;\n    out.color = prev;\n    return out;";
+    }
+    fragmentOutput.insert(fragmentOutput.rfind("};"),
+        fmt::format("    @location({}) velocity: vec4f,\n", velocityAttachment));
+    uniformPre += RasterVelocityWGSL;
+    uniformPre += R"(
+fn load_clip(i: u32) -> vec4f {
+    return bitcast<vec4f>(vec4u(abuf[i], abuf[i+1u], abuf[i+2u], abuf[i+3u]));
+}
+fn previous_clip(vertex: u32, current: vec4f) -> vec4f {
+    let adjacent = (imm.current_pnmtx & 0x40000000u) != 0u;
+    let t = f32((imm.current_pnmtx >> 19u) & 2047u) / 2047.0;
+    if ((imm._pad & 0x80000000u) != 0u) {
+        let a = (imm._pad & 0x7fffffffu) + 12u*vertex + select(4u, 0u, adjacent);
+        return mix(load_clip(a), load_clip(a+4u), t);
+    }
+    if (imm._pad != 0u && (imm.current_pnmtx >> 31u) != 0u) {
+        let base = abuf[imm._pad-1u+vertex];
+        return mix(load_clip(base+select(0u,20u,adjacent)), load_clip(base+select(4u,0u,adjacent)), t);
+    }
+    return current;
+}
+)";
+    vtxOutAttrs += fmt::format("\n    @location({}) before: vec4f, @location({}) now: vec4f,",
+                               vtxOutIdx, vtxOutIdx + 1);
+    vtxXfrAttrs += "\n    out.now = out.pos;";
+    if (config.lineMode == 0) {
+      vtxXfrAttrs += "\n    out.before = previous_clip(vidx, out.pos);";
+    } else if (config.lineMode == 3) {
+      vtxXfrAttrs += R"(
+    let old = previous_clip(in_vidx, clip);
+    out.before = vec4f(old.xy + offset_ndc * old.w, old.zw);)";
+    } else {
+      vtxXfrAttrs += R"(
+    let oldA = previous_clip(vidx_a, clip_a);
+    let oldB = previous_clip(vidx_b, clip_b);
+    let delta = (oldB.xy/oldB.w - oldA.xy/oldA.w) * ubuf.render_viewport_size;
+    let direction = select(vec2f(1,0), normalize(delta), dot(delta,delta) > 1e-10);
+    let oldOffset = vec2f(-direction.y,direction.x) * line_width
+                    * select(-1.0,1.0,(vidx & 1u) != 0u) / ubuf.render_viewport_size;
+    let old = select(oldA, oldB, use_b);
+    out.before = vec4f(old.xy + oldOffset * old.w, old.zw);)";
+    }
+      fragmentReturn.insert(fragmentReturn.rfind("return out;"), R"(
+    out.velocity = raster_velocity(in.before, in.now, ubuf.render_viewport_size, prev.a);
+    )");
+  }
   if (info.usesZTexture) {
     const std::string depthValue = UseReversedZ ? "1.0 - zDepth" : "zDepth";
     if (fragmentOutput.empty()) {
@@ -2408,7 +2460,8 @@ fn scene_mix(vidx: u32, component: u32, width: u32) -> f32 {{
     let base = abuf[imm._pad - 1u + vidx] + component;
     let a = bitcast<f32>(abuf[base]);
     let b = bitcast<f32>(abuf[base + width]);
-    let t = f32(imm.current_pnmtx >> 8u) / 16777215.0;
+    let t = select(f32(imm.current_pnmtx >> 8u) / 16777215.0,
+                   f32((imm.current_pnmtx >> 8u) & 2047u) / 2047.0, (imm.current_pnmtx >> 31u) != 0u);
     return a + (b - a) * t;
 }}
 fn scene_vec3(vidx: u32, component: u32) -> vec3f {{
@@ -2461,14 +2514,17 @@ void clear_shader_module_cache() {
 wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
                                 DstAlphaMode dstAlphaMode) noexcept {
   ZoneScoped;
-  uint32_t normalAttachment = UINT32_MAX;
+  uint32_t normalAttachment = UINT32_MAX, velocityAttachment = UINT32_MAX;
   for (uint32_t i = 0; i < layout.colorAttachmentCount; ++i) {
     if (layout.colorAttachments[i].semantic == gfx::ColorAttachmentSemantic::Normal) {
       normalAttachment = i;
+    } else if (layout.colorAttachments[i].semantic == gfx::ColorAttachmentSemantic::Velocity) {
+      velocityAttachment = i;
     }
   }
   // Use the complete configuration as the key, including collision-safe equality.
   std::string key(reinterpret_cast<const char*>(&config), sizeof(config));
+  key.append(reinterpret_cast<const char*>(&velocityAttachment), sizeof(velocityAttachment));
   key.append(reinterpret_cast<const char*>(&normalAttachment), sizeof(normalAttachment));
   key.append(reinterpret_cast<const char*>(&dstAlphaMode), sizeof(dstAlphaMode));
   std::promise<wgpu::ShaderModule> promise;
@@ -2491,7 +2547,7 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTar
 
     return shared.get();
   }
-  const auto shaderSource = build_shader_source(config, dstAlphaMode, normalAttachment);
+  const auto shaderSource = build_shader_source(config, dstAlphaMode, normalAttachment, velocityAttachment);
   const auto hash = xxh3_hash(dstAlphaMode, xxh3_hash(normalAttachment, xxh3_hash(config)));
   wgpu::ShaderSourceWGSL wgslDescriptor{};
   wgslDescriptor.code = shaderSource.c_str();
