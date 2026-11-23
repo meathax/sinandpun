@@ -676,8 +676,6 @@ void DrawModals(game_ui::Frame& input) {
     }
 }
 
-// The scheme now switches live, so no control option needs a restart any more.
-bool RestartPending() { return false; }
 
 bool Capturing() { return g_capture.open || AimInput::Capturing(); }
 

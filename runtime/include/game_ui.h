@@ -113,7 +113,6 @@ float DrawHints(ImDrawList* dl, ImVec2 pos, const std::vector<std::pair<std::str
 enum RowFlags : uint32_t {
     kRowNone = 0,
     kRowDisabled = 1u << 0,
-    kRowRestart = 1u << 1,       // change needs a restart
     kRowConfirm = 1u << 2,       // change goes through the keep/revert countdown
     kRowExperimental = 1u << 3,
     kRowIndent = 1u << 4,

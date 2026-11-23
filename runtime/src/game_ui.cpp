@@ -657,7 +657,6 @@ void ListView::DrawLabel(const Row& row, const char* label, uint32_t flags, cons
     const float alpha = m_alpha * (dim ? 0.7f : 1.0f);
     const float limit = row.vx0 - Px(8.0f);
     float badgeWidth = 0.0f;
-    if (flags & kRowRestart) badgeWidth += BadgeWidth("RESTART") + Px(8.0f);
     if (flags & kRowNextLaunch) badgeWidth += BadgeWidth("NEXT LAUNCH") + Px(8.0f);
     if (flags & kRowConfirm) badgeWidth += BadgeWidth("CONFIRM") + Px(8.0f);
     if (flags & kRowExperimental) badgeWidth += BadgeWidth("EXPERIMENTAL") + Px(8.0f);
@@ -669,7 +668,6 @@ void ListView::DrawLabel(const Row& row, const char* label, uint32_t flags, cons
         if (x + BadgeWidth(text) > limit) return;
         x += DrawBadge(m_dl, ImVec2(x, row.cy - Px(13.0f)), text, kind, m_alpha) + Px(8.0f);
     };
-    if (flags & kRowRestart) badge("RESTART", Badge::Restart);
     if (flags & kRowNextLaunch) badge("NEXT LAUNCH", Badge::Restart);
     if (flags & kRowConfirm) badge("CONFIRM", Badge::Confirm);
     if (flags & kRowExperimental) badge("EXPERIMENTAL", Badge::Experimental);

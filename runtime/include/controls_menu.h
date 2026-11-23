@@ -21,8 +21,6 @@ void DrawModals(game_ui::Frame& input);
 // Brief toast when the Automatic scheme switches (gamepad <-> mouse/keyboard). Call once per frame.
 void DrawHud();
 
-// Always false now: the control scheme switches live. Kept for the overlay's restart badge.
-bool RestartPending();
 
 // True while a press-to-bind capture is running (the overlay must not treat Esc/Back as menu keys).
 bool Capturing();

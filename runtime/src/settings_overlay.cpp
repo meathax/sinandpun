@@ -171,7 +171,6 @@ bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(true);
 bool g_forceAspect = RuntimeConfigFile::ForceAspectEnabled();
 bool g_widescreen = RuntimeConfigFile::WidescreenEnabled(true);
-const bool g_widescreenAtLaunch = g_widescreen;
 std::array<int32_t, PAD_MAX_CONTROLLERS> g_configuredControllerIndices = [] {
     std::array<int32_t, PAD_MAX_CONTROLLERS> indices{};
     indices.fill(std::numeric_limits<int32_t>::min());
@@ -378,30 +377,6 @@ void ResetUpscaler() {
 
 std::string ResolutionText(uint32_t width, uint32_t height) {
     return std::to_string(width) + "x" + std::to_string(height);
-}
-
-// Options launched from the menu that need a fresh process, captured when the menu first looks at them.
-struct LaunchValues {
-    int msaa;
-    int anisotropy;
-    bool textureReplacements;
-    bool enhancementsEnabled;
-    bool generateMips;
-    bool textureDumps;
-    bool gxWorker;
-    bool wiiRemotes;
-};
-
-const bool g_wiiRemotesAtLaunch = RuntimeConfigFile::WiiRemotesEnabled();
-
-const LaunchValues& Launch() {
-    static const LaunchValues values = [] {
-        const SystemSettings::Values sys = SystemSettings::Get();
-        return LaunchValues{sys.msaa, sys.anisotropy, RuntimeConfigFile::TextureReplacements(false), RuntimeConfigFile::EnhancementsEnabled(), RuntimeConfigFile::GenerateMips(),
-                            RuntimeConfigFile::TextureDumps(false), RuntimeConfigFile::GxWorkerEnabled(true),
-                            g_wiiRemotesAtLaunch};
-    }();
-    return values;
 }
 
 // ---- display changes that can leave the user without a picture: apply live, then keep or revert --------
@@ -1139,19 +1114,6 @@ void RequestResetPage() {
     game_ui::RequestConfirm("Reset page", "Reset every option on \"" + what + "\" to its default?", "Reset", [] { ResetCurrentPage(); });
 }
 
-bool RestartPending() {
-    const LaunchValues& launch = Launch();
-    const SystemSettings::Values sys = SystemSettings::Get();
-    return sys.msaa != launch.msaa || sys.anisotropy != launch.anisotropy ||
-           RuntimeConfigFile::EnhancementsEnabled() != launch.enhancementsEnabled ||
-           RuntimeConfigFile::GenerateMips() != launch.generateMips ||
-           RuntimeConfigFile::TextureReplacements(false) != launch.textureReplacements ||
-           RuntimeConfigFile::TextureDumps(false) != launch.textureDumps ||
-           (RuntimeConfigFile::Mutable().gxWorker.value_or(launch.gxWorker) != launch.gxWorker) ||
-           g_wiiRemotesEnabled != launch.wiiRemotes || g_widescreen != g_widescreenAtLaunch ||
-           controls_menu::RestartPending();
-}
-
 // ---- pages ---------------------------------------------------------------------------------------------
 struct WindowSizeItem {
     const char* label;
@@ -1264,10 +1226,9 @@ void BuildDisplayPage(ListView& v) {
     v.Section("Picture");
     static constexpr const char* kAspects[] = {"4:3 (black bars)", "16:9 (black bars)", "Fill window"};
     int aspect = !next.forceAspect ? 2 : (next.widescreen ? 1 : 0);
-    const uint32_t aspectFlags = game_ui::kRowConfirm | (next.widescreen != g_widescreenAtLaunch ? game_ui::kRowRestart : 0u);
     if (v.Choice("Aspect ratio", &aspect, kAspects, 3, 2,
-                 "4:3 and 16:9 keep that shape and add black bars; Fill window stretches the picture to the window. Switching the game between 4:3 and 16:9 takes effect after a restart.",
-                 aspectFlags) & kChanged) {
+                 "Black bars or stretch apply now. The game reads its 4:3 or 16:9 layout at launch.",
+                 game_ui::kRowConfirm) & kChanged) {
         if (aspect == 2) {
             next.forceAspect = false;
         } else {
@@ -1402,7 +1363,7 @@ void BuildEnhancementsPage(ListView& v) {
     BuildGraphicsApplyAction(v);
     v.Section("Enhancements");
     v.Toggle("Enable enhancements", &g_graphicsDraft.enhancementsEnabled, true,
-             "Keeps individual preferences. Bloom and upscaling switch on apply. Texture packs, MSAA and anisotropy switch after restart.", game_ui::kRowRestart);
+             "Lighting, bloom and upscaling switch on Apply. Texture packs, MSAA and anisotropic filtering use this setting at launch.");
     v.Toggle("Ambient occlusion", &g_graphicsDraft.ambientOcclusion, false,
              "Uses scene depth to shade nearby surface intersections before HUD composition.",
              g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
@@ -1444,10 +1405,10 @@ void BuildEnhancementsPage(ListView& v) {
              "Adds a soft halo to bright scene details before eligible HUD draws are composited.",
              g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
     v.Toggle("Custom textures", &g_graphicsDraft.textureReplacements, false,
-             "Loads replacement textures from texture_replacements/ next to Config.toml.", game_ui::kRowRestart);
+             "Loads replacement textures from texture_replacements/ next to Config.toml.", game_ui::kRowNextLaunch);
     v.Toggle("Generate missing texture mipmaps", &g_graphicsDraft.generateMips, false,
              "Builds smoother distance levels when a replacement color texture supplies only its base image.",
-             game_ui::kRowRestart | (g_graphicsDraft.textureReplacements ? 0u : game_ui::kRowDisabled));
+             game_ui::kRowNextLaunch | (g_graphicsDraft.textureReplacements ? 0u : game_ui::kRowDisabled));
     static constexpr const char* kMsaaLabels[] = {"Off", "4x"};
     int msaaIndex = 0;
     for (size_t i = 0; i < SystemSettings::kMsaaChoices.size(); ++i) {
@@ -1455,7 +1416,7 @@ void BuildEnhancementsPage(ListView& v) {
     }
     if (v.Choice("Anti-aliasing (MSAA)", &msaaIndex, kMsaaLabels, static_cast<int>(SystemSettings::kMsaaChoices.size()), 0,
                  "Off is the safest. Higher values cost GPU time and are untested with every effect.",
-                 game_ui::kRowRestart, "Off") & kChanged) {
+                 game_ui::kRowNextLaunch, "Off") & kChanged) {
         g_graphicsDraft.msaa = SystemSettings::kMsaaChoices[static_cast<size_t>(msaaIndex)];
     }
     static constexpr const char* kAnisoLabels[] = {"Off", "2x", "4x", "8x", "16x"};
@@ -1464,7 +1425,7 @@ void BuildEnhancementsPage(ListView& v) {
         if (SystemSettings::kAnisotropyChoices[i] == g_graphicsDraft.anisotropy) anisoIndex = static_cast<int>(i);
     }
     if (v.Choice("Anisotropic filtering", &anisoIndex, kAnisoLabels, 5, 4,
-                 "Sharper textures at grazing angles.", game_ui::kRowRestart, "16x") & kChanged) {
+                 "Sharper textures at grazing angles.", game_ui::kRowNextLaunch, "16x") & kChanged) {
         g_graphicsDraft.anisotropy = SystemSettings::kAnisotropyChoices[static_cast<size_t>(anisoIndex)];
     }
 
@@ -1481,7 +1442,7 @@ void BuildGraphicsPage(ListView& v) {
     v.Section("Quality");
     int preset = DetectPreset(next.resolution, g_graphicsDraft.msaa, g_graphicsDraft.anisotropy);
     if (v.Choice("Graphics preset", &preset, kPresetNames.data(), static_cast<int>(kPresetNames.size()), 1,
-                 "Sets resolution scale, anti-aliasing and anisotropic filtering together. Medium is the stock setup. Anti-aliasing and filtering apply after a restart.",
+                 "Sets resolution scale, anti-aliasing and anisotropic filtering together. Medium is the stock setup. Resolution changes on Apply. Anti-aliasing and filtering take effect next launch.",
                  game_ui::kRowConfirm) & kChanged) {
         if (preset < static_cast<int>(kPresets.size())) {
             const QualityPreset& p = kPresets[static_cast<size_t>(preset)];
@@ -1511,8 +1472,8 @@ void BuildGraphicsPage(ListView& v) {
     // The built-in transform-based interpolation; it is not AMD's optical-flow FSR 3 Frame Generation (docs/FSR-NOTES.md).
     v.Section("Frame generation");
     v.Toggle("NVIDIA DLSS Frame Generation (2x)", &g_graphicsDraft.frameGeneration, false,
-             "Apply and restart to enable. Requires D3D12 and DLSS or DLAA. Uses the original game rate and Reflex.");
-    if (g_frameGeneration) v.Info("Generated frames", aurora_frame_generation_active() ? "Active (NVIDIA confirmed)" : "Restart, then use DLSS or DLAA in a focused game window");
+             "Enable before launch to prepare the presentation window. Requires D3D12 and DLSS or DLAA. Uses the original game rate and Reflex.");
+    if (g_frameGeneration) v.Info("Generated frames", aurora_frame_generation_active() ? "Active (NVIDIA confirmed)" : "Inactive (requires launch support, DLSS or DLAA, and a focused window)");
     v.Toggle("NVIDIA Reflex", &g_graphicsDraft.reflex, true,
              "Enable driver low-latency pacing on a supported NVIDIA GPU in Direct3D 12. Applies with graphics changes.");
     if (g_reflex || g_frameGeneration) v.Info("Reflex driver", aurora_reflex_active() ? "Active" : "Unavailable");
@@ -1546,12 +1507,12 @@ void BuildGraphicsPage(ListView& v) {
     v.Toggle("Skip draws while shaders compile", &g_graphicsDraft.skipUnreadyPipelines, true,
              "Avoids stutter while pipelines build; some effects may flicker on first use.", 0, "On");
     v.Toggle("Run GX on its own thread", &g_graphicsDraft.gxWorker, true,
-             "Processes graphics commands on a separate thread.", game_ui::kRowRestart, "On");
+             "Processes graphics commands on a separate thread.", game_ui::kRowNextLaunch, "On");
     v.Toggle("Dump unmatched textures", &g_graphicsDraft.textureDumps, false,
              "Writes every texture without a replacement to the cache folder (needs custom textures).",
-             game_ui::kRowRestart | (g_graphicsDraft.textureReplacements ? 0u : game_ui::kRowDisabled));
+             game_ui::kRowNextLaunch | (g_graphicsDraft.textureReplacements ? 0u : game_ui::kRowDisabled));
     v.Info("Graphics API", GraphicsApiDisplayName());
-    v.Note("Pick another API with graphics_api in Config.toml (restart required).");
+    v.Note("The game reads graphics_api from Config.toml at launch.");
 
     g_graphicsDraft.display = next;
 }
@@ -1625,8 +1586,8 @@ void BuildDevicesPage(ListView& v) {
     const std::string notice = Wiimote::PlatformNotice();
     if (!notice.empty()) v.Note(notice, game_ui::kWarn);
     if (v.Toggle("Use Wii Remotes", &g_wiiRemotesEnabled, false,
-                 "Lets physical Wii Remotes connect. Takes effect after restarting the game. Turn this off to use a Wii U Pro Controller as a gamepad.",
-                 game_ui::kRowRestart) & kChanged) {
+                 "Enables physical Wii Remote connections at launch. Turn this off to use a Wii U Pro Controller as a gamepad.",
+                 game_ui::kRowNextLaunch) & kChanged) {
         g_wiiRemotesSaveFailed = !RuntimeConfigFile::SetWiiRemotesEnabled(g_wiiRemotesEnabled);
         if (g_wiiRemotesSaveFailed) g_wiiRemotesEnabled = !g_wiiRemotesEnabled;
     }
@@ -2001,15 +1962,11 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
         dl->PopClipRect();
     }
 
-    // Footer: context-sensitive button hints and the restart badge.
+    // Context-sensitive button hints.
     {
         const float cy = pmax.y - U(62.0f);
         const float left = pmin.x + U(52.0f);
         game_ui::DrawHints(dl, ImVec2(left, cy), FooterHints(v, in.device), a, 0);
-        if (RestartPending()) {
-            const float w = game_ui::BadgeWidth("RESTART REQUIRED");
-            game_ui::DrawBadge(dl, ImVec2(pmax.x - U(52.0f) - w, cy - U(13.0f)), "RESTART REQUIRED", game_ui::Badge::Restart, a);
-        }
     }
 }
 
