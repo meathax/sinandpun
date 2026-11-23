@@ -43,7 +43,7 @@ $amdFiles = @{
 foreach ($path in $amdFiles.Keys) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing AMD runtime asset: $path" }
 }
-if (Get-Process WiiCompiled -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $dst "WiiCompiled.exe") }) {
+if (Get-Process WiiCompiled,sinandpun -ErrorAction SilentlyContinue | Where-Object { $_.Path -and (Split-Path $_.Path -Parent) -eq $dst }) {
     throw "the game in $Target is running; close it first"
 }
 $moduleNames = 0..7 | ForEach-Object { "stg0$_.bin" }
@@ -56,6 +56,7 @@ foreach ($moduleName in $moduleNames) {
 New-Item -ItemType Directory -Force $dst | Out-Null
 Get-ChildItem -LiteralPath $dst -File -Filter "*.dll" | Remove-Item -Force
 Copy-Item $exe (Join-Path $dst "WiiCompiled.exe") -Force
+Copy-Item $exe (Join-Path $dst "sinandpun.exe") -Force
 foreach ($asset in $runtimeAssets) {
     Copy-Item -LiteralPath (Join-Path $src $asset) -Destination $dst -Force
 }
@@ -138,7 +139,7 @@ scheme = "pointer"
 @"
 @echo off
 cd /d "%~dp0"
-start "" "%~dp0WiiCompiled.exe"
+start "" "%~dp0sinandpun.exe"
 "@ | Set-Content (Join-Path $dst "Play.bat") -Encoding ASCII
 
 $commit = (git -c core.fsmonitor=false rev-parse --short HEAD) 2>$null
@@ -152,7 +153,7 @@ Commit  : $commit$dirty
 Exe     : WiiCompiled.exe  $((Get-Item (Join-Path $dst 'WiiCompiled.exe')).Length) bytes
 SHA-256 : $hash
 
-Run Play.bat (or WiiCompiled.exe). Your disc folder is set by dvd_root in UserData\Config.toml.
+Run Play.bat (or sinandpun.exe). Your disc folder is set by dvd_root in UserData\Config.toml.
 Open the in-game options with the game's own OPTIONS entry (title or pause menu).
 Settings and saves live in UserData\ and are kept when this folder is refreshed.
 No game data is included: the disc files stay where dvd_root points.

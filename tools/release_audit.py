@@ -34,10 +34,10 @@ def audit(source, package, modules, require_launcher_clean=False):
     checks = {}
 
     source_exe = source / "WiiCompiled.exe"
-    package_exe = package / "WiiCompiled.exe"
+    package_exe = package / ("sinandpun.exe" if require_launcher_clean else "WiiCompiled.exe")
     checks["exe_matches_build"] = same_file(source_exe, package_exe)
     if not checks["exe_matches_build"]:
-        errors.append("WiiCompiled.exe is missing, stale, or differs from the build source")
+        errors.append(f"{package_exe.name} is missing, stale, or differs from the build source")
 
     for asset in ("dsp_coef.bin", "initial_pipeline_cache.db"):
         checks[asset] = same_file(source / asset, package / asset)

@@ -1409,7 +1409,7 @@ bool ConfigureGamePathForLaunch(const std::filesystem::path& gamePath) {
     const auto preparedGame = ManagedGameDirectory();
     if (!DiscImport::IsGameDirectoryComplete(preparedGame)) {
         throw std::runtime_error(
-            "This disc has not been prepared yet. Run WiiCompiled.exe --prepare "
+            "This disc has not been prepared yet. Run sinandpun.exe --prepare "
             "--data=<data folder> --game=<disc image> first.");
     }
     RuntimeConfigFile::Mutable().dvdRoot = RuntimeConfigFile::PathToUtf8(preparedGame);

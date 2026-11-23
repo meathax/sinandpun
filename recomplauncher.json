@@ -22,7 +22,7 @@
   },
   "start": {
     "program": [
-      "WiiCompiled.exe"
+      "sinandpun.exe"
     ],
     "args": [
       "--data={data}",
@@ -31,7 +31,7 @@
   },
   "prepare": {
     "program": [
-      "WiiCompiled.exe"
+      "sinandpun.exe"
     ],
     "args": [
       "--prepare",

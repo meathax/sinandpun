@@ -49,14 +49,15 @@ New-Item -ItemType Directory $stagePath | Out-Null
 # Copy only known release assets. Loose keys and foreign tools never enter staging.
 $nativePath = Join-Path $root $BuildDirectory
 $runtimeDlls = Get-ChildItem $nativePath -File -Filter "*.dll" | Select-Object -ExpandProperty Name
-$allowed = @("WiiCompiled.exe", "LICENSE", "wii_bootstrap", "dsp_coef.bin", "initial_pipeline_cache.db") + @($runtimeDlls)
+$allowed = @("LICENSE", "wii_bootstrap", "dsp_coef.bin", "initial_pipeline_cache.db") + @($runtimeDlls)
 Get-ChildItem $sourcePath -Force | Where-Object {
     $_.Name -in $allowed -and $_.Name -notmatch "^(sl\.|nvngx_|amd_fidelityfx_)"
 } | ForEach-Object {
     Copy-Item $_.FullName $stagePath -Recurse -Force
 }
+Copy-Item -LiteralPath (Join-Path $nativePath "WiiCompiled.exe") -Destination (Join-Path $stagePath "sinandpun.exe")
 New-Item -ItemType Directory (Join-Path $stagePath "licenses") | Out-Null
-@('@echo off', 'cd /d "%~dp0"', 'start "" "%~dp0WiiCompiled.exe"') | Set-Content -Encoding ascii (Join-Path $stagePath "Play.bat")
+@('@echo off', 'cd /d "%~dp0"', 'start "" "%~dp0sinandpun.exe"') | Set-Content -Encoding ascii (Join-Path $stagePath "Play.bat")
 foreach ($notice in $graphicsNotices) {
     Copy-Item -LiteralPath (Join-Path $sourcePath "licenses/$notice") -Destination (Join-Path $stagePath "licenses")
 }
@@ -71,13 +72,13 @@ if (Test-Path -LiteralPath $achievementNotices) {
 Copy-Item (Join-Path $root "recomplauncher.json") (Join-Path $stagePath "recomplauncher.json") -Force
 Copy-Item (Join-Path $root "third_party\disc_codecs") (Join-Path $stagePath "disc_codec_licenses") -Recurse
 
-$exePath = Join-Path $stagePath "WiiCompiled.exe"
+$exePath = Join-Path $stagePath "sinandpun.exe"
 $hash = (Get-FileHash $exePath -Algorithm SHA256).Hash
 @"
 Sin & Punishment: Star Successor - recomp
 Version : $cleanVersion
 System  : Windows x64
-Exe     : WiiCompiled.exe $((Get-Item $exePath).Length) bytes
+Exe     : sinandpun.exe $((Get-Item $exePath).Length) bytes
 SHA-256 : $hash
 
 Stage module images are generated from the player's own copy during setup.
