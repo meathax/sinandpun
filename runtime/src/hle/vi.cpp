@@ -284,9 +284,9 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         Memory::TryRead32(layers + 0x1D0, table) && table &&
         Memory::TryRead32(table + 4 * sizeof(uint32_t), layer) && layer &&
         Memory::Contains(layer + 0x34, 1);
-    const bool stagePaused = haveGameplayLayer && Memory::Read8(layer + 0x34) != 0;
-    VirtualRemote::SetStagePaused(stagePaused);
-    ButtonPrompts::SetCombat(haveGameplayLayer && !stagePaused);
+    const bool inGameplay = haveGameplayLayer && Memory::Read8(layer + 0x34) == 0;
+    VirtualRemote::SetMenuNavigation(!inGameplay);
+    ButtonPrompts::SetCombat(inGameplay);
     aurora_set_atmosphere_type(stage == 2 ? AURORA_ATMOSPHERE_UNDERWATER :
                                stage == 5 ? AURORA_ATMOSPHERE_DUST : AURORA_ATMOSPHERE_ORIGINAL);
     // Prevent re-entry - this can happen if OSWakeupThread triggers SelectThread

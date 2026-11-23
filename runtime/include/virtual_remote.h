@@ -12,7 +12,7 @@
 
 namespace VirtualRemote {
 
-void SetStagePaused(bool paused);
+void SetMenuNavigation(bool enabled);
 
 // The modern action map owns host input unless a real Wii Remote is attached
 // or SIN_VIRTUAL_REMOTE=0 explicitly requests the legacy input path.

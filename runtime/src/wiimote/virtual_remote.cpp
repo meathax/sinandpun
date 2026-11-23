@@ -46,7 +46,7 @@ AimDebug g_dbg;
 // SetScheme(): requested extension (-1 = none requested yet; otherwise an InputMap::Scheme value).
 std::atomic<int> g_requestedScheme{-1};
 std::atomic<bool> g_scriptReloaded{false};
-std::atomic_bool g_stagePaused{false};
+std::atomic_bool g_menuNavigation{true};
 
 const char* SchemeLabel(AimSettings::Scheme s) { return s == AimSettings::Scheme::Classic ? "classic" : "pointer"; }
 
@@ -637,7 +637,7 @@ private:
         }
         RefreshSettings();
         const InputMap::RawSample raw = AimInput::Sample();
-        if (g_stagePaused.load(std::memory_order_relaxed) &&
+        if (g_menuNavigation.load(std::memory_order_relaxed) &&
             AimInput::LastDevice() == InputMap::ActiveDevice::Gamepad) {
             in.padMenu = true;
             const auto button = [&](SDL_GamepadButton b) { return raw.padButtons[b]; };
@@ -1042,7 +1042,7 @@ bool UsesVirtualInput() {
     return enabled && !Wiimote::Host().IsAttached(0);
 }
 
-void SetStagePaused(bool paused) { g_stagePaused.store(paused, std::memory_order_relaxed); }
+void SetMenuNavigation(bool enabled) { g_menuNavigation.store(enabled, std::memory_order_relaxed); }
 
 void SetScheme(InputMap::Scheme scheme) {
     static const bool scriptOwns = [] {
