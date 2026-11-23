@@ -299,12 +299,12 @@ fn gather_rays(p: vec2i, dim: vec2i) -> vec4f {
     let across = cross(normal,lateral);
     let origin = center+normal*max(0.018,-center.z*0.0016);
     let reach = clamp(-center.z*0.78,5.0,5000.0);
-    // Two equal-area strata on the cosine-weighted hemisphere.
-    var light = trace_bounce(origin,0.8660254*lateral+0.5*normal,reach,dim);
-    light += trace_bounce(origin,-0.8660254*lateral+0.5*normal,reach,dim);
-    light += trace_bounce(origin,0.5*across+0.8660254*normal,reach,dim);
-    light += trace_bounce(origin,-0.5*across+0.8660254*normal,reach,dim);
-    return vec4f(sqrt(clamp(light.rgb*0.16,vec3f(0),vec3f(1))),light.a*0.25);
+    // Keep both elevation strata at every receiver. Neighboring cells trace
+    // opposing azimuths so the depth-aware spatial filter combines both sides.
+    let side = select(1.0,-1.0,((p.x/4+p.y/4)&1)!=0);
+    var light = trace_bounce(origin,side*0.8660254*lateral+0.5*normal,reach,dim);
+    light += trace_bounce(origin,-side*0.5*across+0.8660254*normal,reach,dim);
+    return vec4f(sqrt(clamp(light.rgb*0.32,vec3f(0),vec3f(1))),light.a*0.5);
 }
 
 // Each screen-space slice integrates only newly visible solid angle as it moves

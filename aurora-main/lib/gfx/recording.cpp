@@ -314,8 +314,11 @@ FrameOp capture_frame_op(FramePacket& frame, FrameOpType type, uint32_t index) {
           type == FrameOpType::Readback && index < frame.readbackTasks.size() ? &frame.readbackTasks[index] : nullptr,
       .highWater = current_high_water(frame),
   };
-  op.textureUploads.reserve(op.highWater.textureUploadCount);
-  for (size_t i = 0; i < op.highWater.textureUploadCount; ++i) {
+  // The worker encodes in FIFO order. Publish only uploads added since the
+  // previous op, without exposing the producer's growing deque to the worker.
+  const size_t first = frame.ops.empty() ? 0 : frame.ops.back().highWater.textureUploadCount;
+  op.textureUploads.reserve(op.highWater.textureUploadCount - first);
+  for (size_t i = first; i < op.highWater.textureUploadCount; ++i) {
     op.textureUploads.push_back(&frame.textureUploads[i]);
   }
   return op;
@@ -604,8 +607,10 @@ void enqueue_op(FramePacket& frame, uint32_t opIndex) {
   if (opIndex >= frame.ops.size() || g_recorder.suppressRenderWorker) {
     return;
   }
-  auto op = frame.ops[opIndex];
-  render_worker::enqueue_encode_pass(frame.frameId, opIndex, [packet = &frame, op = std::move(op)] {
+  // Frame ops are immutable deque elements retained until the worker finishes.
+  const auto* recorded = &frame.ops[opIndex];
+  render_worker::enqueue_encode_pass(frame.frameId, opIndex, [packet = &frame, recorded] {
+    const auto& op = *recorded;
     if (op.renderPass == nullptr && op.textureCopy == nullptr && op.encoderTask == nullptr &&
         op.readbackTask == nullptr) {
       return;
