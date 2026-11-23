@@ -300,6 +300,7 @@ bool g_combatLight = RuntimeConfigFile::CombatLight();
 bool g_contactShadow = RuntimeConfigFile::ContactShadow();
 bool g_stageAtmosphere = RuntimeConfigFile::StageAtmosphere();
 bool g_pixelLighting = RuntimeConfigFile::PixelLighting();
+std::atomic<bool> g_sceneGlow{RuntimeConfigFile::SceneGlow()};
 bool g_enhancedBloom = RuntimeConfigFile::EnhancedBloom();
 int g_upscaler = UpscalerIndexFromConfig();
 int g_fsrQuality = FsrQualityIndexFromConfig();
@@ -328,7 +329,7 @@ void ApplyUpscaler() {
     aurora_set_contact_shadow(g_enhancementsEnabled && g_contactShadow);
     aurora_set_stage_atmosphere(g_enhancementsEnabled && g_stageAtmosphere);
     aurora_set_pixel_lighting(g_enhancementsEnabled && g_pixelLighting);
-    aurora_set_enhanced_bloom(g_enhancementsEnabled && g_enhancedBloom);
+    aurora_set_enhanced_bloom(g_sceneGlow.load(std::memory_order_relaxed) && g_enhancementsEnabled && g_enhancedBloom);
     const bool fsr = g_enhancementsEnabled && (g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal);
     const bool dlss = g_enhancementsEnabled && g_upscaler == kUpscalerDlss;
     float factor = fsr ? RuntimeConfigFile::kFsrQualities[static_cast<size_t>(g_fsrQuality)].factor : 1.0f;
@@ -437,6 +438,7 @@ struct GraphicsState {
     bool contactShadow = g_contactShadow;
     bool stageAtmosphere = g_stageAtmosphere;
     bool pixelLighting = g_pixelLighting;
+    bool sceneGlow = g_sceneGlow.load(std::memory_order_relaxed);
     bool enhancedBloom = g_enhancedBloom;
     bool generateMips = RuntimeConfigFile::GenerateMips();
     bool textureReplacements = RuntimeConfigFile::TextureReplacements(false);
@@ -481,6 +483,7 @@ GraphicsState CurrentGraphicsState() {
         .contactShadow = g_contactShadow,
         .stageAtmosphere = g_stageAtmosphere,
         .pixelLighting = g_pixelLighting,
+        .sceneGlow = g_sceneGlow.load(std::memory_order_relaxed),
         .enhancedBloom = g_enhancedBloom,
         .generateMips = RuntimeConfigFile::GenerateMips(),
         .textureReplacements = RuntimeConfigFile::TextureReplacements(false),
@@ -572,6 +575,7 @@ void ApplyGraphicsLive(GraphicsState next) {
     g_contactShadow = next.contactShadow;
     g_stageAtmosphere = next.stageAtmosphere;
     g_pixelLighting = next.pixelLighting;
+    g_sceneGlow.store(next.sceneGlow, std::memory_order_relaxed);
     g_enhancedBloom = next.enhancedBloom;
     g_upscaler = next.upscaler;
     g_fsrQuality = next.fsrQuality;
@@ -651,6 +655,8 @@ void PersistGraphics(const GraphicsState& state) {
     RuntimeConfigFile::WriteSetting("video", "stage_atmosphere", state.stageAtmosphere ? "true" : "false");
     userConfig.pixelLighting = state.pixelLighting;
     RuntimeConfigFile::WriteSetting("video", "per_pixel_lighting", state.pixelLighting ? "true" : "false");
+    userConfig.sceneGlow = state.sceneGlow;
+    RuntimeConfigFile::WriteSetting("video", "scene_glow", state.sceneGlow ? "true" : "false");
     userConfig.enhancedBloom = state.enhancedBloom;
     RuntimeConfigFile::WriteSetting("video", "enhancements_enabled", state.enhancementsEnabled ? "true" : "false");
     RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", state.enhancedBloom ? "true" : "false");
@@ -698,6 +704,7 @@ bool GraphicsDraftDirty() {
              g_graphicsDraft.contactShadow == g_contactShadow &&
              g_graphicsDraft.stageAtmosphere == g_stageAtmosphere &&
              g_graphicsDraft.pixelLighting == g_pixelLighting &&
+             g_graphicsDraft.sceneGlow == g_sceneGlow.load(std::memory_order_relaxed) &&
              g_graphicsDraft.enhancedBloom == g_enhancedBloom &&
              g_graphicsDraft.generateMips == RuntimeConfigFile::GenerateMips() &&
              g_graphicsDraft.textureReplacements == RuntimeConfigFile::TextureReplacements(false) &&
@@ -998,6 +1005,7 @@ void ResetEnhancementsPage() {
     g_contactShadow = false;
     g_stageAtmosphere = false;
     g_pixelLighting = false;
+    g_sceneGlow.store(true, std::memory_order_relaxed);
     g_enhancedBloom = false;
     ResetUpscaler();
     SystemSettings::Values sys = SystemSettings::Get();
@@ -1033,6 +1041,8 @@ void ResetEnhancementsPage() {
     RuntimeConfigFile::WriteSetting("video", "stage_atmosphere", "false");
     userConfig.pixelLighting = false;
     RuntimeConfigFile::WriteSetting("video", "per_pixel_lighting", "false");
+    userConfig.sceneGlow = true;
+    RuntimeConfigFile::WriteSetting("video", "scene_glow", "true");
     userConfig.enhancedBloom = false;
     RuntimeConfigFile::WriteSetting("video", "enhancements_enabled", "true");
     RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", "false");
@@ -1463,8 +1473,8 @@ void BuildEnhancementsPage(ListView& v) {
              "Evaluates authored lights across opaque surfaces with compatible materials and normals.",
              g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
     v.Toggle("Enhanced bloom", &g_graphicsDraft.enhancedBloom, false,
-             "Adds a soft halo to bright scene details before eligible HUD draws are composited.",
-             g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+             "Adds a soft halo to bright scene details when Scene glow and blur is enabled in Graphics.",
+             g_graphicsDraft.sceneGlow && g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
     v.Toggle("Custom textures", &g_graphicsDraft.textureReplacements, false,
              "Loads replacement textures from texture_replacements/ next to Config.toml.", game_ui::kRowNextLaunch);
     v.Toggle("Generate missing texture mipmaps", &g_graphicsDraft.generateMips, false,
@@ -1500,6 +1510,8 @@ void BuildGraphicsPage(ListView& v) {
         g_graphicsDraft.upscaler == kUpscalerDlss);
 
     v.Note("A green star marks the recommended value of a row.");
+    v.Toggle("Scene glow and blur", &g_graphicsDraft.sceneGlow, true,
+             "Draws the original glare, blur trails and full-screen blur. Turning this off also suppresses enhanced bloom.");
     v.Section("Quality");
     int preset = DetectPreset(next.resolution, g_graphicsDraft.msaa, g_graphicsDraft.anisotropy);
     if (v.Choice("Graphics preset", &preset, kPresetNames.data(), static_cast<int>(kPresetNames.size()), 1,
@@ -2296,6 +2308,8 @@ void PollGamepadMenuChord() {
     wasDown = down;
 }
 } // namespace
+
+bool SceneGlowEnabled() noexcept { return g_sceneGlow.load(std::memory_order_relaxed); }
 
 void InitializeRuntimeSettings() noexcept {
     AimInput::Install();

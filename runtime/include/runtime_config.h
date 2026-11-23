@@ -71,6 +71,7 @@ struct RuntimeUserConfig {
     std::optional<bool> gxWorker;
     std::optional<bool> disableCopyFilter;
     std::optional<bool> enhancementsEnabled;
+    std::optional<bool> sceneGlow;
     std::optional<bool> enhancedBloom;
     std::optional<bool> sharpeningEnabled;
     std::optional<bool> ambientOcclusion;
@@ -822,6 +823,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.contactShadow = FindConfigValue<bool>(document, "video", "contact_shadow");
     config.stageAtmosphere = FindConfigValue<bool>(document, "video", "stage_atmosphere");
     config.pixelLighting = FindConfigValue<bool>(document, "video", "per_pixel_lighting");
+    config.sceneGlow = FindConfigValue<bool>(document, "video", "scene_glow");
     config.enhancedBloom = FindConfigValue<bool>(document, "video", "enhanced_bloom");
     config.generateMips = FindConfigValue<bool>(document, "video", "generate_mips");
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
@@ -1593,6 +1595,7 @@ inline bool CombatLight() { return Get().combatLight.value_or(false); }
 inline bool ContactShadow() { return Get().contactShadow.value_or(false); }
 inline bool StageAtmosphere() { return Get().stageAtmosphere.value_or(false); }
 inline bool PixelLighting() { return Get().pixelLighting.value_or(false); }
+inline bool SceneGlow() { return Get().sceneGlow.value_or(true); }
 inline bool EnhancedBloom() { return Get().enhancedBloom.value_or(false); }
 inline bool GenerateMips() { return Get().generateMips.value_or(false); }
 

@@ -14,6 +14,11 @@ internal static class StarSuccessorCoop
         }
         switch (address)
         {
+            case 0x80086B40: // DiPostEffect draw dispatcher. Keep tone mapping (1) active.
+                source = Replace("goto loc_80086B40;", "const uint32_t drawMask = settings_overlay::SceneGlowEnabled() ? 0xFu : 1u;\n    goto loc_80086B40;");
+                source = Replace("r0 = MemoryInline::FlatRead32((r30 + 48));",
+                    "r0 = MemoryInline::FlatRead32((r30 + 48)) & drawMask;", 4);
+                return "namespace settings_overlay { bool SceneGlowEnabled() noexcept; }\n" + source;
             case 0x80076D78: // DefaultPlayer constructor passes base HP to ObjHit::setLife.
                 source = Replace("InvokeDirectCpu<0x800A42C0u>(ctx);",
                     "ctx->fpr[1].d = SinCoopBaseLife(ctx->fpr[1].d);\n    InvokeDirectCpu<0x800A42C0u>(ctx);");
