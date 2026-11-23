@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 struct CpuContext;
+bool SinCoopUsesActorSights();
 double SinCoopBaseLife(double base);
 uint32_t SinCoopChange(uint32_t sda, uint32_t stage, uint32_t actor, uint32_t original);
 uint32_t SinCoopPad(uint32_t sda, uint32_t actor, uint32_t firstPad);

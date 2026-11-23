@@ -1617,10 +1617,12 @@ void BuildCoopPage(ListView& v) {
     }
     int secondRemote = RuntimeConfigFile::SecondRemoteSetting();
     const char* sources[] = {"GameCube / Wii Remote", "Gamepad", "Keyboard & Mouse"};
-    if (v.Choice("Player 2 input", &secondRemote, sources, 3, 0,
+    const int firstSource = mode == 1 ? 1 : 0;
+    secondRemote -= firstSource;
+    if (v.Choice("Player 2 input", &secondRemote, sources + firstSource, 3 - firstSource, 0,
                  "Choose how Player 2 plays. Keyboard and mouse control Player 1 when Gamepad or GameCube / Wii Remote is selected.",
                  game_ui::kRowNextLaunch) & kChanged) {
-        RuntimeConfigFile::SetSecondRemote(secondRemote);
+        RuntimeConfigFile::SetSecondRemote(secondRemote + firstSource);
     }
     v.Section("Controller assignments");
     const uint32_t controllerCount = PADCount();

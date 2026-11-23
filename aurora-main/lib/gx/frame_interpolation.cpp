@@ -312,7 +312,11 @@ uint32_t maximum_interpolation_samples() noexcept {
   switch (mode) {
   case AURORA_FRAME_RATE_FIXED:
     return slots_for_fps(std::min(s_rateFixedFps.load(std::memory_order_acquire), cap));
-  case AURORA_FRAME_RATE_DISPLAY:
+  case AURORA_FRAME_RATE_DISPLAY: {
+    const uint64_t period = window::refresh_period_nanos();
+    const uint32_t hz = period ? static_cast<uint32_t>(std::lround(1.e9 / period)) : 60u;
+    return slots_for_fps(std::min(cap, hz));
+  }
   case AURORA_FRAME_RATE_UNCAPPED:
     return slots_for_fps(cap);
   default:

@@ -1232,7 +1232,10 @@ inline bool SetEnhancedCoop(bool enabled) {
 }
 
 inline int SecondRemoteSetting() {
-    const auto value = Get().secondRemote.value_or(Get().enhancedCoop.value_or(false) ? 1 : 0);
+    const auto value = Get().secondRemote.value_or(0);
+    // Older profiles can explicitly select the raw GameCube input path.
+    // Enhanced co-op must run SDL pads through the same settings on both seats.
+    if (Get().enhancedCoop.value_or(false)) return value == 2 ? 2 : 1;
     return value == 1 || value == 2 ? static_cast<int>(value) : 0;
 }
 

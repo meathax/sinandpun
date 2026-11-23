@@ -560,9 +560,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   }
 
   const bool nativeScene = native_scene_enabled() && state.projType == GX_PERSPECTIVE;
-  const bool interpolate = !nativeScene && frame_interpolation_active() && state.projType == GX_PERSPECTIVE;
+  const bool translucent = cache.config.blendMode == GX_BM_BLEND && !cache.config.depthUpdate;
+  // Direct translucent vertices have no persistent particle IDs in either replay path.
+  const bool directParticles = translucent && cache.config.shaderConfig.attrs[GX_VA_POS].attrType == GX_DIRECT;
+  const bool interpolate = !nativeScene && !directParticles && frame_interpolation_active() && state.projType == GX_PERSPECTIVE;
   const bool indexedMatrices = state.vtxDesc[GX_VA_PNMTXIDX] != GX_NONE;
   bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0;
+  if (uniformValid && interpolate != cache.interpRecorded)
+    uniformValid = false;
   // A block holds one interpolated live matrix, so each live matrix gets its own block.
   if (interpolate && uniformValid && cache.interpRecorded && !indexedMatrices &&
       cache.interpCurrentMatrix != state.currentPnMtx) {
@@ -646,10 +651,6 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     record_ray_trace_geometry(cache.config.shaderConfig, prim, sourceVertices, vtxCount);
   }
   NativeSceneDraw* scene = nullptr;
-  const bool translucent = cache.config.blendMode == GX_BM_BLEND && !cache.config.depthUpdate;
-  // Direct translucent vertices carry no persistent particle IDs. Keep that
-  // stream at its authored pose while other geometry keeps interpolating.
-  const bool directParticles = translucent && cache.config.shaderConfig.attrs[GX_VA_POS].attrType == GX_DIRECT;
   if (nativeScene && !directParticles) {
     const size_t projOffset = 16 + (cache.shaderInfo.lineMode != 0 ? 16 : 0);
     Mat4x4<float> projection;

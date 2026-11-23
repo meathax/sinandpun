@@ -40,6 +40,20 @@ def add_title_hooks(name, address, text):
             raise ValueError(f"Player base life initialization changed at {name}:{address:08X}")
         text = '#include "sin_coop.h"\n' + text.replace(operand,
             "ctx->fpr[1].d = SinCoopBaseLife(ctx->fpr[1].d);\n    " + operand)
+    if name == "stg00" and address == 0x97DD81AC:
+        # The 256 contact records at +576 end exactly at the count at +15936.
+        # Drop excess contacts before the narrow phase and truncate a manifold
+        # which only partially fits. The local manifold holds 64 Vec3s.
+        start = "r6 = (r1 + 8);"
+        count = "r8 = MemoryInline::FlatRead32((r1 + 788));"
+        if text.count(start) != 1 or text.count(count) != 1:
+            raise ValueError("Stage 0 rigid-box contact layout changed")
+        return text.replace(start, "if (MemoryInline::FlatRead32(r29 + 15936) >= 256u) "
+                            "{ r3 = 0; goto loc_97DD82AC; }\n    " + start).replace(
+            count, count + "\n    if (static_cast<int32_t>(r8) < 0) r8 = 0;"
+            "\n    if (r8 > 64u) r8 = 64u;"
+            "\n    const uint32_t room = 256u - MemoryInline::FlatRead32(r29 + 15936);"
+            "\n    if (r8 > room) r8 = room;")
     if name == "stg00" and address == 0x97DD88E0:  # RigidBoxManager::CalculateHitPoint
         # GetNumHitPoints can select all eight box vertices. The unsorted
         # path copies both lists into four-Vec3 buffers in the retail frame.

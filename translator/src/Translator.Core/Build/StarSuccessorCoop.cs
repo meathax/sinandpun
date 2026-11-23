@@ -31,6 +31,8 @@ internal static class StarSuccessorCoop
                 source = Replace("MemoryInline::FlatRead8((r15 + 6))", "SinCoopPollMask(MemoryInline::FlatRead8((r15 + 6)))", 2);
                 break;
             case 0x8007651C: // Default stage factory, optional autostage fixture
+                // Each playable body owns a sight. Skip the separate retail assist gun.
+                source = Replace("loc_800765AC:", "loc_800765AC:\n    if (SinCoopUsesActorSights()) goto loc_800765C4;");
                 source = Replace("goto loc_8007651C;", "SinCoopSeedTestCharacter(ctx);\n    goto loc_8007651C;");
                 break;
             case 0x8006F4A8: // Player::end

@@ -57,6 +57,10 @@ void ShareLife(const Players& players, bool entering) {
 
 }
 
+bool SinCoopUsesActorSights() {
+    return RuntimeConfigFile::EnhancedCoopAtLaunch();
+}
+
 double SinCoopBaseLife(double base) {
     const bool enhanced = RuntimeConfigFile::EnhancedCoopAtLaunch();
     const double maximum = enhanced ? base * 1.5 : base;
@@ -123,8 +127,11 @@ bool SinCoopDecodePad(CpuContext* ctx, uint32_t stack, uint32_t input, uint32_t 
     CpuContext call = *ctx;
     call.gpr[1] = stack;
     call.gpr[3] = input + 3388;
-    call.gpr[4] = device;
-    call.gpr[5] = input + 112;
+    const auto hub = Memory::Read32(Memory::Read32(ctx->gpr[13] - 23904) + 4);
+    const auto leadDevice = Memory::Read8(hub + 813);
+    // r4 selects the retail binding profile. r5 selects the physical sample.
+    call.gpr[4] = leadDevice == 255 ? device : leadDevice;
+    call.gpr[5] = hub + 112;
     call.gpr[6] = Memory::Read8(input + 1920);
     InvokeDirectCpu<0x800C5B0Cu>(&call);
     return true;
