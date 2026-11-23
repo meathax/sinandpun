@@ -24,6 +24,7 @@ inputs:
 translation:
   entry_points:
     - 0x80006310
+    - 0x97E50CA8 # Address-taken function with an RSO HA/LO pair beyond the seed scan window.
     - 0x97E513E4 # Address-taken entry after a function return (RSO HA/LO pair).
   function_map:
     path: build/modules/stg04.map

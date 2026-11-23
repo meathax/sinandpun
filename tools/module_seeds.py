@@ -10,7 +10,7 @@ Sources (relocations are already applied in the .bin, so lis/addi pairs carry th
   tail      `b` / `bc` (no link) whose target is outside the enclosing function span (iterated to fixpoint)
   data      aligned word in a non-text section pointing into text (vtables, fn-pointer tables, ctors/dtors)
   lisaddi   lis rX,hi ; addi/ori rY,rX,lo (within a few insns, rX not clobbered) resolving into text
-  prologue  stwu r1,-N(r1) / mflr r0 directly after blr (fn whose address is only taken in code)
+  prologue  stwu r1,-N(r1) / mflr r0 after blr or a one-instruction tail-call thunk
   bctr      constant lis/ori + mtctr + bctr destination (also covered by lisaddi)
 Jump tables (bctr after mtctr <- lwzx from a lis/addi table base) are recognised; their entries are
 switch CASE LABELS, not functions, and are removed from the seed set (they stay inside the owning function).
@@ -229,10 +229,14 @@ def scan(m, verbose=False):
             if op == 31 and (y >> 21) & 31 == r and ((y >> 1) & 0x3FF) in (444, 316, 266, 40, 23, 87, 279, 339):
                 break
 
-    # prologue after blr
+    # A standalone tail-call thunk can also end immediately before a callback.
     for i in range(1, n):
-        if W[i - 1] == BLR and ((W[i] >> 16) == 0x9421 or W[i] == 0x7C0802A6):
-            add(m.tbase + i * 4, "prologue")
+        pc = m.tbase + i * 4
+        previous = W[i - 1]
+        thunk_boundary = pc - 4 in m.map_text or (i >= 2 and W[i - 2] == BLR)
+        tail_thunk = thunk_boundary and previous >> 26 == 18 and not previous & 1
+        if (previous == BLR or tail_thunk) and ((W[i] >> 16) == 0x9421 or W[i] == 0x7C0802A6):
+            add(pc, "prologue")
 
     # data pointers (jump-table slots recognised above are case labels, not pointers)
     for a, v in m.data_words():

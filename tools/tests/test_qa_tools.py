@@ -15,6 +15,42 @@ def load_tool(name):
     return module
 
 
+class ModuleSeedTests(unittest.TestCase):
+    def test_callback_after_known_tail_thunk(self):
+        seeds = load_tool("module_seeds")
+
+        class Module:
+            tbase = 0x97DC0000
+            words = (0x48200000, 0x9421FFF0, seeds.BLR)
+            tend = tbase + 4 * len(words)
+            map_text = {tbase}
+
+            def in_text(self, address):
+                return self.tbase <= address < self.tend and address % 4 == 0
+
+            def w(self, address):
+                return self.words[(address - self.tbase) // 4]
+
+            def data_words(self):
+                return ()
+
+        module = Module()
+        callback = module.tbase + 4
+        candidates, labels, _ = seeds.scan(module)
+        self.assertEqual(candidates[callback], {"prologue"})
+        self.assertEqual(seeds.classify(module, callback, candidates[callback], labels), "ok")
+        module.map_text = set()
+        self.assertNotIn(callback, seeds.scan(module)[0])
+
+        # Some standalone thunks are explicit translation roots only.
+        module.words = (seeds.BLR, *module.words)
+        module.tend += 4
+        callback += 4
+        candidates, labels, _ = seeds.scan(module)
+        self.assertEqual(candidates[callback], {"prologue"})
+        self.assertEqual(seeds.classify(module, callback, candidates[callback], labels), "ok")
+
+
 qa_report = load_tool("qa_report")
 module_coverage = load_tool("module_coverage")
 release_audit = load_tool("release_audit")
