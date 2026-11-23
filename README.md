@@ -22,6 +22,15 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 - **Flexible frame pacing.** Choose original 60 Hz, match-display, or interpolated presentation. Variable refresh rate is available on compatible displays.
 - **In-game settings.** Open the game's **Options** from the title or pause menu. Display changes offer a Keep/Revert prompt.
 
+## Enhancements
+
+Open **Options → Enhancements** to choose the effects you want.
+
+- **Bounce lighting.** Screen-space or ray-traced global illumination lets nearby surfaces pick up each other's color. Ray tracing can retain scenery that has moved out of view, so it can still contribute light.
+- **Materials and combat lighting.** Glossy armor catches reflections, shot impacts and explosions briefly light nearby surfaces, and contact shadows ground characters in the scene.
+- **Stage atmosphere.** Moving patterns of light play across underwater surfaces in Stage 2. Distance haze gives the scenery in Stage 5 more depth.
+- **High-refresh presentation.** On supported NVIDIA hardware, D3D12 frame generation adds intermediate frames for smoother motion, with Reflex to manage latency.
+
 ## Getting started
 
 Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required for the Windows build. See the separate [Linux](docs/LINUX.md) and [macOS](docs/MACOS.md) notes for build and validation status.
