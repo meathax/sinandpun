@@ -106,7 +106,7 @@ fs::path PickFile(HWND owner, const wchar_t* title, const wchar_t* label, const 
     IFileOpenDialog* dialog = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_IFileOpenDialog,
                                    reinterpret_cast<void**>(&dialog))) && dialog) {
-        static const COMDLG_FILTERSPEC filters[] = {
+        const COMDLG_FILTERSPEC filters[] = {
             {label, pattern},
             {L"All files", L"*.*"},
         };
@@ -138,12 +138,13 @@ void PickImportInputs(Launcher& launcher, HWND owner, fs::path image) {
     launcher.dialogThread = std::thread([&launcher, owner, image = std::move(image)]() mutable {
         if (image.empty()) {
             image = PickFile(owner, L"1 of 2: Select your Wii disc image",
-                             L"Wii disc images", L"*.iso;*.wbfs;*.rvz;*.gcz;*.cue;*.bin;*.gcm");
+                             L"Wii images and packages", L"*.iso;*.wbfs;*.rvz;*.wad;*.gcz;*.cue;*.bin;*.gcm");
         }
         fs::path keys;
-        if (!image.empty()) {
-            keys = PickFile(owner, L"2 of 2: Select your Wii common key file",
-                            L"Binary key files", L"*.bin;*.key");
+        if (!image.empty() && _wcsicmp(image.extension().c_str(), L".wad") != 0) {
+            const bool rvz = _wcsicmp(image.extension().c_str(), L".rvz") == 0;
+            keys = PickFile(owner, rvz ? L"Select a Wii key, or Cancel to use the RVZ partition" : L"2 of 2: Select your Wii common key file",
+                            L"Wii common key files", L"*.bin;*.key;*.hex;*.txt;*.7z;common-key");
         }
         launcher.picked = std::move(image);
         launcher.pickedKeys = std::move(keys);
@@ -294,7 +295,7 @@ bool Run() {
         if (l.dialogState.load() == 2) {
             JoinFinished(l.dialogThread);
             l.dialogState = 0;
-            if (!l.picked.empty() && !l.pickedKeys.empty() &&
+            if (!l.picked.empty() && (!l.pickedKeys.empty() || _wcsicmp(l.picked.extension().c_str(), L".rvz") == 0 || _wcsicmp(l.picked.extension().c_str(), L".wad") == 0) &&
                 l.phase != Phase::Importing && l.phase != Phase::Done) {
                 StartImport(l, l.picked, l.pickedKeys);
             }
@@ -361,7 +362,7 @@ bool Run() {
                                      "Welcome! To get started, select your own disc image of Sin & Punishment: Star Successor (North America).",
                                      game_ui::Outline::Thin, 1.0f, true);
                 game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(105.0f)), bodyW, game_ui::kTextDim,
-                                     "Select your NTSC-U disc image, then your 16-byte Wii key file. Setup uses the key once and does not keep it.",
+                                     "Select your NTSC-U disc image, then your Wii common key or BootMii keys.bin. Setup uses the key once.",
                                      game_ui::Outline::Thin, 1.0f, true);
             }
             // A dialog may finish during this frame. Consume its result and

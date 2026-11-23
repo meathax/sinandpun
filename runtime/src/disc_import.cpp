@@ -325,7 +325,8 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
     const std::string ext = ExtensionOf(chosen);
     if (ext == ".rvz") return std::make_unique<RvzImage>(chosen);
     if (ext == ".gcz") return std::make_unique<GczImage>(chosen);
-    if (ext == ".wia" || ext == ".ciso" || ext == ".nfs" || ext == ".wad") {
+    if (ext == ".wad") throw ImportError("WAD files install Wii titles or channels. This port needs the R2VE01 game disc or its extracted files.");
+    if (ext == ".wia" || ext == ".ciso" || ext == ".nfs") {
         throw ImportError("Compressed or container formats (" + ext + ") are not supported. Convert the disc to a plain .iso (Dolphin: right-click the game, Convert) and select that instead.");
     }
     fs::path image = chosen;
@@ -378,6 +379,8 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
 
 // ---- Wii partition ----------------------------------------------------------------------------------------
 
+#include "disc_key.inc"
+
 class WiiPartition {
 public:
     WiiPartition(RawImage& raw, uint64_t partitionOffset, const Sha1& sha, std::atomic<bool>& cancel,
@@ -391,21 +394,26 @@ public:
             uint8_t bytes[16]{};
             ~Key() { SecureZeroMemory(bytes, sizeof bytes); }
         } commonKey, titleKey;
-        if (keyFile.empty()) {
-            throw ImportError("Select your own 16-byte Wii common key file, or use an extracted game folder.");
-        }
-        std::ifstream keyInput(keyFile, std::ios::binary);
-        if (!keyInput.read(reinterpret_cast<char*>(commonKey.bytes), sizeof commonKey.bytes) ||
-            keyInput.peek() != std::char_traits<char>::eof() || keyInput.bad()) {
-            throw ImportError("The Wii common key file must contain exactly 16 binary bytes.");
-        }
-        uint8_t iv[16] = {};
-        std::memcpy(iv, ticket + 0x1DC, 8);
-        AesCbcDecryptor(commonKey.bytes).Decrypt(iv, ticket + 0x1BF, titleKey.bytes, 16);
         m_dataStart = partitionOffset + (static_cast<uint64_t>(Be32(ticket + 0x2B8)) << 2);
         const uint64_t encryptedSize = static_cast<uint64_t>(Be32(ticket + 0x2BC)) << 2;
         m_clusters = encryptedSize / kClusterSize;
         if (m_clusters == 0) throw ImportError("The disc image has an empty data partition.");
+        if (keyFile.empty() && raw.SelectPartition(m_dataStart, m_clusters, nullptr)) {
+            m_plainPartition = true;
+            m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
+            return;
+        }
+        if (keyFile.empty()) {
+            throw ImportError("Select your own 16-byte Wii common key file, or use an extracted game folder.");
+        }
+        const bool suppliedTitleKey = ReadDiscKey(keyFile, commonIndex, commonKey.bytes);
+        if (suppliedTitleKey) {
+            std::memcpy(titleKey.bytes, commonKey.bytes, sizeof titleKey.bytes);
+        } else {
+            uint8_t iv[16] = {};
+            std::memcpy(iv, ticket + 0x1DC, 8);
+            AesCbcDecryptor(commonKey.bytes).Decrypt(iv, ticket + 0x1BF, titleKey.bytes, 16);
+        }
         m_plainPartition = raw.SelectPartition(m_dataStart, m_clusters, titleKey.bytes);
         if (!m_plainPartition) m_aes = std::make_unique<AesCbcDecryptor>(titleKey.bytes);
         m_raw_buf.resize(size_t(kChunkClusters) * kClusterSize);
@@ -433,7 +441,9 @@ public:
     }
 
 private:
-    static constexpr uint32_t kChunkClusters = 16;
+    // A scrubbed WBFS can omit neighboring sectors. Validate only the sector
+    // containing requested game data, including all of its H0 hashes.
+    static constexpr uint32_t kChunkClusters = 1;
 
     void LoadChunk(uint64_t chunk) {
         if (m_cancel.load(std::memory_order_relaxed)) throw ImportCancelled{};
@@ -596,18 +606,11 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         progress.done = 0;
         progress.total = 1;
         progress.SetStage("Reading disc image");
+        auto raw = OpenDiscImage(image);
         auto keyFile = requestedKeyFile;
         if (keyFile.empty()) {
             if (const wchar_t* configured = _wgetenv(L"SIN_WII_KEY_FILE")) keyFile = configured;
         }
-        if (keyFile.empty()) {
-            throw ImportError("Disc import needs your own 16-byte Wii common key file. Pass --keys or choose an extracted game folder.");
-        }
-        std::error_code keyError;
-        if (fs::file_size(keyFile, keyError) != 16 || keyError) {
-            throw ImportError("The Wii common key file must contain exactly 16 binary bytes.");
-        }
-        auto raw = OpenDiscImage(image);
         uint8_t header[0x60];
         if (!raw->Read(0, header, sizeof header)) throw ImportError("The disc image is truncated.");
         const uint32_t wiiMagic = Be32(header + 0x18), gcMagic = Be32(header + 0x1C);

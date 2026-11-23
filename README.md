@@ -36,8 +36,10 @@ Open **Options → Enhancements** to choose the effects you want.
 Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required for the Windows build. See the separate [Linux](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/LINUX.md) and [macOS](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/MACOS.md) notes for build and validation status.
 
 1. See [GitHub Releases](https://github.com/meathax/sinandpun/releases) for published builds, or [build it from source](#building-from-source).
-2. Extract the entire Windows ZIP and run `sinandpun.exe`.
-3. Select your `R2VE01` Wii disc image. Disc image imports need your own raw 16-byte Wii common key file. RVZ and GCZ are read directly. An extracted folder with `sys/` and `files/` can be prepared without a key.
+2. Extract the entire Windows ZIP and run `WiiCompiled.exe`.
+3. Select your `R2VE01` Wii disc image (ISO, WBFS, RVZ or GCZ). For an RVZ with a decoded game partition, click **Cancel** in the key picker to import directly. Encrypted images require your own key. An extracted folder with `sys/` and `files/` can be prepared without one.
+
+The key picker accepts a 16-byte binary common key, 32 hexadecimal digits in text, or a BootMii `keys.bin`. In a text list, put the 32 digits on one line followed by `# Wii common key` or `# R2VE01 title key`. You can also select an intact, unencrypted `.7z` containing a single key file. Choose **All files** for other filenames. WAD channel packages do not supply this game's disc contents.
 
 The importer prepares the stage modules on first setup and leaves the key out of the game data folder. See [Wii setup](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/WII-SETUP.md) for supported inputs and command-line examples.
 

@@ -281,7 +281,7 @@ public:
                 total += sectors;
             }
             if (total && total == clusters) {
-                if (std::memcmp(entry.data(), key, 16)) throw ImportError("The Wii key does not match this RVZ partition.");
+                if (key && std::memcmp(entry.data(), key, 16)) throw ImportError("The Wii key does not match this RVZ partition.");
                 partition = std::move(ranges);
                 return true;
             }

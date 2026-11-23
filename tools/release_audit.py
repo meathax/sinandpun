@@ -150,7 +150,7 @@ def audit(source, package, modules, require_launcher_clean=False):
         str(path.relative_to(package))
         for path in package.rglob("*")
         if path.is_file() and (
-            path.suffix.lower() in {".key", ".keys", ".pem"}
+            path.suffix.lower() in {".key", ".keys", ".pem", ".7z", ".hex"} or path.name.lower() == "common-key"
             or "key" in path.stem.lower() and path.suffix.lower() in {".bin", ".dat", ".txt"}
             or path.name.lower() == "dolphintool.exe"
         )

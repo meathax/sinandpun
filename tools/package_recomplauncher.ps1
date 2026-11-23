@@ -3,7 +3,8 @@ param(
     [string]$Version,
     [string]$Source = "ready",
     [string]$Output = "dist",
-    [string]$Python = "python"
+    [string]$Python = "python",
+    [string]$BuildDirectory = "build/native"
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,15 +47,16 @@ if (Test-Path $archivePath) {
 
 New-Item -ItemType Directory $stagePath | Out-Null
 # Copy only known release assets. Loose keys and foreign tools never enter staging.
-$nativePath = Join-Path $root "build/native"
+$nativePath = Join-Path $root $BuildDirectory
 $runtimeDlls = Get-ChildItem $nativePath -File -Filter "*.dll" | Select-Object -ExpandProperty Name
-$allowed = @("WiiCompiled.exe", "LICENSE", "wii_bootstrap", "Play.bat", "dsp_coef.bin", "initial_pipeline_cache.db") + @($runtimeDlls)
+$allowed = @("WiiCompiled.exe", "LICENSE", "wii_bootstrap", "dsp_coef.bin", "initial_pipeline_cache.db") + @($runtimeDlls)
 Get-ChildItem $sourcePath -Force | Where-Object {
     $_.Name -in $allowed -and $_.Name -notmatch "^(sl\.|nvngx_|amd_fidelityfx_)"
 } | ForEach-Object {
     Copy-Item $_.FullName $stagePath -Recurse -Force
 }
 New-Item -ItemType Directory (Join-Path $stagePath "licenses") | Out-Null
+@('@echo off', 'cd /d "%~dp0"', 'start "" "%~dp0WiiCompiled.exe"') | Set-Content -Encoding ascii (Join-Path $stagePath "Play.bat")
 foreach ($notice in $graphicsNotices) {
     Copy-Item -LiteralPath (Join-Path $sourcePath "licenses/$notice") -Destination (Join-Path $stagePath "licenses")
 }
@@ -84,7 +86,7 @@ Manual launches use the normal per-user data folder unless --data is supplied.
 "@ | Set-Content (Join-Path $stagePath "BUILD-INFO.txt")
 
 & $Python (Join-Path $root "tools\release_audit.py") `
-    --source (Join-Path $root "build\native") `
+    --source $nativePath `
     --package $stagePath `
     --modules (Join-Path $root "build\modules") `
     --require-launcher-clean
