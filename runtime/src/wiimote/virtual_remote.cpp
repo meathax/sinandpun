@@ -781,7 +781,7 @@ private:
         float mdx = 0.f, mdy = 0.f;
         if (OwnsMouse()) AimInput::ConsumeMouseDelta(mdx, mdy);
         float gdx = 0.f, gdy = 0.f;
-        if (m_port == 0) AimInput::ConsumeGyroDelta(gdx, gdy);
+        AimInput::ConsumeGyroDelta(gdx, gdy, m_port);
         if (in.blocked) {
             m_arbiter.prevStick = m_arbiter.prevMouse = false;
             m_classicFilter = DualAnalog::StickFilter{};
@@ -936,7 +936,7 @@ private:
     uint8_t m_heldClassic4 = 0, m_heldClassic5 = 0;
     bool m_heldJump = false, m_heldEvade = false;
     int RequestedScheme() const {
-        if (m_port == 0) return g_requestedScheme.load(std::memory_order_relaxed);
+        if (m_port == 0 || RuntimeConfigFile::EnhancedCoopAtLaunch()) return g_requestedScheme.load(std::memory_order_relaxed);
         return static_cast<int>(OwnsMouse() ? AimSettings::Scheme::Pointer : AimSettings::Scheme::Classic);
     }
     std::mutex m_mutex;

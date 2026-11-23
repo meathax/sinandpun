@@ -88,6 +88,8 @@ int main(int argc, char** argv) {
         CHECK(!AimInput::Sample(1).keys[SDL_SCANCODE_W]);
         return g_failures ? 1 : 0;
     }
+    RuntimeConfigFile::Mutable().enhancedCoop = true;
+    RuntimeConfigFile::Mutable().secondRemote = 1;
     TestFocusLossInvalidatesAbsoluteMouse();
     for (SDL_Scancode code : {SDL_SCANCODE_ESCAPE,SDL_SCANCODE_DELETE,SDL_SCANCODE_F1}) {
         AimInput::BeginCapture(InputMap::Profile::KeyboardMouse);
@@ -130,6 +132,38 @@ int main(int argc, char** argv) {
         SDL_UpdateJoysticks();
         CHECK(AimInput::Sample(0).padAxes[0] > 0.3f);
         CHECK(AimInput::Sample(1).padAxes[0] < -0.3f);
+        auto settings = AimSettings::DefaultBindings();
+        settings.gyro.enabled = true;
+        settings.gyro.space = 1;
+        AimSettings::Set(settings);
+        AimInput::UpdateWindowState(false);
+        for (auto* pad : {testPad, secondPad}) {
+            CHECK(SDL_GamepadSensorEnabled(pad, SDL_SENSOR_GYRO));
+            auto* joystick = SDL_GetGamepadJoystick(pad);
+            CHECK(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHTX, 19000));
+            CHECK(SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, true));
+            SDL_Event motion{};
+            motion.type = SDL_EVENT_GAMEPAD_SENSOR_UPDATE;
+            motion.gsensor.which = SDL_GetGamepadID(pad);
+            motion.gsensor.sensor = SDL_SENSOR_GYRO;
+            motion.gsensor.data[1] = 1.f;
+            for (Uint64 time : {100000000ull, 110000000ull}) {
+                motion.gsensor.sensor_timestamp = time;
+                AimInput::HandleSdlEvent(motion);
+            }
+        }
+        SDL_UpdateJoysticks();
+        const auto first = AimInput::Sample(0), second = AimInput::Sample(1);
+        CHECK(first.padAxes[SDL_GAMEPAD_AXIS_RIGHTX] > 0.3f);
+        CHECK(first.padAxes[SDL_GAMEPAD_AXIS_RIGHTX] == second.padAxes[SDL_GAMEPAD_AXIS_RIGHTX]);
+        CHECK(first.padButtons == second.padButtons);
+        float x0, y0, x1, y1;
+        AimInput::ConsumeGyroDelta(x0, y0, 0);
+        AimInput::ConsumeGyroDelta(x1, y1, 1);
+        CHECK(x0 < -1.f && x0 == x1 && y0 == y1);
+        SDL_SetJoystickVirtualButton(SDL_GetGamepadJoystick(testPad), SDL_GAMEPAD_BUTTON_SOUTH, false);
+        SDL_SetJoystickVirtualAxis(SDL_GetGamepadJoystick(testPad), SDL_GAMEPAD_AXIS_RIGHTX, 0);
+        AimInput::CalibrateGyro();
         SDL_CloseGamepad(secondPad);
         secondPad = nullptr;
         SDL_DetachVirtualJoystick(secondId);

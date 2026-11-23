@@ -37,7 +37,7 @@ MouseSample MouseNow();
 DualAnalog::Rect PictureRect(const MouseSample& ms);
 // Accumulated motion since the last call.
 void ConsumeMouseDelta(float& dx, float& dy);
-void ConsumeGyroDelta(float& dx, float& dy);
+void ConsumeGyroDelta(float& dx, float& dy, unsigned port = 0);
 void CalibrateGyro();
 const char* GyroStatus();
 

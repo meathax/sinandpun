@@ -19,6 +19,7 @@
 //   SIN_VPAD=1               attach the pad even without a script
 //   SIN_VPAD_SCRIPT=...      script text
 //   SIN_VPAD_SCRIPT_FILE=... live script file
+//   SIN_VPAD2_SCRIPT=...     attach a second pad after the first, with independent input
 
 #include "runtime_log.h"
 
@@ -132,7 +133,7 @@ Sint16 StickValue(float v) {
 
 Sint16 TriggerValue(float v) { return static_cast<Sint16>(std::lround(std::clamp(v, 0.0f, 1.0f) * 32767.0f)); }
 
-void Run() {
+void Run(bool partner) {
     using Clock = std::chrono::steady_clock;
     // The hint must allow input while the (test) window is in the background; SDL ignores it otherwise.
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -148,7 +149,7 @@ void Run() {
             desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
             desc.button_mask = (1u << (SDL_GAMEPAD_BUTTON_DPAD_RIGHT + 1)) - 1;
             desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
-            desc.name = "Sin Virtual Test Pad";
+            desc.name = partner ? "Sin Virtual Partner Pad" : "Sin Virtual Test Pad";
             id = SDL_AttachVirtualJoystick(&desc);
             if (id != 0) joystick = SDL_OpenJoystick(id);
             if (!joystick) {
@@ -161,8 +162,10 @@ void Run() {
 
     bool loop = false;
     std::vector<Segment> segments;
-    if (const char* e = std::getenv("SIN_VPAD_SCRIPT")) segments = Parse(e, loop);
-    const char* file = std::getenv("SIN_VPAD_SCRIPT_FILE");
+    const char* second = std::getenv("SIN_VPAD2_SCRIPT");
+    if (!partner && second && *second) std::thread(Run, true).detach();
+    if (const char* e = partner ? second : std::getenv("SIN_VPAD_SCRIPT")) segments = Parse(e, loop);
+    const char* file = partner ? nullptr : std::getenv("SIN_VPAD_SCRIPT_FILE");
     std::filesystem::file_time_type stamp{};
     auto t0 = Clock::now();
     auto lastCheck = Clock::time_point{};
@@ -242,7 +245,7 @@ void Start() {
     const char* file = std::getenv("SIN_VPAD_SCRIPT_FILE");
     const char* on = std::getenv("SIN_VPAD");
     const bool want = (script && *script) || (file && *file) || (on && *on && *on != '0');
-    if (want && !started.exchange(true)) std::thread(Run).detach();
+    if (want && !started.exchange(true)) std::thread(Run, false).detach();
 }
 
 }  // namespace VirtualPad
