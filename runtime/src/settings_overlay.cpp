@@ -2,7 +2,7 @@
 //
 // The menu is drawn entirely through game_ui.h (blue glass panel, outlined text, chevron rows, pill tabs) and is
 // controller first. It can be opened by the game hook (OpenFromGame) or, as a developer fallback, with F10 / F1 /
-// Back + Start. Pages: Display, Graphics, Audio, Controls (Aiming, Mapping, Mouse & Keyboard, Devices), System, About.
+// Back + Start. Pages: Local Co-op, Controls, Audio, Display, Graphics, Enhancements, System.
 #include "settings_overlay.h"
 #include "gx_worker.h"
 #include "audio_backend.h"
@@ -834,11 +834,10 @@ const char* KeyBindingName(int scancode) {
 }
 
 // ---- menu state ----------------------------------------------------------------------------------------
-enum Tab { kTabDisplay, kTabGraphics, kTabEnhancements, kTabAudio, kTabControls, kTabSystem, kTabAbout, kTabCount };
-constexpr std::array<const char*, kTabCount> kTabNames = {"Display", "Graphics", "Enhancements", "Audio", "Controls", "System", "About"};
+enum Tab { kTabCoop, kTabControls, kTabAudio, kTabDisplay, kTabGraphics, kTabEnhancements, kTabSystem, kTabCount };
+constexpr std::array<const char*, kTabCount> kTabNames = {"Local Co-op", "Controls", "Audio", "Display", "Graphics", "Enhancements", "System"};
 constexpr int kControlsPageCount = controls_menu::kPageCount + 1;  // + Devices
-constexpr std::array<const char*, kControlsPageCount> kControlsPageNames = {"Overview", "Gamepad", "Keyboard & Mouse", "Aiming",
-                                                                            "Devices"};
+constexpr std::array<const char*, kControlsPageCount> kControlsPageNames = {"General", "Gamepad", "Keyboard & Mouse", "Aiming", "Devices"};
 
 bool g_menuVisible = false;      // drawn (includes the fade in / out)
 bool g_menuTarget = false;       // wants to be open
@@ -849,7 +848,7 @@ std::atomic_bool g_gameOpenFlag{false};
 std::atomic<void (*)(bool)> g_pauseCallback{nullptr};
 bool g_pauseSent = false;
 
-int g_tab = 0;
+int g_tab = kTabCoop;
 int g_controlsPage = 0;
 float g_tabAnim = 1.0f;
 int g_tabDir = 1;
@@ -1058,6 +1057,11 @@ void ResetAudioPage() {
     RuntimeConfigFile::SetMuteHotkey(g_muteHotkey);
 }
 
+void ResetCoopPage() {
+    RuntimeConfigFile::SetEnhancedCoop(false);
+    RuntimeConfigFile::SetSecondRemote(0);
+}
+
 void ResetDevicesPage() {
     g_rumbleEnabled = true;
     PAD_HLE_SetRumbleEnabled(true);
@@ -1081,6 +1085,7 @@ void ResetSystemPage() {
 
 void ResetCurrentPage() {
     switch (g_tab) {
+    case kTabCoop: ResetCoopPage(); break;
     case kTabDisplay: ResetDisplayPage(); break;
     case kTabGraphics: ResetGraphicsPage(); break;
     case kTabEnhancements: ResetEnhancementsPage(); break;
@@ -1095,6 +1100,7 @@ void ResetCurrentPage() {
 }
 
 void ResetEverything() {
+    ResetCoopPage();
     ResetDisplayPage();
     ResetGraphicsPage();
     ResetEnhancementsPage();
@@ -1105,7 +1111,6 @@ void ResetEverything() {
 }
 
 void RequestResetPage() {
-    if (g_tab == kTabAbout) return;
     std::string what = kTabNames[static_cast<size_t>(g_tab)];
     if (g_tab == kTabControls) what += ": " + std::string(kControlsPageNames[static_cast<size_t>(g_controlsPage)]);
     game_ui::RequestConfirm("Reset page", "Reset every option on \"" + what + "\" to its default?", "Reset", [] { ResetCurrentPage(); });
@@ -1602,39 +1607,40 @@ void BuildAudioPage(ListView& v) {
     }
 }
 
-void BuildDevicesPage(ListView& v) {
-    controls_menu::BuildSchemeRow(v);
-    v.Section("Controller");
+void BuildCoopPage(ListView& v) {
     int mode = RuntimeConfigFile::Get().enhancedCoop.value_or(false) ? 1 : 0;
     const char* modes[] = {"Original", "Enhanced"};
-    if (v.Choice("Local co-op", &mode, modes, 2, 0, "Enhanced gives the second player the other character.",
+    if (v.Choice("Co-op mode", &mode, modes, 2, 0,
+                 "Original gives Player 2 assist fire. Enhanced gives Player 2 the other character with full controls and a shared health bar.",
                  game_ui::kRowNextLaunch) & kChanged) {
         RuntimeConfigFile::SetEnhancedCoop(mode == 1);
     }
     int secondRemote = RuntimeConfigFile::SecondRemoteSetting();
-    const char* sources[] = {"GameCube / Wii Remote", "Assigned P2 gamepad", "Keyboard and mouse"};
+    const char* sources[] = {"GameCube / Wii Remote", "Gamepad", "Keyboard & Mouse"};
     if (v.Choice("Player 2 input", &secondRemote, sources, 3, 0,
-                 "Use a second emulated Wii Remote for this device on next launch.",
+                 "Choose how Player 2 plays. Keyboard and mouse control Player 1 when Gamepad or GameCube / Wii Remote is selected.",
                  game_ui::kRowNextLaunch) & kChanged) {
         RuntimeConfigFile::SetSecondRemote(secondRemote);
     }
-    v.Info("Keyboard and mouse", secondRemote == 2 ? "Player 2" : "Player 1");
+    v.Section("Controller assignments");
     const uint32_t controllerCount = PADCount();
     if (controllerCount == 0) {
         v.Info("Connected controllers", "None detected", game_ui::kWarn);
     } else {
         std::vector<std::string> names;
+        names.reserve(controllerCount);
         for (uint32_t i = 0; i < controllerCount; ++i) {
             const char* name = PADGetNameForControllerIndex(i);
             names.push_back(std::to_string(i + 1) + ". " + (name != nullptr ? name : "Unknown controller"));
         }
         std::vector<const char*> pointers;
+        pointers.reserve(names.size());
         for (const std::string& name : names) pointers.push_back(name.c_str());
         for (uint32_t port = 0; port < 2; ++port) {
             int assigned = PADGetIndexForPort(port);
             const char* label = port == 0 ? "Player 1 controller" : "Player 2 controller";
             if (v.Choice(label, &assigned, pointers.data(), static_cast<int>(pointers.size()), 0,
-                         "Assign a connected controller to this player.", 0, nullptr, "None") & kChanged) {
+                         "Choosing the other player's controller swaps their assignments.", 0, nullptr, "None") & kChanged) {
                 const int previous = PADGetIndexForPort(port);
                 const uint32_t other = 1 - port;
                 const bool swap = assigned >= 0 && assigned == PADGetIndexForPort(other);
@@ -1646,6 +1652,9 @@ void BuildDevicesPage(ListView& v) {
             }
         }
     }
+}
+
+void BuildDevicesPage(ListView& v) {
     if (v.Toggle("Controller vibration", &g_rumbleEnabled, true, "Rumble on gamepads.") & kChanged) {
         PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
         RuntimeConfigFile::SetRumbleEnabled(g_rumbleEnabled);
@@ -1766,7 +1775,6 @@ void BuildSystemPage(ListView& v) {
     std::snprintf(line, sizeof line, "%.1f FPS (motion %.1f)", timing.framesPerSecond, timing.effectiveFramesPerSecond);
     v.Info("Presented", line);
     v.Info("Shaders compiling", std::to_string(aurora_get_queued_pipeline_count()));
-    v.Note("While this menu is open the game keeps running with its input blocked unless the game paused it.");
 
     v.Section("Reset and exit");
     if (v.Action("Reset all settings", "Reset...", "Restores every option of every page to its default.", game_ui::kRowDanger)) {
@@ -1776,25 +1784,6 @@ void BuildSystemPage(ListView& v) {
     if (v.Action("Quit game", "Quit...", "Closes the game.", game_ui::kRowDanger)) {
         game_ui::RequestConfirm("Quit", std::string("Quit ") + kGameTitle + "?", "Quit", [] { ExitForAuroraWindowClose(); }, true);
     }
-}
-
-void BuildAboutPage(ListView& v) {
-    v.Section("Sin & Punishment: Star Successor recomp");
-    v.Note("A static recompilation of the original game for PC. No game data is included; GPL-3.");
-    v.Section("This session");
-    v.Info("Graphics API", GraphicsApiDisplayName());
-    const AuroraWindowSize size = aurora_get_window_size();
-    v.Info("Window", std::to_string(size.width) + " x " + std::to_string(size.height));
-    v.Info("Internal resolution", std::to_string(size.fb_width) + " x " + std::to_string(size.fb_height));
-    const double refresh = aurora_get_display_refresh_rate();
-    if (refresh > 0.0) {
-        char text[32];
-        std::snprintf(text, sizeof text, "%.1f Hz", refresh);
-        v.Info("Display refresh", text);
-    }
-    v.Info("Config version", std::to_string(SystemSettings::kConfigVersion));
-    v.Section("Tips");
-    v.Note("Esc or B goes back and closes this menu. Alt+Enter toggles fullscreen. LB / RB (Q / E) switch tabs, X resets a row, Y resets a page.");
 }
 
 // ---- drawing -------------------------------------------------------------------------------------------
@@ -1858,10 +1847,12 @@ void DrawTabIcon(ImDrawList* dl, int tab, ImVec2 c, float s, ImU32 colour, float
         dl->AddCircleFilled(c, s * 0.09f, col, 10);
         break;
     }
-    default: {
-        dl->AddCircle(c, s * 0.48f, col, 24, t);
-        dl->AddCircleFilled(ImVec2(c.x, c.y - s * 0.22f), s * 0.065f, col, 10);
-        dl->AddLine(ImVec2(c.x, c.y - s * 0.06f), ImVec2(c.x, c.y + s * 0.26f), col, t * 1.4f);
+    case kTabCoop: {
+        for (float x : {-0.25f, 0.25f}) {
+            dl->AddCircleFilled(ImVec2(c.x + s * x, c.y - s * 0.22f), s * 0.15f, col, 16);
+            dl->AddRectFilled(ImVec2(c.x + s * (x - 0.19f), c.y + s * 0.03f),
+                              ImVec2(c.x + s * (x + 0.19f), c.y + s * 0.36f), col, s * 0.11f);
+        }
         break;
     }
     }
@@ -1933,9 +1924,8 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
         dl->AddRect(bmin, bmax, game_ui::Fade(IM_COL32(255, 255, 255, 235), a), U(14.0f), 0, std::max(1.5f, U(3.0f)));
         DrawTabIcon(dl, g_tab, ImVec2((bmin.x + bmax.x) * 0.5f, (bmin.y + bmax.y) * 0.5f), U(40.0f), game_ui::kWhite, a);
     }
-    std::string title = std::string("- ") + kTabNames[static_cast<size_t>(g_tab)];
+    std::string title = kTabNames[static_cast<size_t>(g_tab)];
     if (g_tab == kTabControls) title += ": " + std::string(kControlsPageNames[static_cast<size_t>(g_controlsPage)]);
-    title += " -";
     game_ui::TextCentered(dl, 50.0f, ImVec2((pmin.x + pmax.x) * 0.5f, pmin.y + U(84.0f)), game_ui::kTitleYellow, title.c_str(),
                           game_ui::Outline::Thick, a);
 
@@ -1957,7 +1947,7 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
         std::array<float, kTabCount> full{};
         float totalFull = 0.0f;
         for (int i = 0; i < kTabCount; ++i) {
-            full[static_cast<size_t>(i)] = U(36.0f) + U(14.0f) + game_ui::TextSize(26.0f, kTabNames[static_cast<size_t>(i)]).x + U(34.0f);
+            full[static_cast<size_t>(i)] = game_ui::TextSize(26.0f, kTabNames[static_cast<size_t>(i)]).x + U(28.0f);
             totalFull += full[static_cast<size_t>(i)] + (i + 1 < kTabCount ? gap : 0.0f);
         }
         const bool allLabels = totalFull <= (x1 - x0);
@@ -1979,12 +1969,11 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
                               sel ? IM_COL32(255, 255, 255, 250) : IM_COL32(255, 255, 255, 120), a, sel ? std::max(2.0f, U(3.0f)) : 1.5f);
             const bool showLabel = allLabels || sel;
             const ImU32 ink = sel ? game_ui::kWhite : game_ui::kTextNormal;
-            const float iconX = showLabel ? mn.x + U(18.0f) + U(18.0f) : (mn.x + mx.x) * 0.5f;
-            DrawTabIcon(dl, i, ImVec2(iconX, cy), U(30.0f), ink, a);
             if (showLabel) {
-                const ImVec2 ts = game_ui::TextSize(26.0f, kTabNames[static_cast<size_t>(i)]);
-                game_ui::Text(dl, 26.0f, ImVec2(mn.x + U(18.0f) + U(36.0f) + U(10.0f), cy - ts.y * 0.5f), ink,
-                              kTabNames[static_cast<size_t>(i)], game_ui::Outline::Thick, a);
+                game_ui::TextCentered(dl, 26.0f, ImVec2((mn.x + mx.x) * 0.5f, cy), ink,
+                                      kTabNames[static_cast<size_t>(i)], game_ui::Outline::Thin, a);
+            } else {
+                DrawTabIcon(dl, i, ImVec2((mn.x + mx.x) * 0.5f, cy), U(30.0f), ink, a);
             }
             if (hot && in.mouseClicked) SelectTab(i);
             x += w + gap;
@@ -1997,13 +1986,14 @@ void DrawMenu(game_ui::Frame& in, bool interactive) {
     const float ease = Ease(g_tabAnim);
     game_ui::ListView v(StateForCurrentPage(), in, dl, cmin, cmax, live, a * ease, (1.0f - ease) * static_cast<float>(g_tabDir) * U(46.0f));
     switch (g_tab) {
+    case kTabCoop: BuildCoopPage(v); break;
     case kTabDisplay: BuildDisplayPage(v); break;
     case kTabGraphics: BuildGraphicsPage(v); break;
     case kTabEnhancements: BuildEnhancementsPage(v); break;
     case kTabAudio: BuildAudioPage(v); break;
     case kTabControls: BuildControlsPage(v); break;
     case kTabSystem: BuildSystemPage(v); break;
-    default: BuildAboutPage(v); break;
+    default: break;
     }
     v.End();
 

@@ -27,7 +27,7 @@ using game_ui::kCommit;
 using game_ui::ListView;
 using Clock = std::chrono::steady_clock;
 
-constexpr std::array<const char*, kPageCount> kPageNames = {"Overview", "Gamepad", "Keyboard & Mouse", "Aiming"};
+constexpr std::array<const char*, kPageCount> kPageNames = {"General", "Gamepad", "Keyboard & Mouse", "Aiming"};
 
 struct Edit {
     bool dirty = false;  // push to the live settings
@@ -494,8 +494,7 @@ void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Pro
     }
 }
 
-void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
-    v.Section("Button prompts");
+void BuildGeneral(ListView& v, AimSettings::Settings& s, Edit& e) {
     int prompts = s.playStationPrompts ? 1 : 0;
     static const char* const styles[] = {"Xbox One", "PlayStation"};
     if (auto r = v.Choice("Button prompts", &prompts, styles, 2, 0,
@@ -503,7 +502,6 @@ void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
         s.playStationPrompts = prompts == 1;
         e.Take(r);
     }
-    v.Section("Control scheme");
     int mode = static_cast<int>(s.schemeMode);
     if (auto r = v.Choice("Control scheme", &mode, InputMap::kSchemeModeLabels.data(),
                           static_cast<int>(InputMap::kSchemeModeLabels.size()), 0,
@@ -529,8 +527,6 @@ void BuildOverview(ListView& v, AimSettings::Settings& s, Edit& e) {
            "Mouse and keyboard: WASD moves, the mouse aims, left click = shoot (B), right click = lock-on (A), Space = jump (C), Shift = evade (Z).");
     v.Section("Live input");
     DrawDeviceMonitor(v);
-    v.Section("Pages");
-    v.Note("Gamepad: sticks, deadzones, triggers and button bindings.\nKeyboard & Mouse: mouse aiming and key bindings.\nAiming: how the stick moves the Wii Remote pointer.");
 }
 
 void BuildGamepad(ListView& v, AimSettings::Settings& s, Edit& e) {
@@ -582,7 +578,7 @@ void BuildPage(ListView& view, int page) {
     AimSettings::Settings s = AimSettings::Get();
     Edit e;
     switch (page) {
-    case 0: BuildOverview(view, s, e); break;
+    case 0: BuildGeneral(view, s, e); break;
     case 1: BuildGamepad(view, s, e); break;
     case 2: BuildMouseKeyboard(view, s, e); break;
     default: {
@@ -596,13 +592,6 @@ void BuildPage(ListView& view, int page) {
     }
     if (e.dirty) AimSettings::Set(s);
     if (e.save) AimSettings::Save();
-}
-
-// Devices page: the scheme itself is chosen on the Overview page; this just reports it.
-void BuildSchemeRow(ListView& view) {
-    const AimSettings::Settings s = AimSettings::Get();
-    DrawActiveDevice(view, s);
-    view.Note("Choose Automatic or a fixed control scheme on the Overview page.");
 }
 
 // Brief note at the bottom centre when Automatic switches scheme. Called once per frame from the overlay.
