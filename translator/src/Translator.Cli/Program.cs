@@ -294,7 +294,8 @@ int RunEmitBuildShards(string[] argsTail)
             NativeIndex: nativeIndex,
             Region: GuestRegions.FromGameId(project.Identity.GameId),
             LoopPollFunctions: (project.Translation.LoopPollFunctions ?? Array.Empty<uint>()).ToHashSet(),
-            EntryHooks: (project.Translation.EntryHooks ?? Array.Empty<uint>()).ToHashSet()));
+            EntryHooks: (project.Translation.EntryHooks ?? Array.Empty<uint>()).ToHashSet(),
+            StarSuccessorCoop: project.Identity.GameId == "R2VE01"));
         Console.WriteLine("[translator] emitted stable translated build graph");
         Console.WriteLine($"  base functions: {result.BaseFunctionCount:N0}");
         Console.WriteLine($"  shared base functions: {result.SharedBaseFunctionCount:N0}");
@@ -547,6 +548,20 @@ int RunTranslateRecursive(string[] argsTail)
 
         var queue = new Queue<(uint addr, int depth)>();
         queue.Enqueue((startAddr, 0));
+        // A project-root build also owns explicitly declared external entry
+        // points, including stage-script callbacks installed at runtime.
+        // Keep a recursive walk from an arbitrary function scoped to that root.
+        var projectRoots = RequireProject().Translation.EntryPoints;
+        var module = RequireProject().Inputs.Module;
+        var moduleLength = module is null ? 0L : new FileInfo(module.Path).Length;
+        var moduleRoots = projectRoots.Concat(functionMap?.Addresses ?? Array.Empty<uint>())
+            .Where(address => module is not null && address >= module.LoadAddress &&
+            address - module.LoadAddress < moduleLength).ToHashSet();
+        if (projectRoots.FirstOrDefault() == startAddr)
+        {
+            foreach (var root in projectRoots.Skip(1).Distinct())
+                queue.Enqueue((root, 0));
+        }
         visited.Add(startAddr);
 
         // Map entries the call-graph walk never reaches. They are translated, but
@@ -669,7 +684,7 @@ int RunTranslateRecursive(string[] argsTail)
 
             // SnP2: branch targets outside guest RAM (e.g. __OSDBJump's `bla 0x60` debugger vector)
             // are not translatable code; skip them instead of aborting the run.
-            if (item.addr < 0x80000000u || item.addr >= 0x80000000u + 0x01800000u)
+            if ((item.addr < 0x80000000u || item.addr >= 0x80000000u + 0x01800000u) && !moduleRoots.Contains(item.addr))
             {
                 if (outOfRamTargets.Add(item.addr))
                 {

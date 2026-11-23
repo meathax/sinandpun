@@ -248,6 +248,7 @@ BOOL PADIsGCAdapter(u32 port);
 /**
  * Returns the SDL gamepad for the index into the controller map.
  */
+struct SDL_Gamepad* PADGetSDLGamepadForPort(u32 port);
 struct SDL_Gamepad* PADGetSDLGamepadForIndex(u32 index);
 /* Returns the first native button which is currently pressed */
 s32 PADGetNativeButtonPressed(u32 port);

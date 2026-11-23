@@ -23,9 +23,7 @@
 //   SIN_AUTOSTAGE_TRACE=1    log scene / game-over jingle slot / sound-manager entry changes (see TraceSoundSlot)
 //   SIN_AUTOSTAGE_SEQ=a,b    select each stage through fn_800C2704; active scenes are closed through
 //                            fn_8003D35C's normal object flags before the next module loads
-//   SIN_QA_DEATH_EVERY=sec  QA: while the stage runs (flow state 4) set the game-data "player dead" bit (GM+100 |= 4,
-//                           what Player::_dead_chk reads) every <sec> seconds, i.e. a death that bypasses the jingle load
-//                           in fn_800F6830 (docs/QA-LOG.md, game-over crash repro)
+//   SIN_QA_DEATH_EVERY=sec  While the stage runs, request native player death every <sec> seconds.
 //   SIN_AUTOSTAGE_PROBE=1    only log flow-task/GameData changes (use during a normal menu run)
 //   SIN_AUTOSTAGE_FIXED_ADDR=0xADDR  skip the heap scan, use this address for F
 
@@ -57,6 +55,7 @@ constexpr uint32_t kGameData = 100;      // GM+100
 constexpr uint32_t kGdCurrent = 8;       // +8..10
 constexpr uint32_t kGdNext = 144;        // +144..146
 constexpr uint32_t kFlagStartSelected = 0x40000000u;
+constexpr uint32_t kFlagPlayerDead = 1u << 3; // Player::_dead_chk: rotl32(flags, 29) & 1
 constexpr uint32_t kFlowState = 54;
 constexpr uint32_t kFlowStage = 55;
 
@@ -302,9 +301,9 @@ void Watcher() {
         if (deathEvery > 0 && now >= nextDeath && loaded <= 7) {
             uint32_t fl = 0;
             uint8_t fst = 0;
-            if (f && IsFlow(f) && Rd8(f + kFlowState, fst) && fst == 4 && Rd32(gm + kGameData, fl) && !(fl & 4u)) {
-                if (Memory::TryWrite32(gm + kGameData, fl | 4u)) {
-                    RT_LOGF("autostage", "t=%.2f QA death: GM flags %08X -> %08X\n", now, fl, fl | 4u);
+            if (f && IsFlow(f) && Rd8(f + kFlowState, fst) && fst == 4 && Rd32(gm + kGameData, fl) && !(fl & kFlagPlayerDead)) {
+                if (Memory::TryWrite32(gm + kGameData, fl | kFlagPlayerDead)) {
+                    RT_LOGF("autostage", "t=%.2f QA death: GM flags %08X -> %08X\n", now, fl, fl | kFlagPlayerDead);
                 }
                 nextDeath = now + deathEvery;
             }
@@ -360,6 +359,9 @@ void Watcher() {
             Wr8(gm + kGameData + kGdNext, static_cast<uint8_t>(stage));
         }
 
+        const bool checkpointRequested = std::getenv("SIN_AUTOSTAGE_A") || std::getenv("SIN_AUTOSTAGE_B");
+        const bool targetMatches = static_cast<int>(s0) == stage &&
+                (!checkpointRequested || (s1 == pa && s2 == pb));
         if (st <= 2) {
             // Before the load state: the loader will read F+55..57 on the next state-3 tick.
             if (s0 != stage || s1 != pa || s2 != pb) {
@@ -372,7 +374,7 @@ void Watcher() {
                 }
                 patched = true;
             }
-        } else if (force && !forced && !(patched && s0 == stage) && static_cast<int>(s0) != stage) {
+        } else if (force && !forced && !targetMatches) {
             // Flow already past the load: use the game's own "next stage" path (state 5 consumes
             // the 0x40000000 flag and GameData+144..146, then re-enters state 3).
             if (st == 4 || st == 6) {
@@ -396,7 +398,7 @@ void Watcher() {
             }
         }
 
-        if ((patched || forced || !seq.empty()) && st >= 4 && static_cast<int>(s0) == stage) {
+        if ((patched || forced || !seq.empty()) && st >= 4 && targetMatches) {
             RT_LOGF("autostage", "t=%.2f stage %d load reached (F state %u, loadedId=%u)\n", now, stage, st, loaded);
             if (captureDir && *captureDir) {
                 captureStage = stage;

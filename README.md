@@ -47,6 +47,8 @@ The repository includes a [RecompLauncher manifest](recomplauncher.json). For la
 
 ## Controls
 
+Open **Options > Controls > Devices** to select **Original** assist co-op or **Enhanced** co-op. Restart after changing the mode or P2 input source. In Enhanced mode, choose your protagonist as usual. The second player gets the other character and shares the health bar. Assign a controller to each player, or assign keyboard and mouse to either seat and a controller to the other. Choosing a controller already assigned to the other player swaps the two assignments.
+
 | Action | Xbox-style controller | Keyboard and mouse |
 | --- | --- | --- |
 | Move | Left stick | WASD |

@@ -1452,6 +1452,11 @@ BOOL PADIsInputBlocked() {
 	return aurora::pad::detail::is_blocked();
 }
 
+SDL_Gamepad* PADGetSDLGamepadForPort(const u32 port) {
+  const auto* controller = aurora::gamepad::get_controller_for_player(port);
+  return controller ? controller->m_controller : nullptr;
+}
+
 SDL_Gamepad* PADGetSDLGamepadForIndex(const u32 index) {
   const auto* ctrl = __PADGetControllerForIndex(index);
   if (ctrl == nullptr) {

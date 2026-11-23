@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 
 // Gamepad-backed virtual Wii Remote + Nunchuk (the dual-analog feature).
 //
@@ -13,10 +14,12 @@
 namespace VirtualRemote {
 
 void SetMenuNavigation(bool enabled);
+void SetPartnerControllable(bool controllable);
 
 // The modern action map owns host input unless a real Wii Remote is attached
 // or SIN_VIRTUAL_REMOTE=0 explicitly requests the legacy input path.
 bool UsesVirtualInput();
+bool UsesVirtualSlot(std::size_t slot);
 
 // Live extension hot-swap: Classic Controller <-> Nunchuk (pointer scheme). Thread-safe, lock-free and cheap; a
 // no-op when `scheme` is already the requested one. The remote unplugs the current extension (status report with

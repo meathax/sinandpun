@@ -19,8 +19,8 @@ void HandleSdlEvent(const SDL_Event& event);
 // False while the window lacks focus: every key/button is treated as released.
 bool Focused();
 
-// Keyboard, mouse and wheel plus gamepad 0 (the same pad the game's PAD HLE reads).
-InputMap::RawSample Sample();
+// Keyboard, mouse and wheel plus the gamepad assigned to player 1 (the same pad the game's PAD HLE reads).
+InputMap::RawSample Sample(unsigned port = 0);
 
 struct MouseSample {
     float x = 0.f;

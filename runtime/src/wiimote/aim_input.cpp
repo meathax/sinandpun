@@ -222,7 +222,10 @@ void HandleSdlEvent(const SDL_Event& event) {
         RefreshWindowSizeLocked(g);
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        if (event.gbutton.button < 32) g.pulsePad[event.gbutton.button] = true;
+        if (SDL_Gamepad* pad = PADGetSDLGamepadForPort(0);
+            pad && event.gbutton.which == SDL_GetGamepadID(pad) && event.gbutton.button < 32) {
+            g.pulsePad[event.gbutton.button] = true;
+        }
         break;
     case SDL_EVENT_WINDOW_RESIZED:
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
@@ -247,12 +250,13 @@ bool Focused() {
     return g.focused;
 }
 
-InputMap::RawSample Sample() {
+InputMap::RawSample Sample(unsigned port) {
+    const bool keyboard = port == (RuntimeConfigFile::SecondRemoteAtLaunch() == 2 ? 1u : 0u);
     InputMap::RawSample raw;
     State& g = G();
     {
         std::lock_guard<std::mutex> lock(g.mutex);
-        if (g.focused) {
+        if (keyboard && g.focused) {
             raw.keys = g.keys;
             raw.mouseButtons = g.mouseButtons;
             const Uint64 now = SDL_GetTicks();
@@ -260,8 +264,8 @@ InputMap::RawSample Sample() {
             raw.wheelDown = now < g.wheelDownUntil;
         }
     }
-    if (Focused()) {
-        if (SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0)) {
+    if (Focused() && (port == 0 || !keyboard)) {
+        if (SDL_Gamepad* pad = PADGetSDLGamepadForPort(port)) {
             for (int i = 0; i < 21; ++i) {
                 raw.padButtons[i] = SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(i));
             }
@@ -361,18 +365,21 @@ void TickScheme() {
     {
         std::lock_guard<std::mutex> lock(g.mutex);
         InputMap::RawSample cur = polled;
-        cur.keys |= g.pulseKeys;
+        const bool keyboard = RuntimeConfigFile::SecondRemoteAtLaunch() != 2;
+        if (keyboard) {
+            cur.keys |= g.pulseKeys;
+            cur.mouseButtons |= g.pulseButtons;
+            cur.wheelUp = cur.wheelUp || g.pulseWheel;
+        }
         cur.padButtons |= g.pulsePad;
-        cur.mouseButtons |= g.pulseButtons;
-        cur.wheelUp = cur.wheelUp || g.pulseWheel;
-        const float motion = g.motionPx;
+        const float motion = keyboard ? g.motionPx : 0.f;
         g.pulseKeys.reset();
         g.pulsePad.reset();
         g.pulseButtons = 0;
         g.pulseWheel = false;
         g.motionPx = 0.f;
         if (!g.seeded) {
-            const bool pad = PADGetSDLGamepadForIndex(0) != nullptr;
+            const bool pad = PADGetSDLGamepadForPort(0) != nullptr;
             InputMap::SeedScheme(g.arbiter, mode, pad ? InputMap::ActiveDevice::Gamepad : InputMap::ActiveDevice::None);
             g.seeded = true;
             g.prevPolled = polled;
@@ -424,7 +431,7 @@ void UpdateWindowState(bool inputBlocked) {
     const AimSettings::MouseConfig mouse = settings.mouse;
     const auto raw = Sample();
     const bool gyroButton = AimSettings::ActionValue(settings, AimSettings::Action::GyroModifier, raw) > 0.5f;
-    SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
+    SDL_Gamepad* pad = PADGetSDLGamepadForPort(0);
     const SDL_JoystickID id = pad ? SDL_GetGamepadID(pad) : 0;
     {
         std::lock_guard<std::mutex> lock(g.mutex);
@@ -478,7 +485,7 @@ void BeginCapture(InputMap::Profile profile) {
     g.padBaseline.fill(false);
     g.axisReady.fill(false);
     if (profile == InputMap::Profile::Gamepad) {
-        if (SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0)) {
+        if (SDL_Gamepad* pad = PADGetSDLGamepadForPort(0)) {
             for (int i = 0; i < 21; ++i) {
                 g.padBaseline[i] = SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(i));
             }
@@ -497,7 +504,7 @@ CaptureResult PollCapture(bool pointerOverUi) {
                 if (!pointerOverUi) g.captureResult = {CaptureState::Done, g.pendingMouse};
                 g.pendingMouse = {};
             }
-        } else if (SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0)) {
+        } else if (SDL_Gamepad* pad = PADGetSDLGamepadForPort(0)) {
             for (int i = 0; i < 21 && g.captureResult.state == CaptureState::Pending; ++i) {
                 const bool down = SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(i));
                 if (down && !g.padBaseline[i]) g.captureResult = {CaptureState::Done, InputMap::PadButton(i)};

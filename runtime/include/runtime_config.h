@@ -122,6 +122,8 @@ struct RuntimeUserConfig {
     // A port falls back to the shared controllerButtons entry while its override is unset, so
     // configs written before per-port bindings keep applying to every port unchanged.
     std::array<std::array<std::optional<std::string>, 12>, 4> controllerPortButtons;
+    std::optional<bool> enhancedCoop;
+    std::optional<int64_t> secondRemote;
     std::optional<bool> rumbleEnabled;
     // Shake a motion controller to press the D-pad, like shaking a Wii Remote.
     std::optional<bool> motionTrick;
@@ -636,6 +638,8 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
             FindConfigValue<std::string>(document, "controller", buttonKeys[index]);
     }
 
+    config.enhancedCoop = FindConfigValue<bool>(document, "controller", "enhanced_coop");
+    config.secondRemote = FindConfigValue<int64_t>(document, "controller", "second_remote");
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
     config.motionTrick = FindConfigValue<bool>(document, "controller", "motion_trick");
     if (const auto value = FindConfigInt(document, "controller", "motion_trick_sensitivity"); value && *value >= 1 && *value <= 5) {
@@ -1215,6 +1219,33 @@ inline std::string ControllerExpression(const std::string& key) {
 inline bool SetControllerExpression(const std::string& key, const std::string& value) {
     Mutable().controllerExpressions[key] = value;
     return WriteSetting("controller", key, FormatString(value));
+}
+
+inline bool EnhancedCoopAtLaunch() {
+    static const bool enabled = Get().enhancedCoop.value_or(false);
+    return enabled;
+}
+inline bool SetEnhancedCoop(bool enabled) {
+    if (!WriteSetting("controller", "enhanced_coop", enabled ? "true" : "false")) return false;
+    Mutable().enhancedCoop = enabled;
+    return true;
+}
+
+inline int SecondRemoteSetting() {
+    const auto value = Get().secondRemote.value_or(Get().enhancedCoop.value_or(false) ? 1 : 0);
+    return value == 1 || value == 2 ? static_cast<int>(value) : 0;
+}
+
+// Keep ownership stable for the lifetime of the guest Bluetooth session.
+inline int SecondRemoteAtLaunch() {
+    static const int value = SecondRemoteSetting();
+    return value;
+}
+
+inline bool SetSecondRemote(int value) {
+    if (value < 0 || value > 2 || !WriteSetting("controller", "second_remote", std::to_string(value))) return false;
+    Mutable().secondRemote = value;
+    return true;
 }
 
 inline bool RumbleEnabled(bool fallback = true) {

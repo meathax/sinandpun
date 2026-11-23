@@ -24,6 +24,7 @@ inputs:
 translation:
   entry_points:
     - 0x80006310
+    - 0x97E51500 # Stage-script callback installed at runtime.
   function_map:
     path: build/modules/stg02.map
   allow_unsupported_instructions: false

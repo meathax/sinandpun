@@ -21,6 +21,9 @@ tools/m2c/
 
 # Build output
 build/
+!translator/src/Translator.Core/Build/
+translator/src/Translator.Core/Build/*
+!translator/src/Translator.Core/Build/*.cs
 generated/
 build_translate.log
 decomp/build/

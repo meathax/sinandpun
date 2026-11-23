@@ -128,6 +128,11 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
         rumbleMask &= ~0x80000000u;
     }
 
+    if (VirtualRemote::UsesVirtualSlot(1)) {
+        statuses[1] = {};
+        statuses[1].err = PAD_ERR_NO_CONTROLLER;
+        rumbleMask &= ~0x40000000u;
+    }
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {
             WritePadStatus(statusPtr + static_cast<uint32_t>(i * PadStatusContract::kGuestStatusSize),

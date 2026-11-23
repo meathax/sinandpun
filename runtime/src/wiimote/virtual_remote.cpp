@@ -45,8 +45,9 @@ AimDebug g_dbg;
 
 // SetScheme(): requested extension (-1 = none requested yet; otherwise an InputMap::Scheme value).
 std::atomic<int> g_requestedScheme{-1};
-std::atomic<bool> g_scriptReloaded{false};
+
 std::atomic_bool g_menuNavigation{true};
+std::atomic_bool g_partnerControllable{false};
 
 const char* SchemeLabel(AimSettings::Scheme s) { return s == AimSettings::Scheme::Classic ? "classic" : "pointer"; }
 
@@ -98,10 +99,12 @@ void Checksum(uint8_t* data, size_t length, size_t checksumBytes) {
 
 class VirtualWiimote {
 public:
-    VirtualWiimote() {
-        AimInput::Install();
-        AimTelemetryStart();
-        VirtualPad::Start();
+    explicit VirtualWiimote(unsigned port) : m_port(port) {
+        if (port == 0) {
+            AimInput::Install();
+            AimTelemetryStart();
+            VirtualPad::Start();
+        }
         ResetState();
     }
 
@@ -109,7 +112,7 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         m_settingsLoaded = false;
         RefreshSettings();
-        const int requested = g_requestedScheme.load(std::memory_order_relaxed);
+        const int requested = RequestedScheme();
         m_scheme = requested >= 0 ? static_cast<AimSettings::Scheme>(requested) : m_settings.scheme;
         m_extPresent = true;
         m_swap = Swap::Idle;
@@ -120,6 +123,8 @@ public:
         m_arbiter = InputMap::Arbiter{};
         m_classicFilter = DualAnalog::StickFilter{};
         m_prevRecenter = false;
+        m_heldCore = m_heldClassic4 = m_heldClassic5 = 0;
+        m_heldJump = m_heldEvade = false;
         m_leds = 0;
         m_mode = 0;
         m_continuous = false;
@@ -241,7 +246,7 @@ private:
     // Called with the mutex held from Pop(). Idle -> (request differs) unplug + status -> hold for kUnplugHold
     // once the status report was handed to the guest -> plug the requested extension + status -> Idle.
     void PollScheme() {
-        const int requested = g_requestedScheme.load(std::memory_order_relaxed);
+        const int requested = RequestedScheme();
         if (m_swap == Swap::Idle) {
             if (requested < 0 || static_cast<AimSettings::Scheme>(requested) == m_scheme) return;
             m_swapTarget = static_cast<AimSettings::Scheme>(requested);
@@ -448,7 +453,8 @@ private:
         return out;
     }
 
-    static const std::vector<ScriptSegment>& Script(bool& loop) {
+    template<bool Partner>
+    const std::vector<ScriptSegment>& Script(bool& loop) {
         static bool s_loop = false;
         // SIN_VREMOTE_SCRIPT_FILE=path: the script text is re-read whenever the file changes (QA harness drives
         // phases: menu navigation, then combat) and the script clock restarts.
@@ -529,10 +535,10 @@ private:
         static bool s_inited = false;
         static std::filesystem::file_time_type s_stamp{};
         static auto s_lastCheck = Clock::time_point{};
-        const char* scriptFile = std::getenv("SIN_VREMOTE_SCRIPT_FILE");
+        const char* scriptFile = std::getenv(Partner ? "SIN_P2_SCRIPT_FILE" : "SIN_VREMOTE_SCRIPT_FILE");
         if (!s_inited) {
             s_inited = true;
-            const char* e = std::getenv("SIN_VREMOTE_SCRIPT");
+            const char* e = std::getenv(Partner ? "SIN_P2_SCRIPT" : "SIN_VREMOTE_SCRIPT");
             segments = parse(e ? e : "");
         }
         if (scriptFile && *scriptFile && Clock::now() - s_lastCheck > std::chrono::milliseconds(500)) {
@@ -545,7 +551,7 @@ private:
                 std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
                 while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
                 segments = parse(text);
-                g_scriptReloaded.store(true, std::memory_order_relaxed);
+                m_scriptReloaded = true;
             }
         }
         loop = s_loop;
@@ -555,8 +561,9 @@ private:
     // Returns true and fills `in` when a script is active.
     bool ScriptedInput(Input& in) {
         bool loop = false;
-        const auto& segments = Script(loop);
-        if (g_scriptReloaded.exchange(false, std::memory_order_relaxed)) {
+        const auto& segments = m_port ? Script<true>(loop) : Script<false>(loop);
+        if (m_scriptReloaded) {
+            m_scriptReloaded = false;
             m_scriptStart = Clock::now();
             m_scriptSeg = -1;
         }
@@ -571,7 +578,7 @@ private:
             if (at < acc + s.seconds) {
                 if (index != m_scriptSeg) {
                     m_scriptSeg = index;
-                    if (s.scheme >= 0) {
+                    if (m_port == 0 && s.scheme >= 0) {
                         RT_LOGF(RT_TAG_BT, "script t=%.1fs segment %d: scheme=%s\n", at, index,
                                 s.scheme == 1 ? "classic" : "pointer");
                         g_requestedScheme.store(s.scheme == 1 ? static_cast<int>(AimSettings::Scheme::Classic)
@@ -620,7 +627,29 @@ private:
     // Bindings (gamepad, keyboard, mouse) -> remote state. Called with the mutex held; side-effect free.
     Input ReadInput() {
         Input in = ReadInputBase();
-        if (InjectActive()) {
+        if (m_port == 1 && RuntimeConfigFile::EnhancedCoopAtLaunch()) {
+            if (!g_partnerControllable.load(std::memory_order_relaxed)) {
+                m_heldCore = in.buttons;
+                m_heldClassic4 = in.cl4;
+                m_heldClassic5 = in.cl5;
+                m_heldJump = in.c;
+                m_heldEvade = in.z;
+                Input neutral;
+                neutral.blocked = true;
+                return neutral;
+            }
+            m_heldCore &= in.buttons;
+            m_heldClassic4 &= in.cl4;
+            m_heldClassic5 &= in.cl5;
+            m_heldJump &= in.c;
+            m_heldEvade &= in.z;
+            in.buttons &= ~m_heldCore;
+            in.cl4 &= ~m_heldClassic4;
+            in.cl5 &= ~m_heldClassic5;
+            in.c &= !m_heldJump;
+            in.z &= !m_heldEvade;
+        }
+        if (m_port == 0 && InjectActive()) {
             in.buttons |= kBtnB;
             in.cl5 |= kClB;
         }
@@ -636,7 +665,7 @@ private:
             return in;
         }
         RefreshSettings();
-        const InputMap::RawSample raw = AimInput::Sample();
+        const InputMap::RawSample raw = AimInput::Sample(m_port);
         if (g_menuNavigation.load(std::memory_order_relaxed) &&
             AimInput::LastDevice() == InputMap::ActiveDevice::Gamepad) {
             in.padMenu = true;
@@ -750,9 +779,9 @@ private:
     void UpdateAim(const Input& in, float dt, float& classicX, float& classicY) {
         classicX = classicY = 0.f;
         float mdx = 0.f, mdy = 0.f;
-        AimInput::ConsumeMouseDelta(mdx, mdy);
+        if (OwnsMouse()) AimInput::ConsumeMouseDelta(mdx, mdy);
         float gdx = 0.f, gdy = 0.f;
-        AimInput::ConsumeGyroDelta(gdx, gdy);
+        if (m_port == 0) AimInput::ConsumeGyroDelta(gdx, gdy);
         if (in.blocked) {
             m_arbiter.prevStick = m_arbiter.prevMouse = false;
             m_classicFilter = DualAnalog::StickFilter{};
@@ -763,7 +792,7 @@ private:
             return;
         }
         const AimSettings::MouseConfig& mouse = m_settings.mouse;
-        const bool mouseOn = mouse.enabled && !in.scripted;
+        const bool mouseOn = OwnsMouse() && mouse.enabled && !in.scripted;
         const bool mouseMoving = mouseOn && (std::fabs(mdx) + std::fabs(mdy)) > 0.f;
         const bool stickMoving = DualAnalog::StickActive(m_config, in.rx, in.ry);
         const InputMap::AimSource source = in.scripted ? InputMap::AimSource::Stick
@@ -861,7 +890,7 @@ private:
             }
         }
 
-        PublishDebug(in, classicX, classicY);
+        if (m_port == 0) PublishDebug(in, classicX, classicY);
 
         static const struct { uint8_t id; size_t size; } kSizes[] = {
             {0x30, 3}, {0x31, 6}, {0x32, 11}, {0x33, 18}, {0x34, 22}, {0x35, 22}, {0x36, 22}, {0x37, 22}, {0x3D, 22}};
@@ -901,6 +930,15 @@ private:
         }
     }
 
+    const unsigned m_port;
+    bool OwnsMouse() const { return m_port == (RuntimeConfigFile::SecondRemoteAtLaunch() == 2 ? 1u : 0u); }
+    uint16_t m_heldCore = 0;
+    uint8_t m_heldClassic4 = 0, m_heldClassic5 = 0;
+    bool m_heldJump = false, m_heldEvade = false;
+    int RequestedScheme() const {
+        if (m_port == 0) return g_requestedScheme.load(std::memory_order_relaxed);
+        return static_cast<int>(OwnsMouse() ? AimSettings::Scheme::Pointer : AimSettings::Scheme::Classic);
+    }
     std::mutex m_mutex;
     uint8_t m_leds = 0;
     uint8_t m_mode = 0;
@@ -931,6 +969,7 @@ private:
     bool m_extEncrypted = false;
     std::array<uint8_t, 16> m_extKey{};
     std::optional<Wiimote::ExtCrypto::Tables> m_extTables;
+    bool m_scriptReloaded = false;
     int m_scriptSeg = -1;
     InputMap::Arbiter m_arbiter;
     DualAnalog::StickFilter m_classicFilter;
@@ -940,10 +979,10 @@ private:
 class CompositeHost final : public Bluetooth::RemoteHost {
 public:
     bool IsAttached(size_t slot) const override {
-        if (slot == 0 && UseVirtual()) {
+        if (UsesVirtualSlot(slot)) {
             static int s_budget = 8;
             if (RtLogBudget(s_budget)) {
-                RT_LOG(RT_TAG_BT) << "IsAttached slot=0 -> true (virtual)" << std::endl;
+                RT_LOG(RT_TAG_BT) << "IsAttached slot=" << slot << " -> true (virtual)" << std::endl;
             }
             return true;
         }
@@ -951,11 +990,11 @@ public:
     }
 
     bool ConsumeWake(size_t slot) override {
-        if (slot == 0 && UseVirtual()) {
-            const bool woke = m_wake.exchange(false);
+        if (UsesVirtualSlot(slot)) {
+            const bool woke = m_wake[slot].exchange(false);
             static int s_budget = 8;
             if (RtLogBudget(s_budget)) {
-                RT_LOG(RT_TAG_BT) << "ConsumeWake slot=0 -> " << (woke ? "true" : "false") << std::endl;
+                RT_LOG(RT_TAG_BT) << "ConsumeWake slot=" << slot << " -> " << (woke ? "true" : "false") << std::endl;
             }
             return woke;
         }
@@ -963,8 +1002,8 @@ public:
     }
 
     bool PopInputReport(size_t slot, std::vector<uint8_t>& report) override {
-        if (slot == 0 && UseVirtual()) {
-            const bool got = m_remote.Pop(report);
+        if (UsesVirtualSlot(slot)) {
+            const bool got = Remote(slot).Pop(report);
             static int s_budget = 100;
             if (got && RtLogBudget(s_budget)) {
                 RT_LOGF(RT_TAG_BT, "in  id=0x%02X size=%u\n", report.empty() ? 0 : report[0],
@@ -976,7 +1015,7 @@ public:
     }
 
     void SendOutputReport(size_t slot, const uint8_t* report, size_t size) override {
-        if (slot == 0 && UseVirtual()) {
+        if (UsesVirtualSlot(slot)) {
             static int s_budget = 160;
             if (RtLogBudget(s_budget)) {
                 RT_LOGF(RT_TAG_BT, "out id=0x%02X size=%u b1..6=%02X %02X %02X %02X %02X %02X\n",
@@ -984,19 +1023,18 @@ public:
                         size > 1 ? report[1] : 0, size > 2 ? report[2] : 0, size > 3 ? report[3] : 0,
                         size > 4 ? report[4] : 0, size > 5 ? report[5] : 0, size > 6 ? report[6] : 0);
             }
-            m_remote.Output(report, size);
+            Remote(slot).Output(report, size);
             return;
         }
         Wiimote::Host().SendOutputReport(slot, report, size);
     }
 
     void OnLinkStateChanged(size_t slot, Bluetooth::LinkState state) override {
-        if (slot == 0 && UseVirtual()) {
+        if (slot < 2 && state == Bluetooth::LinkState::Down) m_wake[slot] = true;
+        if (UsesVirtualSlot(slot)) {
             if (state == Bluetooth::LinkState::Ready) {
-                m_remote.ResetState();
+                Remote(slot).ResetState();
                 RT_LOG(RT_TAG_HLE) << "Virtual Wii Remote + Nunchuk connected to the game (gamepad)" << std::endl;
-            } else if (state == Bluetooth::LinkState::Down) {
-                m_wake = true;
             }
             return;
         }
@@ -1004,7 +1042,7 @@ public:
     }
 
     void OnGuestDisconnect(size_t slot) override {
-        if (slot == 0 && UseVirtual()) {
+        if (UsesVirtualSlot(slot)) {
             RT_LOG(RT_TAG_HLE) << "Virtual Wii Remote disconnected by the game" << std::endl;
             return;
         }
@@ -1014,17 +1052,19 @@ public:
     void OnGuestInquiry(bool active) override { Wiimote::Host().OnGuestInquiry(active); }
 
     const char* DeviceName(size_t slot) const override {
-        if (slot == 0 && UseVirtual()) return "Nintendo RVL-CNT-01";
+        if (UsesVirtualSlot(slot)) return "Nintendo RVL-CNT-01";
         return Wiimote::Host().DeviceName(slot);
     }
 
 private:
-    bool UseVirtual() const {
-        return UsesVirtualInput();
+    VirtualWiimote& Remote(size_t slot) {
+        if (slot == 0) return m_primary;
+        static VirtualWiimote partner(1);
+        return partner;
     }
 
-    VirtualWiimote m_remote;
-    std::atomic<bool> m_wake{true};
+    VirtualWiimote m_primary{0};
+    std::atomic<bool> m_wake[2]{true, true};
 };
 
 } // namespace
@@ -1034,12 +1074,23 @@ Bluetooth::RemoteHost& Host() {
     return *host;
 }
 
-bool UsesVirtualInput() {
+bool UsesVirtualSlot(size_t slot) {
+    if (slot > 1) return false;
+    if (slot == 1) {
+        const int source = RuntimeConfigFile::SecondRemoteAtLaunch();
+        if (!source || (source == 1 && !PADGetSDLGamepadForPort(1))) return false;
+    }
     static const bool enabled = [] {
         const char* v=std::getenv("SIN_VIRTUAL_REMOTE");
         return !(v && *v=='0');
     }();
-    return enabled && !Wiimote::Host().IsAttached(0);
+    return enabled && !Wiimote::Host().IsAttached(slot);
+}
+
+bool UsesVirtualInput() { return UsesVirtualSlot(0); }
+
+void SetPartnerControllable(bool controllable) {
+    g_partnerControllable.store(controllable, std::memory_order_relaxed);
 }
 
 void SetMenuNavigation(bool enabled) { g_menuNavigation.store(enabled, std::memory_order_relaxed); }

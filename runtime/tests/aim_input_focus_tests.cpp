@@ -21,7 +21,8 @@ static int g_failures = 0;
 SDL_Window* aurora_get_window() { return nullptr; }
 bool aurora_get_present_viewport(float*, float*, float*, float*) { return false; }
 static SDL_Gamepad* testPad=nullptr;
-SDL_Gamepad* PADGetSDLGamepadForIndex(u32) { return testPad; }
+static SDL_Gamepad* secondPad=nullptr;
+SDL_Gamepad* PADGetSDLGamepadForPort(u32 port) { return port == 0 ? testPad : port == 1 ? secondPad : nullptr; }
 
 namespace VirtualMouse {
 void Tick() {}
@@ -74,7 +75,19 @@ static void TestFocusLossInvalidatesAbsoluteMouse() {
     CHECK(fresh.x == 144.f && fresh.y == 288.f);
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--keyboard-p2") {
+        RuntimeConfigFile::Mutable().secondRemote = 2;
+        SDL_Event key{};
+        key.type = SDL_EVENT_KEY_DOWN;
+        key.key.scancode = SDL_SCANCODE_W;
+        AimInput::HandleSdlEvent(key);
+        CHECK(!AimInput::Sample(0).keys[SDL_SCANCODE_W]);
+        CHECK(AimInput::Sample(1).keys[SDL_SCANCODE_W]);
+        Send(SDL_EVENT_WINDOW_FOCUS_LOST);
+        CHECK(!AimInput::Sample(1).keys[SDL_SCANCODE_W]);
+        return g_failures ? 1 : 0;
+    }
     TestFocusLossInvalidatesAbsoluteMouse();
     for (SDL_Scancode code : {SDL_SCANCODE_ESCAPE,SDL_SCANCODE_DELETE,SDL_SCANCODE_F1}) {
         AimInput::BeginCapture(InputMap::Profile::KeyboardMouse);
@@ -107,6 +120,24 @@ int main() {
     const auto id=SDL_AttachVirtualJoystick(&desc);
     CHECK(id!=0);
     testPad=SDL_OpenGamepad(id);CHECK(testPad!=nullptr);
+    const auto secondId = SDL_AttachVirtualJoystick(&desc);
+    CHECK(secondId != 0);
+    secondPad = SDL_OpenGamepad(secondId);
+    CHECK(secondPad != nullptr);
+    if (testPad && secondPad) {
+        CHECK(SDL_SetJoystickVirtualAxis(SDL_GetGamepadJoystick(testPad), SDL_GAMEPAD_AXIS_LEFTX, 22000));
+        CHECK(SDL_SetJoystickVirtualAxis(SDL_GetGamepadJoystick(secondPad), SDL_GAMEPAD_AXIS_LEFTX, -22000));
+        SDL_UpdateJoysticks();
+        CHECK(AimInput::Sample(0).padAxes[0] > 0.3f);
+        CHECK(AimInput::Sample(1).padAxes[0] < -0.3f);
+        SDL_CloseGamepad(secondPad);
+        secondPad = nullptr;
+        SDL_DetachVirtualJoystick(secondId);
+        CHECK(AimInput::Sample(1).padAxes[0] == 0.f);
+        CHECK(AimInput::Sample(0).padAxes[0] > 0.3f);
+        SDL_SetJoystickVirtualAxis(SDL_GetGamepadJoystick(testPad), SDL_GAMEPAD_AXIS_LEFTX, 0);
+        SDL_UpdateJoysticks();
+    }
     if (testPad) {
         auto settings = AimSettings::DefaultBindings();
         settings.gyro.enabled = true; settings.gyro.space = 1;

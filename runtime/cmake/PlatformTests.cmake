@@ -72,6 +72,7 @@ if(AURORA_SDL3_TARGET)
                 COMMAND_EXPAND_LISTS)
         endif()
         add_test(NAME mkw_aim_input_focus_tests COMMAND mkw_aim_input_focus_tests)
+        add_test(NAME mkw_keyboard_p2_tests COMMAND mkw_aim_input_focus_tests --keyboard-p2)
     endif()
 endif()
 

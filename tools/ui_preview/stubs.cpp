@@ -130,9 +130,11 @@ u32 PADCount() { return 0; }
 s32 PADGetIndexForPort(u32) { return -1; }
 const char* PADGetNameForControllerIndex(u32) { return "Test controller"; }
 struct SDL_Gamepad* PADGetSDLGamepadForIndex(u32) { return nullptr; }
+struct SDL_Gamepad* PADGetSDLGamepadForPort(u32) { return nullptr; }
 void PADBlockInput(bool) {}
 void PADControlAllMotors(const u32*) {}
 void PADSetButtonMapping(u32, PADButtonMapping) {}
 void PADSetAltButtonMapping(u32, PADButtonMapping) {}
 PADButtonMapping* PADGetButtonMappings(u32, u32*) { return nullptr; }
 void PADSetPortForIndex(u32, u32) {}
+void PADClearPort(u32) {}

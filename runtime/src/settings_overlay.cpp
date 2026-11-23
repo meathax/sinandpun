@@ -1605,24 +1605,45 @@ void BuildAudioPage(ListView& v) {
 void BuildDevicesPage(ListView& v) {
     controls_menu::BuildSchemeRow(v);
     v.Section("Controller");
+    int mode = RuntimeConfigFile::Get().enhancedCoop.value_or(false) ? 1 : 0;
+    const char* modes[] = {"Original", "Enhanced"};
+    if (v.Choice("Local co-op", &mode, modes, 2, 0, "Enhanced gives the second player the other character.",
+                 game_ui::kRowNextLaunch) & kChanged) {
+        RuntimeConfigFile::SetEnhancedCoop(mode == 1);
+    }
+    int secondRemote = RuntimeConfigFile::SecondRemoteSetting();
+    const char* sources[] = {"GameCube / Wii Remote", "Assigned P2 gamepad", "Keyboard and mouse"};
+    if (v.Choice("Player 2 input", &secondRemote, sources, 3, 0,
+                 "Use a second emulated Wii Remote for this device on next launch.",
+                 game_ui::kRowNextLaunch) & kChanged) {
+        RuntimeConfigFile::SetSecondRemote(secondRemote);
+    }
+    v.Info("Keyboard and mouse", secondRemote == 2 ? "Player 2" : "Player 1");
     const uint32_t controllerCount = PADCount();
     if (controllerCount == 0) {
-        v.Info("Player 1 controller", "None detected - plug one in", game_ui::kWarn);
+        v.Info("Connected controllers", "None detected", game_ui::kWarn);
     } else {
         std::vector<std::string> names;
         for (uint32_t i = 0; i < controllerCount; ++i) {
             const char* name = PADGetNameForControllerIndex(i);
-            names.push_back(name != nullptr ? name : "Unknown controller");
+            names.push_back(std::to_string(i + 1) + ". " + (name != nullptr ? name : "Unknown controller"));
         }
         std::vector<const char*> pointers;
         for (const std::string& name : names) pointers.push_back(name.c_str());
-        int assigned = PADGetIndexForPort(0);
-        if (v.Choice("Player 1 controller", &assigned, pointers.data(), static_cast<int>(pointers.size()), 0,
-                     "Which connected controller plays. Controllers can also be hot-swapped by pressing a button on them.", 0,
-                     nullptr, "None") & kChanged) {
-            PADSetPortForIndex(static_cast<uint32_t>(assigned), 0);
-            g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
-            ApplyConfiguredMappings();
+        for (uint32_t port = 0; port < 2; ++port) {
+            int assigned = PADGetIndexForPort(port);
+            const char* label = port == 0 ? "Player 1 controller" : "Player 2 controller";
+            if (v.Choice(label, &assigned, pointers.data(), static_cast<int>(pointers.size()), 0,
+                         "Assign a connected controller to this player.", 0, nullptr, "None") & kChanged) {
+                const int previous = PADGetIndexForPort(port);
+                const uint32_t other = 1 - port;
+                const bool swap = assigned >= 0 && assigned == PADGetIndexForPort(other);
+                if (assigned < 0) PADClearPort(port);
+                else PADSetPortForIndex(static_cast<uint32_t>(assigned), port);
+                if (swap && previous >= 0) PADSetPortForIndex(static_cast<uint32_t>(previous), other);
+                g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
+                ApplyConfiguredMappings();
+            }
         }
     }
     if (v.Toggle("Controller vibration", &g_rumbleEnabled, true, "Rumble on gamepads.") & kChanged) {
@@ -2273,7 +2294,7 @@ void ApplyInputBlockState() {
 // Back + Start on gamepad 0 opens / closes the menu (developer fallback; the game hook is the normal entry).
 void PollGamepadMenuChord() {
     static bool wasDown = false;
-    SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
+    SDL_Gamepad* pad = PADGetSDLGamepadForPort(0);
     const bool down = pad != nullptr && SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_BACK) &&
                       SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_START);
     if (down && !wasDown && !AnyModalActive()) {
