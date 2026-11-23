@@ -15,9 +15,9 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 
 ## Features
 
-- **Modern aiming.** Use a mouse or right stick to aim while moving with the left stick or WASD. Controllers with a supported motion sensor can use [calibrated gyro aiming](docs/GYRO-AIMING.md).
+- **Modern aiming.** Use a mouse or right stick to aim while moving with the left stick or WASD. Controllers with a supported motion sensor can use [calibrated gyro aiming](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/GYRO-AIMING.md).
 - **Remappable controls.** Configure gamepad and keyboard/mouse bindings in-game. The port supports Wii Remote + Nunchuk and Classic Controller input schemes.
-- **High-resolution rendering.** Render at window size or choose an internal resolution multiplier. The Windows release includes AMD temporal FSR, FSR 1 spatial upscaling, NVIDIA DLSS and DLAA on RTX systems, and 4× MSAA. See the [FSR notes](docs/FSR-NOTES.md) and [DLSS notes](docs/DLSS-NOTES.md).
+- **High-resolution rendering.** Render at window size or choose an internal resolution multiplier. The Windows release includes AMD temporal FSR, FSR 1 spatial upscaling, NVIDIA DLSS and DLAA on RTX systems, and 4× MSAA. See the [FSR notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/FSR-NOTES.md) and [DLSS notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/DLSS-NOTES.md).
 - **Readable HUD.** Eligible Wii HUD and text draws are rendered over the upscaled scene at output resolution using the original textures and blending. Integer presentation can keep display pixels evenly sized when the source fits the selected aspect ratio.
 - **Flexible frame pacing.** Choose original 60 Hz, match-display, or interpolated presentation. Variable refresh rate is available on compatible displays.
 - **In-game settings.** Open the game's **Options** from the title or pause menu. Display changes offer a Keep/Revert prompt.
@@ -33,17 +33,17 @@ Open **Options → Enhancements** to choose the effects you want.
 
 ## Getting started
 
-Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required for the Windows build. See the separate [Linux](docs/LINUX.md) and [macOS](docs/MACOS.md) notes for build and validation status.
+Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required for the Windows build. See the separate [Linux](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/LINUX.md) and [macOS](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/MACOS.md) notes for build and validation status.
 
 1. See [GitHub Releases](https://github.com/meathax/sinandpun/releases) for published builds, or [build it from source](#building-from-source).
-2. Extract the entire package and run the executable included with it. Standalone test packages use `SinAndPunishmentRecomp.exe`; the current RecompLauncher package uses `WiiCompiled.exe`.
+2. Extract the entire Windows ZIP and run `sinandpun.exe`.
 3. Select your `R2VE01` Wii disc image. Disc image imports need your own raw 16-byte Wii common key file. RVZ and GCZ are read directly. An extracted folder with `sys/` and `files/` can be prepared without a key.
 
-The importer prepares the stage modules on first setup and leaves the key out of the game data folder. See [Wii setup](docs/WII-SETUP.md) for supported inputs and command-line examples.
+The importer prepares the stage modules on first setup and leaves the key out of the game data folder. See [Wii setup](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/WII-SETUP.md) for supported inputs and command-line examples.
 
 ### RecompLauncher
 
-The repository includes a [RecompLauncher manifest](recomplauncher.json). For launcher-managed disc-image import, set `SIN_WII_KEY_FILE` to your key file path before opening [RecompLauncher](https://recomplauncher.com/). The [launcher integration notes](docs/RECOMPLAUNCHER-AUDIT.md) explain packaging and validation.
+The repository includes a [RecompLauncher manifest](recomplauncher.json). For launcher-managed disc-image import, set `SIN_WII_KEY_FILE` to your key file path before opening [RecompLauncher](https://recomplauncher.com/). The [launcher integration notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/RECOMPLAUNCHER-AUDIT.md) explain packaging and validation.
 
 ## Controls
 
@@ -57,7 +57,7 @@ The repository includes a [RecompLauncher manifest](recomplauncher.json). For la
 | Evade | RB | Left Shift |
 | Pause | Menu | Escape or P |
 
-See [Modern controls](docs/MODERN-CONTROLS.md) for the full layout, precision aim, recentering, and rebinding.
+See [Modern controls](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/MODERN-CONTROLS.md) for the full layout, precision aim, recentering, and rebinding.
 
 ## Screenshots
 
@@ -69,7 +69,7 @@ See [Modern controls](docs/MODERN-CONTROLS.md) for the full layout, precision ai
 
 All eight stages have rendered in Windows testing at **1080p, 1440p, and 4K** with FSR and DLSS. This coverage includes sampled gameplay and stage transitions. A complete human playthrough, additional physical controller and audio checks, and cross-monitor DPI changes remain open.
 
-See the [status notes](docs/STATUS.md), [remaining work](docs/REMAINING.md), and [completion plan](docs/COMPLETION-PLAN.md). When reporting an issue, include your build or commit, GPU and graphics backend, stage, resolution, and upscaler settings.
+See the [status notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/STATUS.md), [remaining work](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/REMAINING.md), and [completion plan](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/COMPLETION-PLAN.md). When reporting an issue, include your build or commit, GPU and graphics backend, stage, resolution, and upscaler settings.
 
 ## Building from source
 
@@ -87,7 +87,7 @@ dotnet $t emit-build-shards --project projects/r2ve01/recomp.yml
 powershell -File tools\clean_build.ps1 -Keep
 ```
 
-For stage-module generation, validation, and packaging, see [Build status](docs/STATUS.md) and the [RecompLauncher audit](docs/RECOMPLAUNCHER-AUDIT.md). Generated translations and local game data stay out of Git.
+For stage-module generation, validation, and packaging, see [Build status](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/STATUS.md) and the [RecompLauncher audit](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/RECOMPLAUNCHER-AUDIT.md). Generated translations and local game data stay out of Git.
 
 ## Credits and license
 

@@ -38,3 +38,14 @@ third_party/nvidia/
 
 # AMD FidelityFX FSR sources staged locally (docs/FSR-NOTES.md)
 third_party/amd/
+
+# Local project notes, investigations and capture output
+/.tmp/
+/docs/*.md
+/GOAL.md
+/*.mp4
+/*-atlas.rgba
+/decomp/docs/
+/decomp/.github.example/
+/decomp/.vscode/
+/decomp/README.example.md
