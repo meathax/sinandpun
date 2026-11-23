@@ -189,9 +189,6 @@ struct ResolutionItem {
     float scale;
 };
 
-constexpr auto kCursorAutoHideDelay = std::chrono::seconds(5);
-Clock::time_point g_lastMouseActivity{Clock::now()};
-bool g_cursorHidden = false;
 
 constexpr std::array<std::string_view, 3> kDisplayModeConfigNames = {
     "windowed", "borderless", "exclusive",
@@ -2183,34 +2180,16 @@ bool IsToggleKey(const SDL_Event& event, SDL_Scancode code) {
     return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == code;
 }
 
-bool IsMouseActivity(const SDL_Event& event) {
-    switch (event.type) {
-    case SDL_EVENT_MOUSE_MOTION:
-    case SDL_EVENT_MOUSE_BUTTON_DOWN:
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-    case SDL_EVENT_MOUSE_WHEEL:
-        return true;
-    default:
-        return false;
-    }
-}
-
-// Runs on the thread that pumps SDL events (the same one that calls Draw), so
-// the SDL cursor calls are safe here.
-void UpdateCursorAutoHide() {
-    const bool shouldHide =
-        !g_menuVisible && !AnyModalActive() && Clock::now() - g_lastMouseActivity >= kCursorAutoHideDelay;
-    if (shouldHide == g_cursorHidden) {
-        return;
-    }
-    g_cursorHidden = shouldHide;
-    // ImGui_ImplSDL3_NewFrame calls SDL_ShowCursor every frame unless this flag is set.
-    if (shouldHide) {
-        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
-        SDL_HideCursor();
+void UpdateGameCursor() {
+    // The game draws its own reticle. Mouse motion and display-mode changes
+    // must not re-enable the SDL cursor over the game.
+    auto& flags = ImGui::GetIO().ConfigFlags;
+    if (g_menuVisible) {
+        flags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+        if (!SDL_CursorVisible()) SDL_ShowCursor();
     } else {
-        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
-        SDL_ShowCursor();
+        flags |= ImGuiConfigFlags_NoMouseCursorChange;
+        if (SDL_CursorVisible()) SDL_HideCursor();
     }
 }
 
@@ -2302,7 +2281,6 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         }
         const bool bindCapture = controls_menu::Capturing();
         if (bindCapture) {
-            if (IsMouseActivity(ev->sdl)) g_lastMouseActivity = Clock::now();
             continue;
         }
         if (g_muteCapture) {
@@ -2320,7 +2298,6 @@ void HandleEvents(const AuroraEvent* events) noexcept {
                     g_muteCapture = false;
                 }
             }
-            if (IsMouseActivity(ev->sdl)) g_lastMouseActivity = Clock::now();
             continue;
         }
         if (IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
@@ -2340,9 +2317,6 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             !AimSettings::KeyBound(AimSettings::Get(),SDL_SCANCODE_ESCAPE)) {
             game_ui::RequestConfirm("Quit", std::string("Quit ") + kGameTitle + "?", "Quit", [] { ExitForAuroraWindowClose(); }, true);
             ApplyInputBlockState();
-        }
-        if (IsMouseActivity(ev->sdl)) {
-            g_lastMouseActivity = Clock::now();
         }
     }
 }
@@ -2446,10 +2420,11 @@ void Draw() noexcept {
     PollGamepadMenuChord();
     ApplyConfiguredMappings();
     PersistDisplayModeIfChanged();
-    UpdateCursorAutoHide();
+
     UpdateBootShaderState();
     game_ui::Frame& in = game_ui::PollInput();
     UpdateMenuState(in.dt);
+    UpdateGameCursor();
     if (!StartupScreenVisible()) {
         DrawShaderCompilationStatus();
     }

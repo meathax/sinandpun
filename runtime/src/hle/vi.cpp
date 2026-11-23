@@ -4,6 +4,7 @@
 
 #include "hle_stubs.h"
 #include "button_prompts.h"
+#include "virtual_remote.h"
 #include "memory.h"
 #include "perf_pacing.h"
 #include "abi_bridge.h"
@@ -278,12 +279,14 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
     // R2VE01 pauseGameNWEF pauses gameplay layer 4. LayerNWEF::pause
     // increments its byte at +0x34. Resolve the layer as in 0x80029F40.
     uint32_t gm = 0, layers = 0, table = 0, layer = 0;
-    const bool combat = stage < 8 && Memory::TryRead32(0x804B19A0u, gm) && gm &&
+    const bool haveGameplayLayer = stage < 8 && Memory::TryRead32(0x804B19A0u, gm) && gm &&
         Memory::TryRead32(gm + 0x58, layers) && layers &&
         Memory::TryRead32(layers + 0x1D0, table) && table &&
         Memory::TryRead32(table + 4 * sizeof(uint32_t), layer) && layer &&
-        Memory::Contains(layer + 0x34, 1) && Memory::Read8(layer + 0x34) == 0;
-    ButtonPrompts::SetCombat(combat);
+        Memory::Contains(layer + 0x34, 1);
+    const bool stagePaused = haveGameplayLayer && Memory::Read8(layer + 0x34) != 0;
+    VirtualRemote::SetStagePaused(stagePaused);
+    ButtonPrompts::SetCombat(haveGameplayLayer && !stagePaused);
     aurora_set_atmosphere_type(stage == 2 ? AURORA_ATMOSPHERE_UNDERWATER :
                                stage == 5 ? AURORA_ATMOSPHERE_DUST : AURORA_ATMOSPHERE_ORIGINAL);
     // Prevent re-entry - this can happen if OSWakeupThread triggers SelectThread

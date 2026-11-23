@@ -46,6 +46,7 @@ AimDebug g_dbg;
 // SetScheme(): requested extension (-1 = none requested yet; otherwise an InputMap::Scheme value).
 std::atomic<int> g_requestedScheme{-1};
 std::atomic<bool> g_scriptReloaded{false};
+std::atomic_bool g_stagePaused{false};
 
 const char* SchemeLabel(AimSettings::Scheme s) { return s == AimSettings::Scheme::Classic ? "classic" : "pointer"; }
 
@@ -194,6 +195,7 @@ private:
         float rx = 0, ry = 0;          // aim stick, raw
         bool recenter = false;
         bool blocked = false, scripted = false;
+        bool padMenu = false;
         bool absPtr = false;  // scripted absolute pointer (screen fractions)
         float au = 0.5f, av = 0.5f;
     };
@@ -635,6 +637,25 @@ private:
         }
         RefreshSettings();
         const InputMap::RawSample raw = AimInput::Sample();
+        if (g_stagePaused.load(std::memory_order_relaxed) &&
+            AimInput::LastDevice() == InputMap::ActiveDevice::Gamepad) {
+            in.padMenu = true;
+            const auto button = [&](SDL_GamepadButton b) { return raw.padButtons[b]; };
+            auto menuButton = [&](bool down, uint16_t core, uint8_t cl4, uint8_t cl5) {
+                if (down) { in.buttons |= core; in.cl4 |= cl4; in.cl5 |= cl5; }
+            };
+            menuButton(button(SDL_GAMEPAD_BUTTON_SOUTH), kBtnA, 0, kClA);
+            menuButton(button(SDL_GAMEPAD_BUTTON_EAST), kBtnB, 0, kClB);
+            menuButton(button(SDL_GAMEPAD_BUTTON_START), kBtnPlus, kClPlus, 0);
+            menuButton(button(SDL_GAMEPAD_BUTTON_BACK), kBtnMinus, kClMinus, 0);
+            const float x = raw.padAxes[SDL_GAMEPAD_AXIS_LEFTX];
+            const float y = raw.padAxes[SDL_GAMEPAD_AXIS_LEFTY];
+            menuButton(button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || x < -0.55f, kBtnLeft, 0, kClDLeft);
+            menuButton(button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || x > 0.55f, kBtnRight, kClDRight, 0);
+            menuButton(button(SDL_GAMEPAD_BUTTON_DPAD_UP) || y < -0.55f, kBtnUp, 0, kClDUp);
+            menuButton(button(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || y > 0.55f, kBtnDown, kClDDown, 0);
+            return in;
+        }
         auto val = [&](Action a) {
             return AimSettings::ActionValue(m_settings,a,raw);
         };
@@ -670,7 +691,11 @@ private:
         return in;
     }
 
-    void BuildIr(uint8_t* out, bool extended) {
+    void BuildIr(uint8_t* out, bool extended, bool padMenu) {
+        if (padMenu) {
+            std::memset(out, 0xff, extended ? 12 : 10);
+            return;
+        }
         uint16_t x0, y0, x1, y1;
         DualAnalog::EmitDots(m_pointer, m_config, x0, y0, x1, y1);
         if (extended) {
@@ -866,10 +891,10 @@ private:
         switch (m_mode) {
         case 0x31: accel(3); break;
         case 0x32: std::memcpy(&out[3], ext, 8); break;
-        case 0x33: accel(3); BuildIr(&out[6], true); break;
+        case 0x33: accel(3); BuildIr(&out[6], true, in.padMenu); break;
         case 0x35: accel(3); std::memcpy(&out[6], ext, 16); break;
-        case 0x36: BuildIr(&out[3], false); std::memcpy(&out[13], ext, 9); break;
-        case 0x37: accel(3); BuildIr(&out[6], false); std::memcpy(&out[16], ext, 6); break;
+        case 0x36: BuildIr(&out[3], false, in.padMenu); std::memcpy(&out[13], ext, 9); break;
+        case 0x37: accel(3); BuildIr(&out[6], false, in.padMenu); std::memcpy(&out[16], ext, 6); break;
         case 0x34: std::memcpy(&out[3], ext, 19); break;
         case 0x3D: std::memcpy(&out[1], ext, 21); break;
         default: break;
@@ -1016,6 +1041,8 @@ bool UsesVirtualInput() {
     }();
     return enabled && !Wiimote::Host().IsAttached(0);
 }
+
+void SetStagePaused(bool paused) { g_stagePaused.store(paused, std::memory_order_relaxed); }
 
 void SetScheme(InputMap::Scheme scheme) {
     static const bool scriptOwns = [] {
