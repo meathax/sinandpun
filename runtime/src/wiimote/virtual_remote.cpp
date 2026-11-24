@@ -31,6 +31,7 @@
 #include <mutex>
 #include <optional>
 #include <vector>
+#include "trailer_bot.h"
 
 void AimTelemetryStart();  // hle/aim_telemetry.cpp
 namespace VirtualPad { void Start(); }  // wiimote/virtual_pad.cpp
@@ -561,6 +562,25 @@ private:
 
     // Returns true and fills `in` when a script is active.
     bool ScriptedInput(Input& in) {
+        if (TrailerBot::Output bot; TrailerBot::Sample(m_port, bot)) {
+            in.buttons = static_cast<uint16_t>((bot.a ? kBtnA : 0) | (bot.b ? kBtnB : 0) | (bot.plus ? kBtnPlus : 0));
+            in.c = bot.c;
+            in.z = bot.z;
+            const DualAnalog::NunchukState nun = DualAnalog::NunchukFromStick(bot.lx, bot.ly);
+            in.sx = nun.x;
+            in.sy = nun.y;
+            in.lx = bot.lx;
+            in.ly = -bot.ly;
+            in.scripted = true;
+            in.absPtr = bot.pointer;
+            in.au = bot.u;
+            in.av = bot.v;
+            if (bot.a) in.cl5 |= kClA;
+            if (bot.b) in.cl5 |= kClB;
+            if (bot.c) in.cl4 |= kClL;
+            if (bot.z) in.cl5 |= kClZL;
+            return true;
+        }
         bool loop = false;
         const auto& segments = m_port ? Script<true>(loop) : Script<false>(loop);
         if (m_scriptReloaded) {

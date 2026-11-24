@@ -1,5 +1,6 @@
 #include "sin_coop.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +37,8 @@ struct TeamLife {
 thread_local TeamLife life;
 thread_local Players borrowed;
 thread_local uint32_t finaleConstruction;
+// Last resolved lead/partner actors, read by the capture-only trailer bot on the input thread.
+std::atomic<uint32_t> g_lastLead{0}, g_lastPartner{0};
 
 void ShareLife(const Players& players, bool entering) {
     const auto leadHP = static_cast<int32_t>(Memory::Read32(players.lead + 696));
@@ -73,6 +76,10 @@ uint32_t SinCoopChange(uint32_t sda, uint32_t stage, uint32_t actor, uint32_t or
     if (!RuntimeConfigFile::EnhancedCoopAtLaunch()) return original;
     const auto root = Memory::Read32(sda - 23904);
     const auto players = ResolvePlayers(root, stage);
+    if (players.lead && players.partner) {
+        g_lastLead.store(players.lead, std::memory_order_relaxed);
+        g_lastPartner.store(players.partner, std::memory_order_relaxed);
+    }
     static const bool trace = std::getenv("SIN_COOP_TRACE") != nullptr;
     static unsigned samples[2]{};
     const unsigned seat = actor == players.partner ? 1 : 0;
@@ -218,4 +225,10 @@ void SinCoopSeedTestCharacter(CpuContext* ctx) {
     if (globals && globals != Memory::Read32(scene + 68) && Memory::Contains(globals, 10)) {
         Memory::Write8(globals + 9, static_cast<uint8_t>(choice));
     }
+}
+
+bool SinCoopLastActors(uint32_t& lead, uint32_t& partner) {
+    lead = g_lastLead.load(std::memory_order_relaxed);
+    partner = g_lastPartner.load(std::memory_order_relaxed);
+    return lead != 0 && partner != 0;
 }
