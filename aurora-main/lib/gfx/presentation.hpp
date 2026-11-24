@@ -83,6 +83,8 @@ void vrr_update() noexcept;
 // Paces a present to `dueNanos` (0 = as soon as possible) and enforces the VRR minimum present
 // spacing. Render worker only; equals wait_until(dueNanos) when the limiter is inactive.
 void pace_present(uint64_t dueNanos) noexcept;
+// pace_present that gives up (returns false, nothing paced) as soon as `abort()` turns true.
+bool pace_present_unless(uint64_t dueNanos, bool (*abort)() noexcept) noexcept;
 
 // Guest-RAM write generation for a host range, or AURORA_GUEST_WRITE_UNTRACKED.
 uint64_t guest_write_generation(const void* hostPtr, size_t size) noexcept;

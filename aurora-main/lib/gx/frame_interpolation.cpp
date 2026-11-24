@@ -275,13 +275,22 @@ std::atomic_uint32_t s_activeInterpolationSamples{0};
 // inserted slots for that one frame, which helps the late frame catch back up.
 std::atomic_bool s_dropInterpolationAtSeal{false};
 
-// Windowed backstop for sustained overload. The wide reduce/restore gap is the
-// hysteresis, so a scene that can sustain N slots settles there instead of flapping.
+// Windowed backstop for sustained overload. A guest frame that misses its retrace slows the game
+// itself, so inserted slots must give way quickly: kPacingReduceMisses late frames inside one window
+// drop a slot at once (the old rule waited for 75% of a window, which let a scene that missed ~15%
+// of its retraces, e.g. DLSS with 120 FPS interpolation, run the game at ~85% speed indefinitely).
+// Slots come back only after clean windows, and a restore that fails again doubles the number of
+// clean windows the next attempt needs, so a scene that cannot sustain N slots settles below it
+// instead of slowing the game once a second. Single writer: the guest thread (VI present).
 std::atomic_uint32_t s_pacingWindowFrames{0};
 std::atomic_uint32_t s_pacingWindowMisses{0};
+uint32_t s_pacingCleanWindows = 0;
+uint32_t s_pacingRestoreWindows = 1;
+bool s_pacingTrialRestore = false; // the current target was just restored and is on probation
 constexpr uint32_t kPacingWindowFrames = 60; // ~1 second of guest frames
-constexpr uint32_t kPacingReducePercent = 75;
-constexpr uint32_t kPacingRestorePercent = 25;
+constexpr uint32_t kPacingReduceMisses = 2;
+constexpr uint32_t kPacingMaxRestoreWindows = 32;
+constexpr uint32_t kPacingTrustedWindows = 10; // clean windows after which a restored level is trusted
 
 // Frame-rate configuration (see aurora_set_frame_rate). Written from any thread, read by the
 // producer when it plans a frame.
@@ -879,8 +888,20 @@ void report_present_cost(uint64_t nanos) noexcept {
   // Single writer (the render worker), so a plain load/store EMA is race-free.
   const uint64_t previous = s_presentCostNanos.load(std::memory_order_relaxed);
   nanos = std::max<uint64_t>(nanos, 1);
-  s_presentCostNanos.store(previous == 0 ? nanos : previous - previous / 8 + nanos / 8, std::memory_order_release);
+  // Fast attack, slow release: the slot budget in the render worker must not underestimate a
+  // present that just became expensive (it would let slots delay the native frame).
+  s_presentCostNanos.store(previous == 0 || nanos > previous ? nanos : previous - previous / 8 + nanos / 8,
+                           std::memory_order_release);
 }
+
+void decay_present_cost() noexcept {
+  // Called when the budget skipped every slot of a frame: no new samples arrive then, so let the
+  // estimate fall until a slot fits again and re-measures the real cost.
+  const uint64_t previous = s_presentCostNanos.load(std::memory_order_relaxed);
+  s_presentCostNanos.store(previous - previous / 16, std::memory_order_release);
+}
+
+uint64_t present_cost_nanos() noexcept { return s_presentCostNanos.load(std::memory_order_acquire); }
 
 void set_frame_rate(AuroraFrameRateMode mode, uint32_t fixedFps, uint32_t capFps) noexcept {
   capFps = capFps == 0 ? kHardCapFps : std::clamp(capFps, 60u, kHardCapFps);
@@ -906,6 +927,9 @@ void set_frame_rate(AuroraFrameRateMode mode, uint32_t fixedFps, uint32_t capFps
   s_dropInterpolationAtSeal.store(false, std::memory_order_release);
   s_pacingWindowFrames.store(0, std::memory_order_release);
   s_pacingWindowMisses.store(0, std::memory_order_release);
+  s_pacingCleanWindows = 0;
+  s_pacingRestoreWindows = 1;
+  s_pacingTrialRestore = false;
   // A reconfiguration starts a fresh diagnostic window.
   s_diagFramesSealed.store(0, std::memory_order_relaxed);
   s_diagFramesLowMatch.store(0, std::memory_order_relaxed);
@@ -921,6 +945,8 @@ void report_producer_paced(bool paced) noexcept {
     s_pacingWindowFrames.store(0, std::memory_order_release);
     s_pacingWindowMisses.store(0, std::memory_order_release);
     s_interpolationSampleTarget.store(0, std::memory_order_release);
+    s_pacingCleanWindows = 0;
+    s_pacingTrialRestore = false;
     return;
   }
 
@@ -931,28 +957,43 @@ void report_producer_paced(bool paced) noexcept {
   const uint32_t frames = s_pacingWindowFrames.load(std::memory_order_acquire) + 1;
   const uint32_t misses =
       s_pacingWindowMisses.load(std::memory_order_acquire) + (paced ? 0u : 1u);
-  if (frames < kPacingWindowFrames) {
+  const bool overloaded = misses >= kPacingReduceMisses;
+  if (frames < kPacingWindowFrames && !overloaded) {
     s_pacingWindowFrames.store(frames, std::memory_order_release);
     s_pacingWindowMisses.store(misses, std::memory_order_release);
     return;
   }
-  // Window complete: adjust the target one step at most, then start over. At
-  // one decision per window this cannot spam the log or flap within a second.
+  // Window complete (or cut short by overload): adjust the target one step at most, then start over.
   uint32_t target =
       std::min(s_interpolationSampleTarget.load(std::memory_order_acquire), maximumSamples);
-  if (misses * 100u >= frames * kPacingReducePercent) {
+  if (overloaded) {
+    s_pacingCleanWindows = 0;
     if (target > 0) {
       --target;
+      if (s_pacingTrialRestore) {
+        // The level just restored could not hold 60 Hz either: wait longer before the next try.
+        s_pacingRestoreWindows = std::min(s_pacingRestoreWindows * 2, kPacingMaxRestoreWindows);
+      }
       s_diagSlotReductions.fetch_add(1, std::memory_order_relaxed);
-      Log.info("interpolation slots reduced to {}: {}/{} frames overran their retrace budget",
-               target, misses, frames);
+      Log.info("interpolation slots reduced to {}: {}/{} frames overran their retrace budget (next restore after {} "
+               "clean windows)",
+               target, misses, frames, s_pacingRestoreWindows);
     }
-  } else if (misses * 100u <= frames * kPacingRestorePercent) {
-    if (target < maximumSamples) {
+    s_pacingTrialRestore = false;
+  } else if (misses == 0) {
+    ++s_pacingCleanWindows;
+    if (s_pacingTrialRestore && s_pacingCleanWindows >= kPacingTrustedWindows) {
+      s_pacingTrialRestore = false;
+      s_pacingRestoreWindows = 1;
+    }
+    if (target < maximumSamples && s_pacingCleanWindows >= s_pacingRestoreWindows) {
       ++target;
-      Log.info("interpolation slots restored to {}: {}/{} frames overran their retrace budget",
-               target, misses, frames);
+      s_pacingCleanWindows = 0;
+      s_pacingTrialRestore = true;
+      Log.info("interpolation slots restored to {} after a clean window", target);
     }
+  } else {
+    s_pacingCleanWindows = 0;
   }
   s_interpolationSampleTarget.store(target, std::memory_order_release);
   s_pacingWindowFrames.store(0, std::memory_order_release);

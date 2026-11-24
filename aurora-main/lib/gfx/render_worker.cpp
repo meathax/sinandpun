@@ -26,6 +26,8 @@ std::atomic_bool g_running = false;
 std::atomic_size_t g_pendingItems = 0;
 std::thread::id g_workerThreadId;
 std::atomic<ProducerWaitCallback> g_producerWaitCallback = nullptr;
+std::atomic_uint32_t g_queuedEndFrames = 0; // EndFrame items pushed but not yet started by the worker
+std::atomic_uint32_t g_producersWaiting = 0; // non-worker threads blocked on the worker
 
 void complete_sync(const std::shared_ptr<SyncState>& sync) {
   if (!sync) {
@@ -106,6 +108,7 @@ void worker_main(std::stop_token token) {
     // Encoding records commands; it does not change GPU resources. Keep the
     // last complete scene renderable while the producer records the next one.
     // Retire it before submission or an explicitly synchronous GPU operation.
+    if (item->type == ItemType::EndFrame) g_queuedEndFrames.fetch_sub(1, std::memory_order_acq_rel);
     if (item->type == ItemType::EndFrame ||
         item->type == ItemType::Shutdown || (item->type == ItemType::Sync && item->work)) clear_idle_render();
     if (item->work) {
@@ -148,8 +151,13 @@ void enqueue(QueueItem item) {
   }
 
   g_pendingItems.fetch_add(1, std::memory_order_acq_rel);
+  // A sealed frame is counted before the push, so the worker (possibly still encoding the previous
+  // frame's interpolated slots) sees it at once, also while the push waits for queue space.
+  const bool endFrame = item.type == ItemType::EndFrame;
+  if (endFrame) g_queuedEndFrames.fetch_add(1, std::memory_order_acq_rel);
   if (!g_queue.push(std::move(item))) {
     g_pendingItems.fetch_sub(1, std::memory_order_acq_rel);
+    if (endFrame) g_queuedEndFrames.fetch_sub(1, std::memory_order_acq_rel);
   }
 }
 } // namespace
@@ -279,6 +287,7 @@ void initialize() {
   }
   g_queue.reset();
   g_pendingItems.store(0, std::memory_order_release);
+  g_queuedEndFrames.store(0, std::memory_order_release);
   g_thread = thread::Thread{{
                                 .name = "Aurora render worker",
                                 .affinity = thread::Affinity::SharedCache,
@@ -300,6 +309,7 @@ void shutdown() {
   g_queue.close();
   g_queue.reset();
   g_pendingItems.store(0, std::memory_order_release);
+  g_queuedEndFrames.store(0, std::memory_order_release);
 }
 
 void enqueue_begin_frame(uint64_t frameId, WorkCallback work) {
@@ -325,6 +335,19 @@ void enqueue_end_frame(uint64_t frameId, WorkCallback work) {
       .frameId = frameId,
       .work = std::move(work),
   });
+}
+
+bool newer_frame_pending() noexcept {
+  return g_queuedEndFrames.load(std::memory_order_acquire) != 0 ||
+         g_producersWaiting.load(std::memory_order_acquire) != 0;
+}
+
+ProducerWaitScope::ProducerWaitScope() noexcept : m_counted(!is_worker_thread()) {
+  if (m_counted) g_producersWaiting.fetch_add(1, std::memory_order_acq_rel);
+}
+
+ProducerWaitScope::~ProducerWaitScope() {
+  if (m_counted) g_producersWaiting.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void enqueue_work(WorkCallback work) {
@@ -361,6 +384,7 @@ bool synchronize_for(std::chrono::microseconds timeout) {
       .sync = sync,
   });
   std::unique_lock lock{sync->mutex};
+  ProducerWaitScope waiting;
   return thread::wait_for(sync->cv, lock, timeout, [&] { return sync->complete; });
 }
 

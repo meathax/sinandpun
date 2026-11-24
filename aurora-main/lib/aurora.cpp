@@ -1007,11 +1007,30 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
              gfx::presentation::admit_display_present(std::max(presentAt, gfx::presentation::now_nanos()));
     };
     bool replayUnavailable = false;
+    // Interpolated slots are optional; the guest frame rate is not. A slot is dropped when a newer
+    // guest frame is already sealed (or the guest is blocked on this worker), or when its measured
+    // cost would push the native frame past its own present time. Without this an expensive slot
+    // (e.g. one DLSS evaluation per present) backs up the worker and slows the game itself.
+    static std::atomic_uint64_t s_guardStale{0}, s_guardBudget{0}, s_guardCancelled{0};
+    const uint64_t nativeDue = deadline(1.f);
+    const auto newerFrame = []() noexcept { return gfx::render_worker::newer_frame_pending(); };
     for (uint32_t slot = 0; slot < slots; ++slot) {
       const uint64_t due = deadline(plan.weight[slot]);
       // A slot that would only show after the next grid point is due adds latency without motion.
       if (due != 0 && stepNanos != 0 && gfx::presentation::now_nanos() >= due + stepNanos) {
         continue;
+      }
+      if (newerFrame()) {
+        s_guardStale.fetch_add(slots - slot, std::memory_order_relaxed);
+        break;
+      }
+      if (const uint64_t cost = gx::present_cost_nanos(); cost != 0 && nativeDue != 0) {
+        constexpr uint64_t Tolerance = 1'000'000;
+        if (std::max(gfx::presentation::now_nanos(), due) + cost > nativeDue + Tolerance) {
+          s_guardBudget.fetch_add(slots - slot, std::memory_order_relaxed);
+          gx::decay_present_cost();
+          break;
+        }
       }
       if (!admit(due)) {
         continue;
@@ -1025,10 +1044,31 @@ void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept 
         break;
       }
       const uint64_t encodeNanos = gfx::presentation::now_nanos() - encodeStart;
-      if (!replay.nativeUncapped) gfx::presentation::pace_present(due);
+      if (!replay.nativeUncapped && !gfx::presentation::pace_present_unless(due, newerFrame)) {
+        // A newer frame arrived while waiting for this slot's present time. The encoder may hold the
+        // frame's staging upload, so submit it without showing, and skip the remaining slots.
+        present(slotEncoder, false, false);
+        s_guardCancelled.fetch_add(slots - slot, std::memory_order_relaxed);
+        break;
+      }
       const uint64_t presentStart = gfx::presentation::now_nanos();
       present(slotEncoder, false, true);
       gx::report_present_cost(encodeNanos + (gfx::presentation::now_nanos() - presentStart));
+    }
+    {
+      static const bool perfLog = [] {
+        const char* v = std::getenv("SIN_PERF_LOG");
+        return v != nullptr && *v != '\0' && *v != '0';
+      }();
+      static uint64_t lastLog = 0;
+      if (const uint64_t now = gfx::presentation::now_nanos(); perfLog && now - lastLog >= 1'000'000'000ull) {
+        lastLog = now;
+        std::fprintf(stderr, "[interp-guard] slots dropped: newer_frame=%llu budget=%llu cancelled_wait=%llu cost=%.2fms\n",
+                     static_cast<unsigned long long>(s_guardStale.exchange(0)),
+                     static_cast<unsigned long long>(s_guardBudget.exchange(0)),
+                     static_cast<unsigned long long>(s_guardCancelled.exchange(0)),
+                     static_cast<double>(gx::present_cost_nanos()) / 1.0e6);
+      }
     }
     if (replay.restoreBeforeNative) replay.restoreBeforeNative();
     // The native frame was encoded with its own jitter before the slots changed the current one.

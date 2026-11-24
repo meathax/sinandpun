@@ -100,9 +100,29 @@ ProducerWaitCallback producer_wait_callback() noexcept;
 // Runs the producer wait callback while the calling thread blocks on the renderer.
 void service_producer_wait() noexcept;
 
+// True while a newer frame than the one being encoded is already sealed and queued, or while a
+// producer thread is blocked on the render worker. Interpolated slots of the current frame are then
+// stale work that would hold the game back, so the encoder drops them (the game must never slow down
+// to make room for inserted frames).
+bool newer_frame_pending() noexcept;
+
+// Marks a non-worker thread as blocked on the render worker for newer_frame_pending().
+struct ProducerWaitScope {
+  ProducerWaitScope() noexcept;
+  ~ProducerWaitScope();
+  ProducerWaitScope(const ProducerWaitScope&) = delete;
+  ProducerWaitScope& operator=(const ProducerWaitScope&) = delete;
+private:
+  bool m_counted;
+};
+
 // cv.wait(lock, pred), but the producer wait callback keeps running every millisecond.
 template <typename Pred>
 void wait_servicing(std::condition_variable& cv, std::unique_lock<std::mutex>& lock, Pred pred) {
+  if (pred()) {
+    return;
+  }
+  ProducerWaitScope waiting;
   if (producer_wait_callback() == nullptr || is_worker_thread()) {
     cv.wait(lock, pred);
     return;

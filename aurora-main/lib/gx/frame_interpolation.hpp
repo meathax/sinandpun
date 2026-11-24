@@ -57,6 +57,9 @@ gfx::InterpolationPlan current_interpolation_plan() noexcept;
 // Render worker: time one slot/native present took (acquire + encode + submit + present, excluding
 // the pacing wait). Drives the uncapped mode's rate estimate.
 void report_present_cost(uint64_t nanos) noexcept;
+// EMA of the render worker's wall time per interpolated present (encode + present), 0 before the first one.
+uint64_t present_cost_nanos() noexcept;
+void decay_present_cost() noexcept;
 
 // Interpolated slot being encoded on this thread, or -1 for the native frame.
 extern thread_local int g_interpolationEncodeSlot;

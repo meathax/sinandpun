@@ -445,6 +445,25 @@ void pace_present(uint64_t dueNanos) noexcept {
   g_paceLastNanos = now_nanos();
 }
 
+bool pace_present_unless(uint64_t dueNanos, bool (*abort)() noexcept) noexcept {
+  const uint64_t minInterval = g_vrrMinIntervalNanos.load(std::memory_order_acquire);
+  uint64_t target = dueNanos;
+  if (minInterval != 0 && g_paceLastNanos != 0) {
+    target = std::max(target, g_paceLastNanos + minInterval);
+  }
+  // Sleep in short steps so a newer frame arriving mid-wait cancels the present right away.
+  constexpr uint64_t Step = 500'000;
+  while (target != 0) {
+    if (abort()) return false;
+    const uint64_t now = now_nanos();
+    if (now >= target) break;
+    wait_until(std::min(target, now + Step));
+  }
+  if (abort()) return false;
+  g_paceLastNanos = minInterval == 0 ? 0 : now_nanos();
+  return true;
+}
+
 uint64_t guest_write_generation(const void* hostPtr, size_t size) noexcept {
   const auto callback = g_guestWriteGeneration.load(std::memory_order_acquire);
   return callback != nullptr ? callback(hostPtr, size) : AURORA_GUEST_WRITE_UNTRACKED;
