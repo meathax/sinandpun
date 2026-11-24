@@ -21,6 +21,11 @@ void SetPartnerControllable(bool controllable);
 bool UsesVirtualInput();
 bool UsesVirtualSlot(std::size_t slot);
 
+// True while a Wii Remote (physical or virtual) represents this player. The legacy GameCube pad path must then stay
+// silent for that port: a host gamepad also showing up as a GameCube controller would make the game switch its
+// control method away from the Wii Remote (Control Priority), so a real Wii Remote would stop behaving like one.
+bool RemoteOwnsPort(std::size_t slot);
+
 // Live extension hot-swap: Classic Controller <-> Nunchuk (pointer scheme). Thread-safe, lock-free and cheap; a
 // no-op when `scheme` is already the requested one. The remote unplugs the current extension (status report with
 // the extension flag cleared), waits for the guest to notice, then plugs the other one (status report with the
@@ -33,8 +38,12 @@ void SetScheme(InputMap::Scheme scheme);
 InputMap::Scheme GetScheme();
 
 // Host used by the emulated Bluetooth controller: physical Wii Remotes keep
-// their slots; slot 0 falls back to the virtual remote when a gamepad is
-// present (or SIN_VIRTUAL_REMOTE=1 forces it for testing).
+// their slots and are passed through byte for byte (the game's own default Wii
+// Remote + Nunchuk controls apply, no host remapping); slot 0 otherwise uses the
+// virtual remote (SIN_VIRTUAL_REMOTE=0 disables it). When the backend of a
+// connected slot changes (a real remote connects or leaves), the link is dropped
+// once so the game reconnects and initialises the new device from scratch, as a
+// Wii does when a remote is swapped.
 Bluetooth::RemoteHost& Host();
 
 // Latest values the virtual remote put into a data report (aim telemetry / tests, runtime/src/hle/aim_telemetry.cpp).

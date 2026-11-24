@@ -2,12 +2,12 @@
 
 // Controls state shared between the F10 settings menu and the virtual Wii Remote: aiming tunables, the
 // controller scheme, mouse options and the per-profile action bindings. Persisted to Config.toml:
-//   [input]                version = 5, scheme = "auto" | "classic" | "pointer", switch_toast = true
+//   [input]                version = 6, scheme = "auto" | "classic" | "pointer", switch_toast = true
 //                          (auto: both devices drive the Wii pointer; files written before version 2
 //                          with scheme = "pointer" - the old default - are read as "auto")
 //   [input.gamepad]        <action> = "pad:south | pad:right_trigger"        (up to 3 bindings)
 //   [input.keyboard_mouse] <action> = "key:Space | mouse:x1 | mouse:wheel_up"
-//   [aim]                  right-stick / pointer tunables (see Save())
+//   [aim]                  right-stick / pointer tunables (see Save(); schema 6 replaced the speed model)
 //   [mouse]                mouse-as-pointer options
 // Loading is tolerant: missing/unknown keys keep defaults, bad values are clamped. Changes apply live through
 // Generation().
@@ -29,7 +29,7 @@
 
 namespace AimSettings {
 
-inline constexpr int kSchemaVersion = 5;
+inline constexpr int kSchemaVersion = 6;
 
 // Action names follow Sin & Punishment: Star Successor (manual + StrategyWiki control tables). The Classic
 // Controller / Wii Remote+Nunchuk wire mapping is in virtual_remote.cpp.
@@ -74,37 +74,34 @@ struct ActionInfo {
 };
 
 inline constexpr std::array<ActionInfo, kActionCount> kActions = {{
-    {"fire", "Shoot / Sword", "Combat", "Hold to shoot, tap to slash. Classic R / Wii Remote B.",
-     "pad:right_trigger", "mouse:left | key:J"},
-    {"lock_on", "Lock-on / Charge shot", "Combat",
-     "Tap to lock on; hold, then release for the charge shot. Classic ZR / Wii Remote A.",
+    {"fire", "Shoot / slash", "Combat", "Hold to shoot, tap to slash. Wii: B.", "pad:right_trigger", "mouse:left | key:J"},
+    {"lock_on", "Lock on / charge shot", "Combat", "Tap to lock on. Hold, then release, for a charge shot. Wii: A.",
      "pad:left_trigger", "mouse:right | key:K"},
-    {"jump", "Jump", "Combat", "Classic L / Nunchuk C.", "pad:right_shoulder",
-     "key:Space | mouse:x1"},
-    {"evade", "Evade", "Combat", "Classic ZL / Nunchuk Z.", "pad:left_shoulder",
+    {"jump", "Jump", "Combat", "Wii: Nunchuk C.", "pad:right_shoulder", "key:Space | mouse:x1"},
+    {"evade", "Evade", "Combat", "Dodge in the direction you are moving. Wii: Nunchuk Z.", "pad:left_shoulder",
      "key:Left Shift | mouse:x2"},
-    {"confirm", "Menu: confirm", "Menus", "Confirm in game menus. Options UI keeps A / Enter as recovery controls.", "pad:south", "key:Return"},
-    {"cancel", "Menu: cancel", "Menus", "Back in game menus. Options UI keeps B / Escape as recovery controls.", "pad:east", "key:Backspace"},
-    {"pause", "Pause / skip cut scene (+)", "Menus", "+ button.", "pad:start", "key:Escape | key:P"},
-    {"minus", "Switch character (-)", "Menus", "Switch characters once unlocked.", "pad:back", "key:Tab"},
-    {"home", "HOME button", "Menus", "Opens the Wii HOME menu.", "pad:guide", "key:Home"},
-    {"button_x", "Extra button 1", "Menus", "Classic X / Wii Remote 1.", "pad:west", "key:Q"},
-    {"button_y", "Extra button 2", "Menus", "Classic Y / Wii Remote 2.", "pad:north", "key:E"},
-    {"dpad_up", "Control Pad up", "Menus", "Menu navigation.", "pad:dpad_up", ""},
-    {"dpad_down", "Control Pad down", "Menus", "Menu navigation.", "pad:dpad_down", ""},
-    {"dpad_left", "Control Pad left", "Menus", "Menu navigation.", "pad:dpad_left", ""},
-    {"dpad_right", "Control Pad right", "Menus", "Menu navigation.", "pad:dpad_right", ""},
-    {"move_left", "Move left", "Movement", "Left stick / Nunchuk stick.", "pad:left_stick_left", "key:A"},
+    {"confirm", "Menu confirm", "Menus", "Wii: A.", "pad:south", "key:Return"},
+    {"cancel", "Menu back", "Menus", "Wii: B.", "pad:east", "key:Backspace"},
+    {"pause", "Pause / skip scene", "Menus", "Wii: +.", "pad:start", "key:Escape | key:P"},
+    {"minus", "Switch character", "Menus", "Once unlocked. Wii: -.", "pad:back", "key:Tab"},
+    {"home", "HOME menu", "Menus", "Wii: HOME.", "pad:guide", "key:Home"},
+    {"button_x", "Wii Remote 1", "Menus", "Not used by the game during play.", "pad:west", "key:Q"},
+    {"button_y", "Wii Remote 2", "Menus", "Not used by the game during play.", "pad:north", "key:E"},
+    {"dpad_up", "Menu up", "Menus", "Wii: Control Pad.", "pad:dpad_up", ""},
+    {"dpad_down", "Menu down", "Menus", "", "pad:dpad_down", ""},
+    {"dpad_left", "Menu left", "Menus", "", "pad:dpad_left", ""},
+    {"dpad_right", "Menu right", "Menus", "", "pad:dpad_right", ""},
+    {"move_left", "Move left", "Movement", "Wii: Nunchuk stick.", "pad:left_stick_left", "key:A"},
     {"move_right", "Move right", "Movement", "", "pad:left_stick_right", "key:D"},
     {"move_up", "Move up / hover", "Movement", "", "pad:left_stick_up", "key:W"},
     {"move_down", "Move down", "Movement", "", "pad:left_stick_down", "key:S"},
-    {"aim_left", "Aim left", "Aiming", "Right stick moves the reticle.", "pad:right_stick_left", "key:Left"},
+    {"aim_left", "Aim left", "Aiming", "Moves the reticle. Wii: pointer.", "pad:right_stick_left", "key:Left"},
     {"aim_right", "Aim right", "Aiming", "", "pad:right_stick_right", "key:Right"},
     {"aim_up", "Aim up", "Aiming", "", "pad:right_stick_up", "key:Up"},
     {"aim_down", "Aim down", "Aiming", "", "pad:right_stick_down", "key:Down"},
-    {"gyro_modifier", "Gyro activation button", "Aiming", "Used only by hold-to-aim or hold-to-pause gyro modes.",
+    {"gyro_modifier", "Gyro button", "Aiming", "Only used when the Gyro button option is set to hold.",
      "pad:right_stick", "key:Left Ctrl"},
-    {"recenter", "Recenter pointer", "Aiming", "Port extra, not a Wii control.", "pad:left_stick",
+    {"recenter", "Recenter reticle", "Aiming", "Snaps the reticle to the middle of the screen.", "pad:left_stick",
      "key:R | mouse:middle"},
 }};
 
@@ -179,7 +176,7 @@ inline void Sanitize(Settings& s) {
     s.gyro.activation = std::clamp(s.gyro.activation, 0, 2);
     s.gyro.space = std::clamp(s.gyro.space, 0, 2);
     for (float* value : {&s.gyro.sensitivityX, &s.gyro.sensitivityY})
-        *value = std::isfinite(*value) ? std::clamp(*value, 1.f, 50.f) : 12.f;
+        *value = std::isfinite(*value) ? std::clamp(*value, 1.f, 50.f) : GyroAim::kDefaultSensitivity;
     DualAnalog::Sanitize(s.aim);
     MouseConfig& m = s.mouse;
     auto fin = [](float v, float d) { return std::isfinite(v) ? v : d; };
@@ -253,29 +250,46 @@ inline void ApplyTestOverrides(Settings& s) {
         if (k == "right_deadzone") c.radialDeadzone = f;
         else if (k == "right_saturation") c.outerSaturation = f;
         else if (k == "curve_exponent") c.curveExponent = f;
-        else if (k == "sensitivity_x") c.sensitivityX = f;
-        else if (k == "sensitivity_y") c.sensitivityY = f;
+        else if (k == "sensitivity") c.sensitivity = f;
+        else if (k == "vertical_ratio") c.verticalRatio = f;
         else if (k == "invert_y") c.invertY = b;
-        else if (k == "smoothing_ms") c.smoothingMs = f;
-        else if (k == "max_speed") { c.maxSpeedX = f; c.maxSpeedY = f * (700.0f / 900.0f); }
-        else if (k == "speed_cap") c.speedCap = f;
-        else if (k == "ramp_ms") c.rampSeconds = f * 0.001f;
-        else if (k == "edge_boost") c.edgeBoost = f;
-        else if (k == "recenter_on_release") c.recenterOnRelease = b;
         else if (k == "left_deadzone") c.leftDeadzone = f;
         else if (k == "left_saturation") c.leftSaturation = f;
         else if (k == "invert_move_y") c.invertMoveY = b;
-        else if (k == "pointer_mode") c.absoluteMode = v == "absolute";
-        else if (k == "curve") {
-            for (size_t i = 0; i < DualAnalog::kCurveKeys.size(); ++i) {
-                if (v == DualAnalog::kCurveKeys[i]) c.curve = static_cast<DualAnalog::Curve>(i);
-            }
-        } else if (k == "deadzone_mode") {
-            for (size_t i = 0; i < DualAnalog::kDeadzoneModeKeys.size(); ++i) {
-                if (v == DualAnalog::kDeadzoneModeKeys[i]) c.deadzoneMode = static_cast<DualAnalog::DeadzoneMode>(i);
-            }
-        }
+        else if (k == "trigger_threshold") c.triggerThreshold = f;
     }
+}
+
+// Aim keys written by schema 6. Schema 5 and older used a different speed model (curve presets, ramp, edge boost,
+// separate X/Y sensitivity, absolute mode); those keys are still accepted in the file and ignored. On upgrade the
+// stick tuning starts from the new defaults, keeping only settings whose meaning did not change.
+inline void LoadAim(const toml::value& d, int schemaVersion, DualAnalog::Config& c) {
+    auto num = [&](const char* key, float& out) {
+        if (const auto v = FindNumber(d, "aim", key)) out = *v;
+    };
+    auto flag = [&](const char* key, bool& out) {
+        if (const auto v = FindValue<bool>(d, "aim", key)) out = *v;
+    };
+    const DualAnalog::Config defaults;
+    flag("invert_y", c.invertY);
+    num("left_deadzone", c.leftDeadzone);
+    num("left_saturation", c.leftSaturation);
+    flag("invert_move_y", c.invertMoveY);
+    if (schemaVersion >= 6) {
+        num("right_deadzone", c.radialDeadzone);
+        num("right_saturation", c.outerSaturation);
+        num("curve_exponent", c.curveExponent);
+        num("sensitivity", c.sensitivity);
+        num("vertical_ratio", c.verticalRatio);
+        num("trigger_threshold", c.triggerThreshold);
+        return;
+    }
+    // Keep a deadzone or trigger point the player changed away from the old defaults (0.12 / 0.5).
+    float oldDeadzone = 0.12f, oldTrigger = 0.5f;
+    num("right_deadzone", oldDeadzone);
+    num("trigger_threshold", oldTrigger);
+    c.radialDeadzone = std::fabs(oldDeadzone - 0.12f) < 1e-3f ? defaults.radialDeadzone : oldDeadzone;
+    c.triggerThreshold = std::fabs(oldTrigger - 0.5f) < 1e-3f ? defaults.triggerThreshold : oldTrigger;
 }
 
 inline void LoadFromConfig(Settings& s) {
@@ -287,17 +301,12 @@ inline void LoadFromConfig(Settings& s) {
     } catch (const std::exception&) {
         return;
     }
-    DualAnalog::Config& c = s.aim;
-    auto num = [&](const char* key, float& out) {
-        if (const auto v = FindNumber(d, "aim", key)) out = *v;
-    };
     auto flag = [&](const char* section, const char* key, bool& out) {
         if (const auto v = FindValue<bool>(d, section, key)) out = *v;
     };
     int schemaVersion = 1;
     if (const auto v = FindValue<int64_t>(d, "input", "version")) schemaVersion = static_cast<int>(*v);
     if (schemaVersion < 3) s.bindings = LegacyBindings().bindings;
-    if (schemaVersion < 4 && d.contains("aim")) c = DualAnalog::Config{};
     if (const auto v = FindValue<std::string>(d, "input", "scheme")) {
         s.schemeMode = InputMap::ParseSchemeMode(*v, schemaVersion, s.schemeMode);
     }
@@ -305,53 +314,7 @@ inline void LoadFromConfig(Settings& s) {
     if (const auto v = FindValue<std::string>(d, "input", "button_prompts")) {
         s.playStationPrompts = *v == "playstation";
     }
-    if (const auto v = FindValue<std::string>(d, "aim", "deadzone_mode")) {
-        c.deadzoneMode = static_cast<DualAnalog::DeadzoneMode>(
-            KeyIndex(DualAnalog::kDeadzoneModeKeys, *v, static_cast<size_t>(c.deadzoneMode)));
-    }
-    if (const auto v = FindValue<std::string>(d, "aim", "curve")) {
-        c.curve = static_cast<DualAnalog::Curve>(KeyIndex(DualAnalog::kCurveKeys, *v, static_cast<size_t>(c.curve)));
-    }
-    if (const auto v = FindValue<std::string>(d, "aim", "pointer_mode")) c.absoluteMode = *v == "absolute";
-    num("right_deadzone", c.radialDeadzone);
-    num("right_saturation", c.outerSaturation);
-    num("tracking_speed", c.trackingSpeed);
-    num("curve_exponent", c.curveExponent);
-    num("dual_zone_split", c.dualZoneSplit);
-    num("dual_zone_output", c.dualZoneOutput);
-    num("sensitivity_x", c.sensitivityX);
-    num("sensitivity_y", c.sensitivityY);
-    flag("aim", "invert_y", c.invertY);
-    num("smoothing_ms", c.smoothingMs);
-    num("max_speed", c.maxSpeedX);
-    c.maxSpeedY = c.maxSpeedX * (700.0f / 900.0f);
-    num("speed_cap", c.speedCap);
-    if (const auto v = FindNumber(d, "aim", "ramp_ms")) c.rampSeconds = *v * 0.001f;
-    num("edge_boost", c.edgeBoost);
-    if (const auto v = FindNumber(d, "aim", "edge_accel_ms")) c.edgeAccelSeconds = *v * 0.001f;
-    flag("aim", "recenter_on_release", c.recenterOnRelease);
-    if (const auto v = FindNumber(d, "aim", "recenter_ms")) c.recenterSeconds = *v * 0.001f;
-    num("left_deadzone", c.leftDeadzone);
-    num("left_saturation", c.leftSaturation);
-    num("trigger_threshold", c.triggerThreshold);
-    flag("aim", "invert_move_y", c.invertMoveY);
-
-    if (schemaVersion < 4 && s.schemeMode == SchemeMode::Auto && c.curve == DualAnalog::Curve::Linear &&
-        c.maxSpeedX == 900.f && c.speedCap == 1600.f && !c.absoluteMode && !c.recenterOnRelease &&
-        c.sensitivityX == 1.f && c.sensitivityY == 1.f && c.edgeBoost == 1.f && c.smoothingMs == 0.f &&
-        std::fabs(c.rampSeconds - 0.12f) < 0.0001f && c.deadzoneMode == DualAnalog::DeadzoneMode::ScaledRadial &&
-        c.dualZoneSplit == 0.5f)
-        DualAnalog::ApplySweepPreset(c, DualAnalog::kSweepPresets[0]);
-
-    if (schemaVersion < 5 && c.curve == DualAnalog::Curve::PrecisionSweep && c.maxSpeedX == 3200.f &&
-        c.sensitivityX == 1.f && c.sensitivityY == 1.f && c.dualZoneSplit == 0.52f && c.trackingSpeed == 420.f) {
-        const auto defaults = DualAnalog::ModernAim();
-        c.curve = defaults.curve;
-        c.maxSpeedX = defaults.maxSpeedX;
-        c.maxSpeedY = defaults.maxSpeedY;
-        c.sensitivityX = defaults.sensitivityX;
-        c.sensitivityY = defaults.sensitivityY;
-    }
+    LoadAim(d, schemaVersion, s.aim);
     ApplyTestOverrides(s);
 
     flag("gyro", "enabled", s.gyro.enabled);
@@ -482,26 +445,12 @@ inline bool Save() {
     put("input", "scheme", str(InputMap::kSchemeModeKeys[static_cast<size_t>(s.schemeMode)]));
     put("input", "switch_toast", boolean(s.switchToast));
     put("input", "button_prompts", str(s.playStationPrompts ? "playstation" : "xbox_one"));
-    put("aim", "deadzone_mode", str(DualAnalog::kDeadzoneModeKeys[static_cast<size_t>(c.deadzoneMode)]));
     put("aim", "right_deadzone", Float(c.radialDeadzone));
     put("aim", "right_saturation", Float(c.outerSaturation));
-    put("aim", "curve", str(DualAnalog::kCurveKeys[static_cast<size_t>(c.curve)]));
-    put("aim", "tracking_speed", Float(c.trackingSpeed));
     put("aim", "curve_exponent", Float(c.curveExponent));
-    put("aim", "dual_zone_split", Float(c.dualZoneSplit));
-    put("aim", "dual_zone_output", Float(c.dualZoneOutput));
-    put("aim", "sensitivity_x", Float(c.sensitivityX));
-    put("aim", "sensitivity_y", Float(c.sensitivityY));
+    put("aim", "sensitivity", Float(c.sensitivity));
+    put("aim", "vertical_ratio", Float(c.verticalRatio));
     put("aim", "invert_y", boolean(c.invertY));
-    put("aim", "smoothing_ms", Float(c.smoothingMs));
-    put("aim", "pointer_mode", str(c.absoluteMode ? "absolute" : "velocity"));
-    put("aim", "max_speed", Float(c.maxSpeedX));
-    put("aim", "speed_cap", Float(c.speedCap));
-    put("aim", "ramp_ms", Float(c.rampSeconds * 1000.0f));
-    put("aim", "edge_boost", Float(c.edgeBoost));
-    put("aim", "edge_accel_ms", Float(c.edgeAccelSeconds * 1000.0f));
-    put("aim", "recenter_on_release", boolean(c.recenterOnRelease));
-    put("aim", "recenter_ms", Float(c.recenterSeconds * 1000.0f));
     put("aim", "left_deadzone", Float(c.leftDeadzone));
     put("aim", "left_saturation", Float(c.leftSaturation));
     put("aim", "invert_move_y", boolean(c.invertMoveY));
@@ -549,12 +498,16 @@ inline bool UpgradeLayoutConfig() {
     const auto path=RuntimeConfigFile::ResolveConfigPath();
     std::ifstream input(path,std::ios::binary);
     if (input) {
+        int64_t oldVersion = 0;
         try {
             const auto d=toml::parse(input,"Config.toml");
-            if (const auto v=detail::FindValue<int64_t>(d,"input","version"); v && *v>=kSchemaVersion) return true;
+            if (const auto v=detail::FindValue<int64_t>(d,"input","version")) oldVersion = *v;
+            if (oldVersion>=kSchemaVersion) return true;
         } catch (...) { return false; }
         input.close();
-        auto backup=path;backup += ".input-v2.bak";
+        // Schema <= 2 files keep the historical backup name; later upgrades get one backup per old version.
+        auto backup=path;
+        backup += oldVersion <= 2 ? std::string(".input-v2.bak") : ".input-v" + std::to_string(oldVersion) + ".bak";
         std::error_code ec;
         if (!std::filesystem::exists(backup,ec)) {
             std::filesystem::copy_file(path,backup,std::filesystem::copy_options::none,ec);

@@ -39,8 +39,11 @@ static void TestDefaults() {
     CHECK(s.switchToast);
     const auto stick = DualAnalog::StickPointerConfig(s.aim, false);
     CHECK(stick.cameraMinX == 287.f && stick.cameraMaxX == 736.f);
-    CHECK(s.aim.curve == DualAnalog::Curve::SCurve && s.aim.radialDeadzone == 0.12f);
-    CHECK(s.aim.maxSpeedX == 1100.f && s.aim.sensitivityX == 0.8f && s.aim.sensitivityY == 0.8f);
+    CHECK(s.aim.radialDeadzone == 0.10f && s.aim.outerSaturation == 0.92f && s.aim.curveExponent == 2.2f);
+    CHECK(s.aim.sensitivity == 1.f && s.aim.verticalRatio == 1.f && !s.aim.invertY);
+    CHECK(stick.maxSpeedX == DualAnalog::kFullTiltSpeed);
+    CHECK(s.aim.triggerThreshold == 0.35f);
+    CHECK(!s.gyro.enabled && s.gyro.sensitivityX == GyroAim::kDefaultSensitivity);
     CHECK(!s.playStationPrompts);
     for (size_t i = 0; i < kActionCount; ++i) {
         // Every action has a gamepad default; keyboard defaults may be empty only for the d-pad actions.
@@ -76,7 +79,11 @@ static void TestRoundTrip() {
     s.aim.leftSaturation = 0.8f;
     s.aim.invertMoveY = true;
     s.aim.triggerThreshold = 0.3f;
-    s.aim.sensitivityX = 1.5f;
+    s.aim.sensitivity = 1.5f;
+    s.aim.curveExponent = 3.f;
+    s.aim.verticalRatio = 0.8f;
+    s.aim.radialDeadzone = 0.2f;
+    s.aim.invertY = true;
     s.mouse.raw = true;
     s.mouse.sensitivity = 1.25f;
     InputMap::AssignSwap(s.bindings.kbm, static_cast<size_t>(Action::Jump), 0, InputMap::Key(30));
@@ -89,6 +96,9 @@ static void TestRoundTrip() {
     CHECK(std::fabs(r.aim.leftDeadzone - 0.2f) < 1e-3f && std::fabs(r.aim.leftSaturation - 0.8f) < 1e-3f);
     CHECK(r.aim.invertMoveY && std::fabs(r.aim.triggerThreshold - 0.3f) < 1e-3f);
     CHECK(r.mouse.raw && std::fabs(r.mouse.sensitivity - 1.25f) < 1e-3f);
+    CHECK(std::fabs(r.aim.sensitivity - 1.5f) < 1e-3f && std::fabs(r.aim.curveExponent - 3.f) < 1e-3f);
+    CHECK(std::fabs(r.aim.verticalRatio - 0.8f) < 1e-3f && std::fabs(r.aim.radialDeadzone - 0.2f) < 1e-3f);
+    CHECK(r.aim.invertY);
     CHECK(r.bindings.kbm[static_cast<size_t>(Action::Jump)][0] == InputMap::Key(30));
     // Every mode survives a save.
     for (SchemeMode m : {SchemeMode::Classic, SchemeMode::Pointer, SchemeMode::Auto}) {
@@ -140,10 +150,29 @@ int main() {
     CHECK(custom.bindings.kbm==AimSettings::DefaultBindings().bindings.kbm);
     WriteConfig("[input]\nversion = 3\nscheme = \"auto\"\n[aim]\ncurve = \"linear\"\n"
                 "max_speed = 900.0\nspeed_cap = 1600.0\nramp_ms = 120.0\ndual_zone_split = 0.5\n");
-    CHECK(Load().aim.curve == DualAnalog::Curve::SCurve);
+    CHECK(Load().aim.sensitivity == 1.f && Load().aim.curveExponent == 2.2f);
+    // Schema 5 (old speed model): untouched tuning adopts the new defaults; invert and changed deadzones survive;
+    // the removed keys are accepted without error.
+    WriteConfig("[input]\nversion = 5\nscheme = \"auto\"\n[aim]\ndeadzone_mode = \"scaled_radial\"\n"
+                "right_deadzone = 0.120\ncurve = \"s_curve\"\ncurve_exponent = 1.600\nsensitivity_x = 0.800\n"
+                "sensitivity_y = 0.800\nmax_speed = 1100.000\nspeed_cap = 8000.000\nramp_ms = 0.000\n"
+                "edge_boost = 1.000\npointer_mode = \"velocity\"\ninvert_y = true\ntrigger_threshold = 0.500\n"
+                "left_deadzone = 0.180\n");
+    {
+        const auto old5 = Load();
+        CHECK(old5.aim.radialDeadzone == 0.10f && old5.aim.triggerThreshold == 0.35f);
+        CHECK(old5.aim.sensitivity == 1.f && old5.aim.curveExponent == 2.2f && old5.aim.invertY);
+        CHECK(std::fabs(old5.aim.leftDeadzone - 0.18f) < 1e-4f);
+    }
+    WriteConfig("[input]\nversion = 5\n[aim]\nright_deadzone = 0.250\ntrigger_threshold = 0.200\n");
+    {
+        const auto custom5 = Load();
+        CHECK(std::fabs(custom5.aim.radialDeadzone - 0.25f) < 1e-4f);
+        CHECK(std::fabs(custom5.aim.triggerThreshold - 0.2f) < 1e-4f);
+    }
     auto stored=AimSettings::DefaultBindings();
-    DualAnalog::ApplySweepPreset(stored.aim, DualAnalog::kSweepPresets[2]);
-    stored.aim.trackingSpeed = 325.f;
+    stored.aim.sensitivity = 2.25f;
+    stored.aim.curveExponent = 1.5f;
     stored.gyro.enabled = true; stored.gyro.activation = 2; stored.gyro.space = 2;
     stored.gyro.sensitivityX = 17.5f; stored.gyro.sensitivityY = 8.5f;
     stored.gyro.invertX = true; stored.gyro.invertY = true;
@@ -152,8 +181,7 @@ int main() {
     stored.bindings.pad[1]={};stored.bindings.kbm[1]={};
     AimSettings::Set(stored);CHECK(AimSettings::Save());
     const auto remapped=Load();
-    CHECK(remapped.aim.trackingSpeed == 325.f && remapped.aim.maxSpeedX == 5200.f);
-    CHECK(remapped.aim.curve == DualAnalog::Curve::PrecisionSweep);
+    CHECK(remapped.aim.sensitivity == 2.25f && remapped.aim.curveExponent == 1.5f);
     CHECK(remapped.gyro.enabled && remapped.gyro.activation == 2 && remapped.gyro.space == 2);
     CHECK(remapped.gyro.sensitivityX == 17.5f && remapped.gyro.sensitivityY == 8.5f);
     CHECK(remapped.gyro.invertX && remapped.gyro.invertY);

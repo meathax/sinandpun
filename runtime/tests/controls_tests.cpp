@@ -22,101 +22,84 @@ using namespace DualAnalog;
 static bool Near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
 
 static void TestCurves() {
-    for (int ci = 0; ci < kCurveCount; ++ci) {
+    for (float e : {1.f, 1.6f, 2.2f, 3.f, 4.f}) {
         Config cfg;
-        cfg.curve = static_cast<Curve>(ci);
+        cfg.curveExponent = e;
         CHECK(Near(EvalCurve(cfg, 0.f), 0.f));
         CHECK(Near(EvalCurve(cfg, 1.f), 1.f));
-        float previous = 0.f;
+        float previous = -1.f;
         for (int i = 0; i <= 1000; ++i) {
             const float v = EvalCurve(cfg, static_cast<float>(i) / 1000.f);
-            CHECK(v + 1e-6f >= previous);  // monotonic non-decreasing
-            CHECK(v >= -1e-6f && v <= 1.0001f);
+            CHECK(v > previous);  // strictly increasing: every bit of travel changes speed
+            CHECK(v >= 0.f && v <= 1.0001f);
             previous = v;
         }
     }
-    Config power;
-    power.curve = Curve::Power;
-    for (float e : {0.3f, 0.65f, 1.f, 2.f, 4.f}) {
-        power.curveExponent = e;
-        float previous = 0.f;
-        for (int i = 0; i <= 200; ++i) {
-            const float v = EvalCurve(power, static_cast<float>(i) / 200.f);
-            CHECK(v + 1e-6f >= previous);
-            previous = v;
-        }
-    }
-    Config dual;
-    dual.curve = Curve::DualZone;
-    CHECK(Near(EvalCurve(dual, dual.dualZoneSplit), dual.dualZoneOutput));
+    Config linear;
+    linear.curveExponent = 1.f;
+    CHECK(Near(EvalCurve(linear, 0.37f), 0.37f));
+    // Default: fine near the centre, slope never zero (the linear share), fast at the rim.
+    const Config d;
+    CHECK(EvalCurve(d, 0.2f) < 0.08f);
+    CHECK(EvalCurve(d, 0.02f) / 0.02f >= kLinearShare - 1e-4f);
+    CHECK(EvalCurve(d, 0.9f) > 0.75f);
+    const float slopeEdge = (EvalCurve(d, 1.f) - EvalCurve(d, 0.99f)) / 0.01f;
+    CHECK(slopeEdge > 1.5f);  // unlike smoothstep, still accelerating at full tilt
 }
 
 static void TestDeadzoneEdges() {
-    for (DeadzoneMode mode : {DeadzoneMode::ScaledRadial, DeadzoneMode::Axial, DeadzoneMode::Radial}) {
-        Config cfg;
-        cfg.deadzoneMode = mode;
-        float ox = 9.f, oy = 9.f;
-        ApplyDeadzoneAndCurve(cfg, cfg.radialDeadzone * 0.99f, 0.f, ox, oy);
-        CHECK(ox == 0.f && oy == 0.f);  // inside the deadzone
-        ApplyDeadzoneAndCurve(cfg, 1.0f, 0.f, ox, oy);
-        CHECK(Near(ox, 1.f) && Near(oy, 0.f));  // full deflection reaches 1
-        ApplyDeadzoneAndCurve(cfg, 0.f, -1.0f, ox, oy);
-        CHECK(Near(oy, -1.f));
-        ApplyDeadzoneAndCurve(cfg, cfg.outerSaturation, 0.f, ox, oy);
-        CHECK(Near(ox, 1.f));  // saturation reached at the outer edge
-    }
+    Config cfg;
+    float ox = 9.f, oy = 9.f;
+    ApplyDeadzoneAndCurve(cfg, cfg.radialDeadzone * 0.99f, 0.f, ox, oy);
+    CHECK(ox == 0.f && oy == 0.f);  // inside the deadzone
+    ApplyDeadzoneAndCurve(cfg, 1.0f, 0.f, ox, oy);
+    CHECK(Near(ox, 1.f) && Near(oy, 0.f));  // full deflection reaches 1
+    ApplyDeadzoneAndCurve(cfg, 0.f, -1.0f, ox, oy);
+    CHECK(Near(oy, -1.f));
+    ApplyDeadzoneAndCurve(cfg, cfg.outerSaturation, 0.f, ox, oy);
+    CHECK(Near(ox, 1.f));  // saturation reached at the outer edge
+    // A square-gate diagonal (|v| > 1) stays in the unit disc and keeps its direction.
+    ApplyDeadzoneAndCurve(cfg, 1.f, 1.f, ox, oy);
+    CHECK(Near(std::sqrt(ox * ox + oy * oy), 1.f) && Near(ox, oy));
+    // Radial deadzone: a stick resting slightly off-centre on both axes is still ignored.
+    CHECK(!StickActive(cfg, 0.06f, 0.06f));
+    CHECK(StickActive(cfg, 0.2f, 0.f));
 }
 
 static void TestContinuity() {
-    // Scaled radial and axial: no jump at the inner edge or at saturation, for every curve.
-    for (DeadzoneMode mode : {DeadzoneMode::ScaledRadial, DeadzoneMode::Axial}) {
-        for (int ci = 0; ci < kCurveCount; ++ci) {
-            Config cfg;
-            cfg.deadzoneMode = mode;
-            cfg.curve = static_cast<Curve>(ci);
-            float below = 0.f, above = 0.f, y = 0.f;
-            ApplyDeadzoneAndCurve(cfg, cfg.radialDeadzone - 1e-4f, 0.f, below, y);
-            ApplyDeadzoneAndCurve(cfg, cfg.radialDeadzone + 1e-3f, 0.f, above, y);
-            CHECK(std::fabs(above - below) < 0.02f);
-            ApplyDeadzoneAndCurve(cfg, cfg.outerSaturation - 1e-3f, 0.f, below, y);
-            ApplyDeadzoneAndCurve(cfg, cfg.outerSaturation + 1e-3f, 0.f, above, y);
-            CHECK(std::fabs(above - below) < 0.05f);
-        }
+    for (float e : {1.f, 2.2f, 4.f}) {
+        Config cfg;
+        cfg.curveExponent = e;
+        float below = 0.f, above = 0.f, y = 0.f;
+        ApplyDeadzoneAndCurve(cfg, cfg.radialDeadzone - 1e-4f, 0.f, below, y);
+        ApplyDeadzoneAndCurve(cfg, cfg.radialDeadzone + 1e-3f, 0.f, above, y);
+        CHECK(std::fabs(above - below) < 0.01f);  // no jump at the inner edge
+        ApplyDeadzoneAndCurve(cfg, cfg.outerSaturation - 1e-3f, 0.f, below, y);
+        ApplyDeadzoneAndCurve(cfg, cfg.outerSaturation + 1e-3f, 0.f, above, y);
+        CHECK(std::fabs(above - below) < 0.05f);
     }
-    // Plain radial deliberately jumps at the inner edge.
-    Config radial;
-    radial.deadzoneMode = DeadzoneMode::Radial;
-    float jump = 0.f, y = 0.f;
-    ApplyDeadzoneAndCurve(radial, radial.radialDeadzone + 1e-3f, 0.f, jump, y);
-    CHECK(jump > 0.05f);
 }
 
 static void TestSymmetryAndMonotonicSweep() {
-    for (int mi = 0; mi < kDeadzoneModeCount; ++mi) {
-        for (int ci = 0; ci < kCurveCount; ++ci) {
-            Config cfg;
-            cfg.deadzoneMode = static_cast<DeadzoneMode>(mi);
-            cfg.curve = static_cast<Curve>(ci);
-            float previous = 0.f;
-            for (int i = 0; i <= 400; ++i) {
-                const float m = static_cast<float>(i) / 400.f;
-                float px = 0.f, py = 0.f, nx = 0.f, ny = 0.f;
-                ApplyDeadzoneAndCurve(cfg, m, 0.f, px, py);
-                ApplyDeadzoneAndCurve(cfg, -m, 0.f, nx, ny);
-                CHECK(Near(px, -nx));  // point symmetry
-                CHECK(px + 1e-5f >= previous);  // monotonic in deflection
-                previous = px;
-                ApplyDeadzoneAndCurve(cfg, 0.f, m, px, py);
-                ApplyDeadzoneAndCurve(cfg, 0.f, -m, nx, ny);
-                CHECK(Near(py, -ny));
-            }
-            // Radial modes keep the direction.
-            if (cfg.deadzoneMode != DeadzoneMode::Axial) {
-                float ox = 0.f, oy = 0.f;
-                ApplyDeadzoneAndCurve(cfg, 0.6f, 0.6f, ox, oy);
-                CHECK(Near(ox, oy));
-            }
-        }
+    Config cfg;
+    float previous = 0.f;
+    for (int i = 0; i <= 400; ++i) {
+        const float m = static_cast<float>(i) / 400.f;
+        float px = 0.f, py = 0.f, nx = 0.f, ny = 0.f;
+        ApplyDeadzoneAndCurve(cfg, m, 0.f, px, py);
+        ApplyDeadzoneAndCurve(cfg, -m, 0.f, nx, ny);
+        CHECK(Near(px, -nx));
+        CHECK(px + 1e-5f >= previous);
+        previous = px;
+        ApplyDeadzoneAndCurve(cfg, 0.f, m, px, py);
+        ApplyDeadzoneAndCurve(cfg, 0.f, -m, nx, ny);
+        CHECK(Near(py, -ny));
+    }
+    for (int deg = 0; deg < 360; deg += 15) {  // every direction keeps its angle
+        const float a = static_cast<float>(deg) * 3.14159265f / 180.f;
+        float ox = 0.f, oy = 0.f;
+        ApplyDeadzoneAndCurve(cfg, 0.7f * std::cos(a), 0.7f * std::sin(a), ox, oy);
+        CHECK(Near(std::atan2(oy, ox), std::atan2(std::sin(a), std::cos(a)), 1e-3f) || deg == 180);
     }
 }
 
@@ -130,128 +113,126 @@ static void TestShapeAndSensitivity() {
     cfg.invertY = false;
     ShapeStick(cfg, filter, 0.f, 1.f, 0.01f, x, y);
     CHECK(Near(y, 1.f));
-    cfg.sensitivityX = 2.f;
-    cfg.sensitivityY = 0.5f;
+    // Classic: deadzone only (the game applies its own response), sensitivity as a clamped gain.
     float cx = 0.f, cy = 0.f;
-    ClassicStick(cfg, filter, 1.f, 1.f, 0.01f, cx, cy);
-    CHECK(cx <= 1.f && cy <= 1.f && cx > cy);
-    // Smoothing converges and never overshoots.
+    ClassicStick(cfg, filter, 0.55f, 0.f, 0.01f, cx, cy);
+    CHECK(Near(cx, (0.55f - cfg.radialDeadzone) / (cfg.outerSaturation - cfg.radialDeadzone)));
+    cfg.sensitivity = 2.f;
+    ClassicStick(cfg, filter, 1.f, 0.f, 0.01f, cx, cy);
+    CHECK(Near(cx, 1.f));
+    // No hidden smoothing: the output follows the stick in a single step.
     cfg = Config{};
-    cfg.smoothingMs = 50.f;
-    StickFilter smooth;
-    float last = 0.f;
-    for (int i = 0; i < 200; ++i) {
-        ShapeStick(cfg, smooth, 1.f, 0.f, 0.01f, x, y);
-        CHECK(x + 1e-6f >= last && x <= 1.0001f);
-        last = x;
-    }
-    CHECK(x > 0.99f);
+    ShapeStick(cfg, filter, 1.f, 0.f, 0.01f, x, y);
+    CHECK(Near(x, 1.f));
+    ShapeStick(cfg, filter, 0.f, 0.f, 0.01f, x, y);
+    CHECK(x == 0.f);
 }
 
-static void TestSweepPresets() {
-    for (const auto& preset : kSweepPresets) {
-        Config c;
-        ApplySweepPreset(c, preset);
-        Sanitize(c);
-        for (bool above : {false, true}) {
-            const Config calibrated = StickPointerConfig(c, above);
-            const float bias = above ? -0.457f : 0.457f;
-            auto guestY = [&](float y) { return bias + (y - 384.f) * 0.00443f; };
-            CHECK(std::fabs(guestY(CenterY(calibrated))) < 0.004f);
-            CHECK(Near(guestY(calibrated.cameraMinY), -1.f, 0.012f));
-            CHECK(Near(guestY(calibrated.cameraMaxY), 1.f, 0.012f));
-            CHECK(Near(calibrated.maxSpeedX * 405.f / (calibrated.maxSpeedY * 228.f), 1.f));
-        }
-        c = StickPointerConfig(c, false);
-        const float span = c.cameraMaxX - c.cameraMinX;
-        for (int hz : {30, 60, 120, 250}) {
-            PointerState p;
-            p.x = c.cameraMinX;
-            Advance(p, c, 0.1f, 0.f, 1.f / hz);
-            CHECK(p.x == c.cameraMinX);
-            int ticks = 0;
-            while (p.x < c.cameraMaxX && ticks < hz) {
-                Advance(p, c, 1.f, 0.f, 1.f / hz);
-                ++ticks;
-            }
-            CHECK(std::fabs(float(ticks) / hz - span / preset.peak) <= 1.001f / hz);
-            Advance(p, c, -1.f, 0.f, 1.f / hz);
-            CHECK(Near(p.x, c.cameraMaxX - preset.peak / hz, 0.001f));
-            const float stopped = p.x;
-            Advance(p, c, 0.f, 0.f, 1.f / hz);
-            CHECK(p.x == stopped);
-        }
-        float raw = c.radialDeadzone + 0.1f * (c.outerSaturation - c.radialDeadzone);
-        PointerState fine;
-        Recenter(fine, c);
-        Advance(fine, c, raw, 0.f, 0.01f);
-        CHECK(Near(fine.x - CenterX(c), 0.001f * preset.tracking));
-        c.maxSpeedX *= 1.5f;
-        PointerState faster;
-        Recenter(faster, c);
-        Advance(faster, c, raw, 0.f, 0.01f);
-        CHECK(Near(fine.x, faster.x));
+static void TestStickPointerCalibration() {
+    for (bool above : {false, true}) {
+        const Config calibrated = StickPointerConfig(Config{}, above);
+        const float bias = above ? -0.457f : 0.457f;
+        auto guestY = [&](float y) { return bias + (y - 384.f) * 0.00443f; };
+        CHECK(std::fabs(guestY(CenterY(calibrated))) < 0.004f);
+        CHECK(Near(guestY(calibrated.cameraMinY), -1.f, 0.012f));
+        CHECK(Near(guestY(calibrated.cameraMaxY), 1.f, 0.012f));
+        // Equal screen-pixel speed on both axes (GunSight 810x456 layer).
+        CHECK(Near(calibrated.maxSpeedX * 405.f / (calibrated.maxSpeedY * 228.f), 1.f));
     }
-}
-
-static void TestPointer() {
-    Config cfg;
-    PointerState p;
-    Recenter(p, cfg);
-    for (int i = 0; i < 400; ++i) Advance(p, cfg, 1.f, 0.f, 0.016f);
-    CHECK(Near(p.x, cfg.cameraMaxX));  // saturates at the camera edge
-    CHECK(Near(p.y, CenterY(cfg)));
-    const float held = p.x;
-    Advance(p, cfg, 0.f, 0.f, 0.016f);
-    CHECK(Near(p.x, held));  // hold position on release
-    cfg.recenterOnRelease = true;
-    for (int i = 0; i < 400; ++i) Advance(p, cfg, 0.f, 0.f, 0.016f);
-    CHECK(std::fabs(p.x - CenterX(cfg)) < 1.f);  // spring back
-    cfg = Config{};
-    cfg.speedCap = 200.f;
-    Recenter(p, cfg);
-    Advance(p, cfg, 1.f, 0.f, 0.05f);
-    CHECK(p.x - CenterX(cfg) <= 200.f * 0.05f + 1e-3f);  // speed cap
-    cfg = Config{};
-    cfg.absoluteMode = true;
-    Advance(p, cfg, 1.f, 0.f, 0.016f);
-    CHECK(Near(p.x, cfg.cameraMaxX));  // full deflection maps to the camera edge
-    cfg = Config{};
-    cfg.edgeBoost = 2.f;
-    PointerState slow, boosted;
-    Config noBoost = cfg;
-    noBoost.edgeBoost = 1.f;
-    Recenter(slow, noBoost);
-    Recenter(boosted, cfg);
-    for (int i = 0; i < 20; ++i) {
-        Advance(slow, noBoost, 0.f, 1.f, 0.016f);
-        Advance(boosted, cfg, 0.f, 1.f, 0.016f);
-    }
-    CHECK(boosted.y > slow.y);
-    // Frame-rate independence (dt below the clamp): same distance after one simulated second.
     Config c;
-    c.rampSeconds = 0.f;
-    PointerState a, b;
-    Recenter(a, c);
-    Recenter(b, c);
-    for (int i = 0; i < 60; ++i) Advance(a, c, 0.5f, 0.f, 1.f / 60.f);
-    for (int i = 0; i < 120; ++i) Advance(b, c, 0.5f, 0.f, 1.f / 120.f);
-    CHECK(std::fabs(a.x - b.x) < 2.f);
+    c.sensitivity = 2.f;
+    c.verticalRatio = 0.5f;
+    const Config k = StickPointerConfig(c, false);
+    CHECK(Near(k.maxSpeedX, 2.f * kFullTiltSpeed));
+    CHECK(Near(k.maxSpeedY, k.maxSpeedX * kScreenAspectY * 0.5f));
+}
+
+static void TestTraversalAndFrameRate() {
+    const Config c = StickPointerConfig(Config{}, false);
+    const float span = c.cameraMaxX - c.cameraMinX;
+    // Full tilt crosses the playfield in about a third of a second, at any report/frame rate.
+    for (int hz : {30, 60, 100, 120, 144, 240, 500}) {
+        PointerState p;
+        p.x = c.cameraMinX;
+        int ticks = 0;
+        while (p.x < c.cameraMaxX && ticks < 4 * hz) {
+            Advance(p, c, 1.f, 0.f, 1.f / hz);
+            ++ticks;
+        }
+        const float seconds = static_cast<float>(ticks) / hz;
+        CHECK(std::fabs(seconds - span / kFullTiltSpeed) <= 1.001f / hz);
+        CHECK(seconds > 0.25f && seconds < 0.45f);
+        const float stopped = p.x;
+        Advance(p, c, 0.f, 0.f, 1.f / hz);
+        CHECK(p.x == stopped);  // releasing holds position immediately (no glide, no spring)
+    }
+    // Half tilt: same distance after one second whatever the rate (no ramp, no history).
+    float reference = 0.f;
+    for (int hz : {60, 120, 240, 1000}) {
+        PointerState p;
+        p.x = c.cameraMinX;
+        for (int i = 0; i < hz / 4; ++i) Advance(p, c, 0.5f, 0.f, 1.f / hz);
+        if (hz == 60) reference = p.x;
+        CHECK(Near(p.x, reference, 0.05f));
+    }
+    // First report after leaving the deadzone already moves at the curve speed (no ramp-up).
+    PointerState fine;
+    Recenter(fine, c);
+    Advance(fine, c, 1.f, 0.f, 0.01f);
+    CHECK(Near(fine.x - CenterX(c), kFullTiltSpeed * 0.01f, 0.01f));
+    // Small corrections: 30 % of usable travel is slow enough for precise tracking.
+    PointerState slow;
+    Recenter(slow, c);
+    const float raw = c.radialDeadzone + 0.3f * (c.outerSaturation - c.radialDeadzone);
+    Advance(slow, c, raw, 0.f, 0.1f * 0.5f);
+    CHECK(slow.x - CenterX(c) < 0.15f * kFullTiltSpeed * 0.05f);
+    // Clamped at the visible edge.
+    PointerState edge;
+    Recenter(edge, c);
+    for (int i = 0; i < 400; ++i) Advance(edge, c, 1.f, 1.f, 0.016f);
+    CHECK(Near(edge.x, c.cameraMaxX) && Near(edge.y, c.cameraMaxY));
+}
+
+static void TestGyroTightening() {
+    // Below the tightening threshold motion is scaled down, above it it passes unchanged.
+    GyroAim::Config cfg;
+    cfg.space = 1;  // local yaw: no sensor-fusion warm-up in a synthetic run
+    GyroAim::Motion m;
+    m.fusion.SetCalibrationMode(GamepadMotionHelpers::CalibrationMode::Manual);
+    auto run = [&](float degPerSec) {
+        m.Reset();
+        m.fusion.SetCalibrationMode(GamepadMotionHelpers::CalibrationMode::Manual);
+        uint64_t t = 1'000'000'000ull;
+        const float rad = degPerSec / 57.295779513f;
+        m.Sample(t, 0.f, 0.f, 0.f, cfg, true);
+        for (int i = 0; i < 100; ++i) {
+            t += 5'000'000ull;
+            m.Sample(t, 0.f, rad, 0.f, cfg, true);
+        }
+        float x = 0.f, y = 0.f;
+        m.Consume(x, y);
+        return std::fabs(x);
+    };
+    const float fast = run(40.f), tremor = run(0.3f);
+    CHECK(fast > 0.f);
+    // 0.5 s at 40 deg/s = 20 degrees: ~sensitivity pixels per degree.
+    CHECK(Near(fast, 20.f * cfg.sensitivityX, 0.05f * 20.f * cfg.sensitivityX));
+    CHECK(tremor < 0.3f * 0.5f * cfg.sensitivityX * 0.5f);  // scaled down by speed/threshold
 }
 
 static void TestSanitize() {
     Config c;
     c.radialDeadzone = 5.f;
     c.outerSaturation = -1.f;
-    c.sensitivityX = std::nanf("");
-    c.smoothingMs = 1e9f;
+    c.sensitivity = std::nanf("");
+    c.curveExponent = 99.f;
+    c.verticalRatio = 0.f;
     Sanitize(c);
-    CHECK(c.radialDeadzone <= 0.6f);
-    CHECK(c.outerSaturation >= c.radialDeadzone + 0.05f - 1e-6f && c.outerSaturation <= 1.f);
-    CHECK(std::isfinite(c.sensitivityX));
-    CHECK(c.smoothingMs <= 150.f);
+    CHECK(c.radialDeadzone <= 0.5f);
+    CHECK(c.outerSaturation >= c.radialDeadzone + 0.1f - 1e-6f && c.outerSaturation <= 1.f);
+    CHECK(std::isfinite(c.sensitivity) && c.sensitivity == 1.f);
+    CHECK(c.curveExponent <= 4.f && c.verticalRatio >= 0.5f);
 }
-
 static void TestMouseMapping() {
     using namespace DualAnalog;
     Config cfg;
@@ -631,8 +612,9 @@ int main() {
     TestContinuity();
     TestSymmetryAndMonotonicSweep();
     TestShapeAndSensitivity();
-    TestPointer();
-    TestSweepPresets();
+    TestStickPointerCalibration();
+    TestTraversalAndFrameRate();
+    TestGyroTightening();
     TestSanitize();
     TestMouseMapping();
     TestNunchukAndQuantize();

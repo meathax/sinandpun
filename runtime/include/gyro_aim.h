@@ -17,12 +17,19 @@
 #endif
 
 namespace GyroAim {
+inline constexpr float kDefaultSensitivity = 12.f;
+// Rotation slower than this (deg/s) is scaled down proportionally ("tightening"): hand tremor and sensor noise
+// do not shake the reticle, while deliberate motion is unaffected. Small enough not to feel like a deadzone.
+inline constexpr float kTighteningDegPerSec = 1.2f;
+
 struct Config {
     bool enabled = false;
     int activation = 0; // Always, hold gyro button, hold gyro button to pause.
     int space = 0;      // Player space, local yaw, local roll.
-    float sensitivityX = 12.f; // IR camera pixels per degree.
-    float sensitivityY = 12.f;
+    // Horizontal: IR camera pixels per degree. The virtual remote scales vertical motion so one degree moves
+    // the reticle the same number of screen pixels on both axes.
+    float sensitivityX = kDefaultSensitivity;
+    float sensitivityY = kDefaultSensitivity;
     bool invertX = false, invertY = false;
 };
 
@@ -58,6 +65,12 @@ struct Motion {
         else {
             fusion.GetCalibratedGyro(pitch, yaw, roll);
             if (c.space == 2) yaw = -roll;
+        }
+        const float speed = std::sqrt(pitch * pitch + yaw * yaw);
+        if (speed < kTighteningDegPerSec) {
+            const float k = speed / kTighteningDegPerSec;
+            pitch *= k;
+            yaw *= k;
         }
         dx += -yaw * dt * c.sensitivityX * (c.invertX ? -1.f : 1.f);
         dy += -pitch * dt * c.sensitivityY * (c.invertY ? -1.f : 1.f);

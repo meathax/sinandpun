@@ -121,14 +121,16 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     MotionTrick::Apply(statuses);
 
     // SDL pad 0 is already translated through the remappable Wii/Classic
-    // action map. Do not simultaneously expose its unrelated GameCube defaults.
-    if (VirtualRemote::UsesVirtualInput()) {
+    // action map, or a physical Wii Remote is player 1. Do not simultaneously
+    // expose the pad as a GameCube controller: the game would switch its
+    // control method to GameCube (Control Priority) whenever it is touched.
+    if (VirtualRemote::RemoteOwnsPort(0)) {
         statuses[0] = {};
         statuses[0].err = PAD_ERR_NO_CONTROLLER;
         rumbleMask &= ~0x80000000u;
     }
 
-    if (VirtualRemote::UsesVirtualSlot(1)) {
+    if (VirtualRemote::RemoteOwnsPort(1)) {
         statuses[1] = {};
         statuses[1].err = PAD_ERR_NO_CONTROLLER;
         rumbleMask &= ~0x40000000u;

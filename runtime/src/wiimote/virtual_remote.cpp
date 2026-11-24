@@ -1,4 +1,5 @@
 #include "virtual_remote.h"
+#include "bluetooth/bt_slot_owner.h"
 
 #include "aim_input.h"
 #include "aim_settings.h"
@@ -823,15 +824,11 @@ private:
             }
         } else {
             // Stick right moves the pointer right, which moves the sensor bar left in the camera.
-            auto config = m_stickConfig;
-            if (m_settings.gyro.enabled) {
-                config.absoluteMode = false;
-                config.recenterOnRelease = false;
-            }
-            DualAnalog::Advance(m_pointer, config, -in.rx, in.ry, dt);
+            DualAnalog::Advance(m_pointer, m_stickConfig, -in.rx, in.ry, dt);
         }
+        // Gyro: equal screen-pixel motion per degree on both axes (the reticle layer is 810x456).
         if (m_settings.gyro.enabled && !in.scripted)
-            DualAnalog::MouseRelativeStep(m_pointer, m_config, gdx, gdy, 1.f);
+            DualAnalog::MouseRelativeStep(m_pointer, m_stickConfig, gdx, gdy * DualAnalog::kScreenAspectY, 1.f);
     }
 
     void PublishDebug(const Input& in, float classicX, float classicY) {
@@ -979,6 +976,18 @@ private:
 class CompositeHost final : public Bluetooth::RemoteHost {
 public:
     bool IsAttached(size_t slot) const override {
+        // A link established by one backend must not silently continue on the other: the game would keep the
+        // extension type, report mode and IR setup it negotiated with the previous device, and the real host
+        // would never see its link come up. Report "detached" once so the link drops and the guest reconnects.
+        if (const Bluetooth::SlotBackend now = Backend(slot); !m_owner.Matches(slot, now)) {
+            static int s_budget = 8;
+            if (RtLogBudget(s_budget)) {
+                RT_LOG(RT_TAG_HLE) << "Wii Remote " << (slot + 1) << ": device changed to "
+                                   << (now == Bluetooth::SlotBackend::Real ? "a real Wii Remote" : "the virtual remote")
+                                   << ", reconnecting" << std::endl;
+            }
+            return false;
+        }
         if (UsesVirtualSlot(slot)) {
             static int s_budget = 8;
             if (RtLogBudget(s_budget)) {
@@ -1030,8 +1039,16 @@ public:
     }
 
     void OnLinkStateChanged(size_t slot, Bluetooth::LinkState state) override {
+        const bool virtualSlot = UsesVirtualSlot(slot);
         if (slot < 2 && state == Bluetooth::LinkState::Down) m_wake[slot] = true;
-        if (UsesVirtualSlot(slot)) {
+        const Bluetooth::SlotBackend lost = m_owner.OnStateChanged(slot, state, Backend(slot));
+        // The backend that owned the link hears it go down, even if the slot has switched meanwhile.
+        if (lost == Bluetooth::SlotBackend::Real) {
+            Wiimote::Host().OnLinkStateChanged(slot, state);
+            return;
+        }
+        if (lost == Bluetooth::SlotBackend::Virtual) return;
+        if (virtualSlot) {
             if (state == Bluetooth::LinkState::Ready) {
                 Remote(slot).ResetState();
                 RT_LOG(RT_TAG_HLE) << "Virtual Wii Remote + Nunchuk connected to the game (gamepad)" << std::endl;
@@ -1063,8 +1080,13 @@ private:
         return partner;
     }
 
+    static Bluetooth::SlotBackend Backend(size_t slot) {
+        return UsesVirtualSlot(slot) ? Bluetooth::SlotBackend::Virtual : Bluetooth::SlotBackend::Real;
+    }
+
     VirtualWiimote m_primary{0};
     std::atomic<bool> m_wake[2]{true, true};
+    Bluetooth::SlotOwnership m_owner;  // backend that brought each current link up
 };
 
 } // namespace
@@ -1088,6 +1110,11 @@ bool UsesVirtualSlot(size_t slot) {
 }
 
 bool UsesVirtualInput() { return UsesVirtualSlot(0); }
+
+bool RemoteOwnsPort(size_t slot) {
+    if (slot > 1) return false;
+    return UsesVirtualSlot(slot) || Wiimote::Host().IsAttached(slot);
+}
 
 void SetPartnerControllable(bool controllable) {
     g_partnerControllable.store(controllable, std::memory_order_relaxed);

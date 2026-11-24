@@ -27,7 +27,7 @@ using game_ui::kCommit;
 using game_ui::ListView;
 using Clock = std::chrono::steady_clock;
 
-constexpr std::array<const char*, kPageCount> kPageNames = {"General", "Gamepad", "Keyboard & Mouse", "Aiming"};
+constexpr std::array<const char*, kPageCount> kPageNames = {"Gamepad", "Gyro", "Buttons", "Mouse"};
 
 struct Edit {
     bool dirty = false;  // push to the live settings
@@ -96,27 +96,6 @@ InputMap::AimSource UpdatePreview(const AimSettings::Settings& s) {
         DualAnalog::Advance(g_preview.pointer, config, -g_preview.rawX, g_preview.rawY, dt);
     }
     return g_preview.arbiter.active;
-}
-
-void DrawAimDevice(ListView& v, InputMap::AimSource source, bool mouseEnabled) {
-    const bool mouse = source == InputMap::AimSource::Mouse && mouseEnabled;
-    v.Info("Active aim device", mouse ? "Mouse" : "Right stick / aim keys", mouse ? IM_COL32(150, 220, 255, 255) : game_ui::kGood);
-}
-
-const char* SchemeText(InputMap::Scheme s) {
-    return s == InputMap::Scheme::Classic ? "Classic Controller" : "Wii Remote + Nunchuk";
-}
-
-// Active device and the scheme in effect (the input service in aim_input.cpp owns the decision).
-void DrawActiveDevice(ListView& v, const AimSettings::Settings& s) {
-    const InputMap::ActiveDevice device = AimInput::LastDevice();
-    const char* name = device == InputMap::ActiveDevice::Gamepad          ? "Gamepad"
-                       : device == InputMap::ActiveDevice::KeyboardMouse ? "Mouse and keyboard"
-                                                                         : "Waiting for input";
-    v.Info("Active device", name, device == InputMap::ActiveDevice::None ? game_ui::kTextDim : game_ui::kGood);
-    const std::string scheme = std::string(SchemeText(AimInput::EffectiveScheme())) +
-                               (s.schemeMode == InputMap::SchemeMode::Auto ? "  (automatic)" : "  (fixed)");
-    v.Info("Scheme in effect", scheme, IM_COL32(150, 220, 255, 255));
 }
 
 // Live raw input: both sticks, both triggers (after the trigger threshold), mouse position and buttons.
@@ -272,131 +251,6 @@ void DrawPreview(ListView& v, const AimSettings::Settings& s) {
     });
 }
 
-// ---- Pages -------------------------------------------------------------------------------------------
-
-void BuildStickShaping(ListView& v, AimSettings::Settings& s, Edit& e) {
-    DualAnalog::Config& c = s.aim;
-    const auto d = DualAnalog::ModernAim();
-    v.Section("Left stick (move)");
-    e.Take(v.Slider("Inner deadzone", &c.leftDeadzone, 0.0f, 0.5f, 0.01f, "%.2f", d.leftDeadzone,
-                    "Left stick travel ignored around the centre. Raise it if the character drifts."));
-    e.Take(v.Slider("Outer saturation", &c.leftSaturation, 0.5f, 1.0f, 0.01f, "%.2f", d.leftSaturation,
-                    "Deflection that counts as full. Lower it if your stick never quite reaches the edge."));
-    e.Take(v.Toggle("Invert Y (move)", &c.invertMoveY, d.invertMoveY, "Swap up and down on the left stick."));
-
-    v.Section("Right stick (aim)");
-    for (const auto& preset : DualAnalog::kSweepPresets) {
-        if (v.Action(preset.name, "Apply", preset.peak < 3000.f ? "Wider fine-control zone for small targets." :
-                    preset.peak > 4000.f ? "Earlier acceleration for rapid target changes." :
-                    "Fine tracking near centre and a fast sweep at the rim.")) {
-            DualAnalog::ApplySweepPreset(c, preset);
-            s.schemeMode = AimSettings::SchemeMode::Auto;
-            e.dirty = e.save = true;
-        }
-    }
-    if (c.curve == DualAnalog::Curve::PrecisionSweep) {
-        e.Take(v.Slider("Tracking speed", &c.trackingSpeed, 50.f, 1200.f, 10.f, "%.0f", 420.f,
-                        "Gain for small corrections inside the sweep threshold."));
-        e.Take(v.Slider("Sweep threshold", &c.dualZoneSplit, 0.1f, 0.9f, 0.01f, "%.2f", 0.52f,
-                        "Fraction of usable stick travel before the fast sweep blends in."));
-    }
-    float maxSpeed = c.maxSpeedX;
-    if (auto r = v.Slider("Full-stick speed", &maxSpeed, 100.0f, 8000.0f, 50.0f, "%.0f px/s", d.maxSpeedX,
-                          "Camera pixels per second at full deflection.")) {
-        c.maxSpeedX = maxSpeed;
-        c.maxSpeedY = maxSpeed * (700.0f / 900.0f);
-        e.Take(r);
-    }
-    int dz = static_cast<int>(c.deadzoneMode);
-    if (auto r = v.Choice("Deadzone type", &dz, DualAnalog::kDeadzoneModeLabels.data(), DualAnalog::kDeadzoneModeCount,
-                          static_cast<int>(d.deadzoneMode),
-                          "Scaled radial: no jump at the edge. Radial: hard cut. Axial: each axis on its own.", 0, "Scaled radial")) {
-        c.deadzoneMode = static_cast<DualAnalog::DeadzoneMode>(dz);
-        e.Take(r);
-    }
-    e.Take(v.Slider("Inner deadzone", &c.radialDeadzone, 0.0f, 0.5f, 0.01f, "%.2f", d.radialDeadzone,
-                    "Stick travel ignored around the centre."));
-    e.Take(v.Slider("Outer saturation", &c.outerSaturation, 0.5f, 1.0f, 0.01f, "%.2f", d.outerSaturation,
-                    "Deflection that counts as full. Lower it if your stick never reaches 1."));
-    int curve = static_cast<int>(c.curve);
-    if (auto r = v.Choice("Response curve", &curve, DualAnalog::kCurveLabels.data(), DualAnalog::kCurveCount,
-                          static_cast<int>(d.curve), "How deflection turns into speed.")) {
-        c.curve = static_cast<DualAnalog::Curve>(curve);
-        e.Take(r);
-    }
-    if (c.curve == DualAnalog::Curve::Power) {
-        e.Take(v.Slider("Exponent", &c.curveExponent, 0.3f, 4.0f, 0.05f, "%.2f", d.curveExponent,
-                        "Below 1 = faster near the centre, above 1 = finer control.", game_ui::kRowIndent));
-    } else if (c.curve == DualAnalog::Curve::DualZone) {
-        e.Take(v.Slider("Precision zone size", &c.dualZoneSplit, 0.1f, 0.9f, 0.01f, "%.2f", d.dualZoneSplit,
-                        "Deflection where the precision zone ends.", game_ui::kRowIndent));
-        e.Take(v.Slider("Precision zone output", &c.dualZoneOutput, 0.05f, 0.9f, 0.01f, "%.2f", d.dualZoneOutput,
-                        "Output reached at the end of the zone.", game_ui::kRowIndent));
-    }
-    e.Take(v.Slider("Aim sensitivity X", &c.sensitivityX, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityX, "Horizontal gain."));
-    e.Take(v.Slider("Aim sensitivity Y", &c.sensitivityY, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivityY, "Vertical gain."));
-    e.Take(v.Toggle("Invert Y (aim)", &c.invertY, d.invertY, "Push up to aim down."));
-    e.Take(v.Slider("Smoothing", &c.smoothingMs, 0.0f, 150.0f, 5.0f, "%.0f ms", d.smoothingMs, "Low-pass filter on the stick. 0 = off."));
-
-    v.Section("Triggers");
-    e.Take(v.Slider("Trigger threshold", &c.triggerThreshold, 0.1f, 0.9f, 0.01f, "%.2f", d.triggerThreshold,
-                    "How far an analog trigger (LT / RT) is pulled before it counts as pressed. Lower = lighter pull."));
-}
-
-void BuildPointerAiming(ListView& v, AimSettings::Settings& s, Edit& e) {
-    v.Section("Gyro aiming");
-    e.Take(v.Toggle("Enable gyro", &s.gyro.enabled, false,
-        "Uses Wii pointer aiming with the right stick. Requires an SDL gyro + accelerometer controller."));
-    static const char* const activation[] = {"Always on", "Hold button to aim", "Hold button to pause"};
-    static const char* const spaces[] = {"Player space", "Local yaw", "Local roll"};
-    e.Take(v.Choice("Gyro activation", &s.gyro.activation, activation, 3, 0,
-        "The gyro activation button is remappable under bindings (default R3)."));
-    e.Take(v.Choice("Gyro axes", &s.gyro.space, spaces, 3, 0,
-        "Player space compensates for how you tilt the controller."));
-    e.Take(v.Slider("Gyro sensitivity X", &s.gyro.sensitivityX, 1.f, 50.f, 0.5f, "%.1f", 12.f,
-        "Pointer pixels per degree of controller rotation."));
-    e.Take(v.Slider("Gyro sensitivity Y", &s.gyro.sensitivityY, 1.f, 50.f, 0.5f, "%.1f", 12.f,
-        "Vertical pointer pixels per degree."));
-    e.Take(v.Toggle("Invert gyro X", &s.gyro.invertX, false, "Reverse horizontal motion."));
-    e.Take(v.Toggle("Invert gyro Y", &s.gyro.invertY, false, "Reverse vertical motion."));
-    if (v.Action("Calibrate gyro", "Calibrate", AimInput::GyroStatus())) AimInput::CalibrateGyro();
-
-    DualAnalog::Config& c = s.aim;
-    const auto d = DualAnalog::ModernAim();
-    v.Section("Stick pointer (Wii Remote scheme)");
-    int mode = c.absoluteMode ? 1 : 0;
-    static const char* const kModes[] = {"Velocity", "Absolute"};
-    if (auto r = v.Choice("Stick pointer mode", &mode, kModes, 2, 0,
-                          "Velocity: deflection sets speed, release holds the position, like a mouse. Absolute: stick position is pointer position.")) {
-        c.absoluteMode = mode == 1;
-        e.Take(r);
-    }
-    e.Take(v.Slider("Speed cap", &c.speedCap, 200.0f, 8000.0f, 50.0f, "%.0f px/s", d.speedCap, "Upper limit after ramp-up and edge boost."));
-    float rampMs = c.rampSeconds * 1000.0f;
-    if (auto r = v.Slider("Ramp-up time", &rampMs, 0.0f, 500.0f, 10.0f, "%.0f ms", d.rampSeconds * 1000.0f,
-                          "Slow start after leaving the deadzone.")) {
-        c.rampSeconds = rampMs * 0.001f;
-        e.Take(r);
-    }
-    e.Take(v.Slider("Edge boost", &c.edgeBoost, 1.0f, 3.0f, 0.05f, "x%.2f", d.edgeBoost, "Extra speed while the stick is held at the edge. 1 = off."));
-    float edgeMs = c.edgeAccelSeconds * 1000.0f;
-    if (auto r = v.Slider("Edge boost time", &edgeMs, 50.0f, 2000.0f, 25.0f, "%.0f ms", d.edgeAccelSeconds * 1000.0f,
-                          "How quickly the boost builds.")) {
-        c.edgeAccelSeconds = edgeMs * 0.001f;
-        e.Take(r);
-    }
-    e.Take(v.Toggle("Recenter on release", &c.recenterOnRelease, d.recenterOnRelease,
-                    "Spring the pointer back to the centre when the stick is released."));
-    if (c.recenterOnRelease) {
-        float springMs = c.recenterSeconds * 1000.0f;
-        if (auto r = v.Slider("Recenter time", &springMs, 30.0f, 2000.0f, 10.0f, "%.0f ms", d.recenterSeconds * 1000.0f,
-                              "How fast the pointer springs back.", game_ui::kRowIndent)) {
-            c.recenterSeconds = springMs * 0.001f;
-            e.Take(r);
-        }
-    }
-}
-
 // Position-based pad names: the Classic Controller's A / B sit in the east / south positions, which are the
 // Xbox B / A buttons, so letters would mislead.
 std::string FriendlyName(const InputMap::Binding& b) {
@@ -494,28 +348,59 @@ void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Pro
     }
 }
 
-void BuildGeneral(ListView& v, AimSettings::Settings& s, Edit& e) {
+// ---- Pages -------------------------------------------------------------------------------------------
+
+// Advanced tuning rows stay hidden until asked for (per session, not saved).
+bool g_showAdvanced = false;
+
+void AdvancedToggle(ListView& v) {
+    v.Toggle("Show advanced tuning", &g_showAdvanced, false, "Reveals fine-tuning options. Most players never need them.");
+}
+
+void BuildGamepadPage(ListView& v, AimSettings::Settings& s, Edit& e) {
+    DualAnalog::Config& c = s.aim;
+    const DualAnalog::Config d;
+    UpdatePreview(s);
+    v.Section("Aiming");
+    int style = s.schemeMode == InputMap::SchemeMode::Classic ? 1 : 0;
+    static const char* const kStyles[] = {"Wii pointer", "Classic Controller"};
+    if (auto r = v.Choice("Aiming style", &style, kStyles, 2, 0,
+                          "Wii pointer: the right stick and mouse move the reticle freely (recommended). "
+                          "Classic Controller: the game's original stick aiming.")) {
+        s.schemeMode = style == 1 ? InputMap::SchemeMode::Classic : InputMap::SchemeMode::Auto;
+        e.Take(r);
+    }
+    e.Take(v.Slider("Aim sensitivity", &c.sensitivity, 0.2f, 3.0f, 0.05f, "%.2fx", d.sensitivity,
+                    "Reticle speed. At 1.00 full tilt crosses the screen in about a third of a second."));
+    e.Take(v.Toggle("Invert vertical aim", &c.invertY, d.invertY, "Push up to aim down."));
+    DrawPreview(v, s);
+    AdvancedToggle(v);
+    if (g_showAdvanced) {
+        const uint32_t in = game_ui::kRowIndent;
+        e.Take(v.Slider("Aim deadzone", &c.radialDeadzone, 0.0f, 0.4f, 0.01f, "%.2f", d.radialDeadzone,
+                        "Right stick travel ignored around the centre. Raise it if the reticle drifts.", in));
+        e.Take(v.Slider("Aim acceleration", &c.curveExponent, 1.0f, 4.0f, 0.1f, "%.1f", d.curveExponent,
+                        "1 = linear. Higher = finer control near the centre; full-tilt speed stays the same.", in));
+        e.Take(v.Slider("Vertical aim speed", &c.verticalRatio, 0.5f, 2.0f, 0.05f, "%.2fx", d.verticalRatio,
+                        "Vertical speed relative to horizontal.", in));
+        e.Take(v.Slider("Full-tilt point", &c.outerSaturation, 0.6f, 1.0f, 0.01f, "%.2f", d.outerSaturation,
+                        "Stick travel that counts as full tilt. Lower it if your stick never reaches top speed.", in));
+        e.Take(v.Slider("Move deadzone", &c.leftDeadzone, 0.0f, 0.4f, 0.01f, "%.2f", d.leftDeadzone,
+                        "Left stick travel ignored around the centre. Raise it if your character drifts.", in));
+        e.Take(v.Slider("Trigger press point", &c.triggerThreshold, 0.1f, 0.9f, 0.01f, "%.2f", d.triggerThreshold,
+                        "How far LT / RT must be pulled to count as pressed.", in));
+    }
+
+    v.Section("Gamepad");
     int prompts = s.playStationPrompts ? 1 : 0;
-    static const char* const styles[] = {"Xbox One", "PlayStation"};
-    if (auto r = v.Choice("Button prompts", &prompts, styles, 2, 0,
-                          "Changes in-game button icons and menu hints immediately. Uses your gamepad bindings.")) {
+    static const char* const kPrompts[] = {"Xbox", "PlayStation"};
+    if (auto r = v.Choice("Button icons", &prompts, kPrompts, 2, 0, "Icons used in game prompts and menu hints.")) {
         s.playStationPrompts = prompts == 1;
         e.Take(r);
     }
-    int mode = static_cast<int>(s.schemeMode);
-    if (auto r = v.Choice("Control scheme", &mode, InputMap::kSchemeModeLabels.data(),
-                          static_cast<int>(InputMap::kSchemeModeLabels.size()), 0,
-                          "Automatic uses the Wii pointer for modern right-stick and mouse aiming. Choose Legacy Classic Controller for original stick behaviour.",
-                          0, "Automatic")) {
-        s.schemeMode = static_cast<InputMap::SchemeMode>(mode);
-        e.Take(r);
-    }
-    DrawActiveDevice(v, s);
-    e.Take(v.Toggle("Show a note when the scheme switches", &s.switchToast, true,
-                    "Brief on-screen message when Automatic changes between gamepad and mouse/keyboard."));
-    if (v.Action("Modern Xbox layout", "Use recommended layout",
-                 "RT shoots, LT locks/charges, LB evades, RB jumps. A confirms and B goes back. Restores gamepad bindings and selects Automatic.")) {
-        game_ui::RequestConfirm("Modern Xbox layout", "Replace gamepad bindings with the recommended layout? Keyboard and mouse bindings are kept.", "Use layout", [] {
+    if (v.Action("Recommended layout", "Restore",
+                 "RT shoot, LT lock on, RB jump, LB evade, left stick move, right stick aim. Keyboard and mouse keep theirs.")) {
+        game_ui::RequestConfirm("Recommended layout", "Replace your gamepad buttons with the recommended layout?", "Restore", [] {
             auto cur = AimSettings::Get();
             cur.bindings.pad = AimSettings::DefaultBindings().bindings.pad;
             cur.schemeMode = AimSettings::SchemeMode::Auto;
@@ -523,51 +408,83 @@ void BuildGeneral(ListView& v, AimSettings::Settings& s, Edit& e) {
             AimSettings::Save();
         });
     }
-    v.Note("Recommended gamepad: RT shoots, LT locks/charges, LB evades, RB jumps. Left stick moves; right stick aims. A confirms, B goes back.\n"
-           "Mouse and keyboard: WASD moves, the mouse aims, left click = shoot (B), right click = lock-on (A), Space = jump (C), Shift = evade (Z).");
+    v.Note("Left stick moves, right stick aims. RT shoots (tap to slash), LT locks on (hold for a charge shot), "
+           "RB jumps, LB evades, Start pauses, Back switches character, L3 recenters the reticle.");
+}
+
+void BuildGyroPage(ListView& v, AimSettings::Settings& s, Edit& e) {
+    GyroAim::Config& g = s.gyro;
+    const GyroAim::Config d;
+    UpdatePreview(s);
+    e.Take(v.Toggle("Gyro aiming", &g.enabled, d.enabled,
+                    "Tilt the controller to aim. Needs a controller with motion sensors (DualSense, DualShock 4, Switch)."));
+    v.Info("Status", AimInput::GyroStatus(), g.enabled ? game_ui::kGood : game_ui::kTextDim);
+    float sensitivity = g.sensitivityX;
+    if (auto r = v.Slider("Gyro sensitivity", &sensitivity, 1.f, 50.f, 0.5f, "%.1f", d.sensitivityX,
+                          "Reticle movement per degree of rotation. 12 = full screen width in about 37 degrees.")) {
+        g.sensitivityX = g.sensitivityY = sensitivity;
+        e.Take(r);
+    }
+    static const char* const kButton[] = {"Not used", "Hold to aim", "Hold to pause"};
+    e.Take(v.Choice("Gyro button", &g.activation, kButton, 3, d.activation,
+                    "Hold to pause lets you lift and re-center the controller (ratchet). The button is R3 by default."));
+    e.Take(v.Toggle("Invert vertical gyro", &g.invertY, d.invertY, "Tilt up to aim down."));
+    if (v.Action("Calibrate", "Calibrate", "Rest the controller on a flat surface for a few seconds. Fixes drift.")) {
+        AimInput::CalibrateGyro();
+    }
+    DrawPreview(v, s);
+    AdvancedToggle(v);
+    if (g_showAdvanced) {
+        const uint32_t in = game_ui::kRowIndent;
+        static const char* const kSpaces[] = {"Player space", "Yaw (turn)", "Roll (lean)"};
+        e.Take(v.Choice("Gyro axes", &g.space, kSpaces, 3, d.space,
+                        "Player space works however you hold the controller. Yaw and Roll use one controller axis.", in));
+        e.Take(v.Toggle("Invert horizontal gyro", &g.invertX, d.invertX, "Turn right to aim left.", in));
+    }
+    v.Note("The right stick still works for big moves while gyro adds fine aim. Gyro uses the Wii pointer aiming style.");
+}
+
+void BuildButtonsPage(ListView& v, AimSettings::Settings& s, Edit& e) {
+    static const char* const kDevices[] = {"Gamepad", "Keyboard & mouse"};
+    v.Choice("Device", &g_profileIndex, kDevices, 2, 0, "Which device's buttons to change.");
     v.Section("Live input");
     DrawDeviceMonitor(v);
+    BuildBindings(v, s, e, g_profileIndex == 1 ? InputMap::Profile::KeyboardMouse : InputMap::Profile::Gamepad);
 }
 
-void BuildGamepad(ListView& v, AimSettings::Settings& s, Edit& e) {
-    UpdatePreview(s);
-    v.Section("Live preview");
-    DrawActiveDevice(v, s);
-    DrawPreview(v, s);
-    BuildStickShaping(v, s, e);
-    BuildBindings(v, s, e, InputMap::Profile::Gamepad);
-}
-
-void BuildMouseKeyboard(ListView& v, AimSettings::Settings& s, Edit& e) {
+void BuildMousePage(ListView& v, AimSettings::Settings& s, Edit& e) {
     AimSettings::MouseConfig& m = s.mouse;
     const AimSettings::MouseConfig d{};
-    const InputMap::AimSource source = UpdatePreview(s);
-    v.Section("Mouse aiming");
-    DrawActiveDevice(v, s);
-    DrawAimDevice(v, source, m.enabled);
-    e.Take(v.Toggle("Mouse aims", &m.enabled, d.enabled, "Let the mouse drive the reticle. The last device to move wins."));
+    UpdatePreview(s);
+    e.Take(v.Toggle("Mouse aiming", &m.enabled, d.enabled, "The mouse moves the reticle. Whichever device moved last wins."));
     int mode = m.raw ? 1 : 0;
-    static const char* const kModes[] = {"Absolute", "Relative"};
+    static const char* const kModes[] = {"Follow cursor", "Captured"};
     if (auto r = v.Choice("Mouse mode", &mode, kModes, 2, 0,
-                          "Absolute: the reticle sits under the OS cursor (Wii Remote scheme). Relative: the cursor is captured and hidden; motion moves the reticle.")) {
+                          "Follow cursor: the reticle sits under the mouse cursor. Captured: the cursor is hidden and mouse motion moves the reticle.")) {
         m.raw = mode == 1;
         e.Take(r);
     }
     if (m.raw) {
-        e.Take(v.Slider("Sensitivity", &m.sensitivity, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivity, "Camera pixels per mouse count.", game_ui::kRowIndent));
-    } else {
-        e.Take(v.Slider("Smoothing", &m.smoothingMs, 0.0f, 150.0f, 5.0f, "%.0f ms", d.smoothingMs, "0 applies the latest mouse sample directly.", game_ui::kRowIndent));
-        e.Take(v.Slider("Calibration X", &m.rangeX, 0.5f, 1.5f, 0.01f, "%.2f", d.rangeX,
-                        "Scales horizontal reach so the reticle lines up with the cursor.", game_ui::kRowIndent));
-        e.Take(v.Slider("Calibration Y", &m.rangeY, 0.5f, 1.5f, 0.01f, "%.2f", d.rangeY, "Scales vertical reach.", game_ui::kRowIndent));
+        e.Take(v.Slider("Mouse sensitivity", &m.sensitivity, 0.1f, 4.0f, 0.05f, "%.2f", d.sensitivity,
+                        "Reticle movement per mouse count.", game_ui::kRowIndent));
     }
-    e.Take(v.Slider("Classic scheme stick speed", &m.stickSpeed, 300.0f, 6000.0f, 100.0f, "%.0f/s", d.stickSpeed,
-                    "In the Classic Controller scheme the mouse emulates the right stick: this speed equals full deflection."));
-    v.Section("Preview");
     DrawPreview(v, s);
-    BuildBindings(v, s, e, InputMap::Profile::KeyboardMouse);
-    v.Section("Fixed keys");
-    v.Note("Esc: back or close the menu     Alt+Enter: fullscreen     Q / E or Tab: switch tabs     F10: open this menu");
+    AdvancedToggle(v);
+    if (g_showAdvanced) {
+        const uint32_t in = game_ui::kRowIndent;
+        if (!m.raw) {
+            e.Take(v.Slider("Cursor smoothing", &m.smoothingMs, 0.0f, 150.0f, 5.0f, "%.0f ms", d.smoothingMs,
+                            "0 follows the cursor exactly.", in));
+            e.Take(v.Slider("Horizontal reach", &m.rangeX, 0.5f, 1.5f, 0.01f, "%.2f", d.rangeX,
+                            "Adjust if the reticle does not line up with the cursor.", in));
+            e.Take(v.Slider("Vertical reach", &m.rangeY, 0.5f, 1.5f, 0.01f, "%.2f", d.rangeY,
+                            "Adjust if the reticle does not line up with the cursor.", in));
+        }
+        e.Take(v.Slider("Mouse speed (Classic style)", &m.stickSpeed, 300.0f, 6000.0f, 100.0f, "%.0f", d.stickSpeed,
+                        "With the Classic Controller aiming style the mouse acts as the right stick: mouse speed that equals full tilt.", in));
+    }
+    v.Note("WASD moves, left click shoots, right click locks on, Space jumps, Shift evades, R recenters. "
+           "Esc goes back, Alt+Enter toggles fullscreen, F10 opens this menu.");
 }
 
 } // namespace
@@ -578,17 +495,10 @@ void BuildPage(ListView& view, int page) {
     AimSettings::Settings s = AimSettings::Get();
     Edit e;
     switch (page) {
-    case 0: BuildGeneral(view, s, e); break;
-    case 1: BuildGamepad(view, s, e); break;
-    case 2: BuildMouseKeyboard(view, s, e); break;
-    default: {
-        UpdatePreview(s);
-        view.Section("Live preview");
-        DrawActiveDevice(view, s);
-        DrawPreview(view, s);
-        BuildPointerAiming(view, s, e);
-        break;
-    }
+    case 0: BuildGamepadPage(view, s, e); break;
+    case 1: BuildGyroPage(view, s, e); break;
+    case 2: BuildButtonsPage(view, s, e); break;
+    default: BuildMousePage(view, s, e); break;
     }
     if (e.dirty) AimSettings::Set(s);
     if (e.save) AimSettings::Save();
@@ -670,39 +580,24 @@ bool Capturing() { return g_capture.open || AimInput::Capturing(); }
 
 void ResetPage(int page) {
     AimSettings::Settings s = AimSettings::Get();
-    const auto fresh = DualAnalog::ModernAim();
-    const DualAnalog::Config current = s.aim;
-    auto pointerFields = [](DualAnalog::Config& to, const DualAnalog::Config& from) {
-        to.absoluteMode = from.absoluteMode;
-        to.speedCap = from.speedCap;
-        to.rampSeconds = from.rampSeconds;
-        to.edgeBoost = from.edgeBoost;
-        to.edgeAccelSeconds = from.edgeAccelSeconds;
-        to.recenterOnRelease = from.recenterOnRelease;
-        to.recenterSeconds = from.recenterSeconds;
-    };
     switch (page) {
     case 0:
+        s.aim = DualAnalog::ModernAim();
         s.schemeMode = InputMap::SchemeMode::Auto;
-        s.switchToast = true;
         s.playStationPrompts = false;
         break;
     case 1:
-        s.aim = fresh;
-        pointerFields(s.aim, current);  // the stick pointer belongs to the Aiming page
-        s.bindings.pad = AimSettings::DefaultBindings().bindings.pad;
-        g_status.clear();
+        // While gyro stays enabled, Sanitize also keeps the aiming style on the Wii pointer.
+        s.gyro = GyroAim::Config{};
         break;
     case 2:
-        s.mouse = AimSettings::MouseConfig{};
-        s.bindings.kbm = AimSettings::DefaultBindings().bindings.kbm;
+        s.bindings.For(g_profileIndex == 1 ? InputMap::Profile::KeyboardMouse : InputMap::Profile::Gamepad) =
+            AimSettings::DefaultBindings().bindings.For(g_profileIndex == 1 ? InputMap::Profile::KeyboardMouse
+                                                                              : InputMap::Profile::Gamepad);
         g_status.clear();
         break;
     default:
-        pointerFields(s.aim, fresh);
-        // The gyro rows live on the Aiming page too. While gyro stays enabled,
-        // Sanitize also keeps the control scheme forced to pointer.
-        s.gyro = GyroAim::Config{};
+        s.mouse = AimSettings::MouseConfig{};
         break;
     }
     AimSettings::Set(s);

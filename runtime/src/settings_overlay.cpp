@@ -821,7 +821,7 @@ void ApplyConfiguredMappings() {
 
 bool g_wiiRemotesEnabled = RuntimeConfigFile::WiiRemotesEnabled();
 bool g_wiiRemotesSaveFailed = false;
-bool g_wiiAutoPair = RuntimeConfigFile::WiiAutoPairEnabled(true);
+bool g_wiiAutoPair = RuntimeConfigFile::WiiAutoPairEnabled();
 bool g_wiiSensorBarAbove = RuntimeConfigFile::WiiSensorBarAbove(false);
 int g_wiiIrSensitivity = RuntimeConfigFile::WiiIrSensitivity(3);
 
@@ -842,8 +842,8 @@ const char* KeyBindingName(int scancode) {
 // ---- menu state ----------------------------------------------------------------------------------------
 enum Tab { kTabCoop, kTabControls, kTabAudio, kTabDisplay, kTabGraphics, kTabEnhancements, kTabSystem, kTabCount };
 constexpr std::array<const char*, kTabCount> kTabNames = {"Local Co-op", "Controls", "Audio", "Display", "Graphics", "Enhancements", "System"};
-constexpr int kControlsPageCount = controls_menu::kPageCount + 1;  // + Devices
-constexpr std::array<const char*, kControlsPageCount> kControlsPageNames = {"General", "Gamepad", "Keyboard & Mouse", "Aiming", "Devices"};
+constexpr int kControlsPageCount = controls_menu::kPageCount + 1;  // + Wii Remote / devices
+constexpr std::array<const char*, kControlsPageCount> kControlsPageNames = {"Gamepad", "Gyro", "Buttons", "Mouse", "Wii Remote"};
 
 bool g_menuVisible = false;      // drawn (includes the fade in / out)
 bool g_menuTarget = false;       // wants to be open
@@ -1080,14 +1080,14 @@ void ResetDevicesPage() {
     g_rumbleEnabled = true;
     PAD_HLE_SetRumbleEnabled(true);
     RuntimeConfigFile::SetRumbleEnabled(true);
-    g_wiiAutoPair = true;
-    RuntimeConfigFile::SetWiiAutoPairEnabled(true);
+    g_wiiAutoPair = false;
+    RuntimeConfigFile::SetWiiAutoPairEnabled(false);
     g_wiiSensorBarAbove = false;
     RuntimeConfigFile::SetWiiSensorBarAbove(false);
     g_wiiIrSensitivity = 3;
     RuntimeConfigFile::SetWiiIrSensitivity(3);
-    g_wiiRemotesEnabled = false;
-    g_wiiRemotesSaveFailed = !RuntimeConfigFile::SetWiiRemotesEnabled(false);
+    g_wiiRemotesEnabled = true;
+    g_wiiRemotesSaveFailed = !RuntimeConfigFile::SetWiiRemotesEnabled(true);
 }
 
 void ResetSystemPage() {
@@ -1675,24 +1675,14 @@ void BuildCoopPage(ListView& v) {
 }
 
 void BuildDevicesPage(ListView& v) {
-    if (v.Toggle("Controller vibration", &g_rumbleEnabled, true, "Rumble on gamepads.") & kChanged) {
-        PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
-        RuntimeConfigFile::SetRumbleEnabled(g_rumbleEnabled);
-        if (!g_rumbleEnabled) {
-            // Stop whatever is already running: the game will not send another motor command until its own
-            // state machine decides to.
-            constexpr std::array<uint32_t, PAD_MAX_CONTROLLERS> stopAll{
-                PAD_MOTOR_STOP_HARD, PAD_MOTOR_STOP_HARD, PAD_MOTOR_STOP_HARD, PAD_MOTOR_STOP_HARD,
-            };
-            PADControlAllMotors(stopAll.data());
-        }
-    }
-
     v.Section("Wii Remote");
+    v.Note("A connected Wii Remote + Nunchuk always uses the game's original Wii controls: pointer aims, B shoots "
+           "(tap to slash), A locks on (hold for a charge shot), C jumps, Z evades, + pauses, - switches character. "
+           "Gamepad button settings never affect it.");
     const std::string notice = Wiimote::PlatformNotice();
     if (!notice.empty()) v.Note(notice, game_ui::kWarn);
-    if (v.Toggle("Use Wii Remotes", &g_wiiRemotesEnabled, false,
-                 "Enables physical Wii Remote connections at launch. Turn this off to use a Wii U Pro Controller as a gamepad.",
+    if (v.Toggle("Use Wii Remotes", &g_wiiRemotesEnabled, true,
+                 "Connects physical Wii Remotes to the game. Turn off only to use a Wii U Pro Controller as a gamepad.",
                  game_ui::kRowNextLaunch) & kChanged) {
         g_wiiRemotesSaveFailed = !RuntimeConfigFile::SetWiiRemotesEnabled(g_wiiRemotesEnabled);
         if (g_wiiRemotesSaveFailed) g_wiiRemotesEnabled = !g_wiiRemotesEnabled;
@@ -1707,9 +1697,11 @@ void BuildDevicesPage(ListView& v) {
         if (!remote.asleep && v.Action("Disconnect Wii Remote", "Disconnect", "Ends the connection and powers the remote off.")) {
             Wiimote::Disconnect(0);
         }
+    } else if (g_wiiRemotesEnabled) {
+        v.Info("Player 1 Wii Remote", "Not connected (using gamepad / keyboard)", game_ui::kTextDim);
     }
     if (v.Action("Pair a Wii Remote", pairing.searching ? "Searching..." : "Pair",
-                 pairing.supported ? "Searches for a minute, like pressing SYNC on the console. Press the red SYNC button (or 1 and 2) on the remote. Paired before? Just press any button on it."
+                 pairing.supported ? "Searches for a minute. Press the red SYNC button (or 1 and 2) on the remote. Paired before? Just press any button on it."
                                    : "Pair the Wii Remote in your system's Bluetooth settings, then press any button on it.",
                  pairing.supported ? 0u : game_ui::kRowDisabled)) {
         Wiimote::StartPairing();
@@ -1718,28 +1710,42 @@ void BuildDevicesPage(ListView& v) {
     if (const size_t waiting = Wiimote::WaitingRemotes(); waiting != 0) {
         v.Info("Waiting", std::to_string(waiting) + " more Wii Remote(s) connected; joins when a player leaves");
     }
-    if (v.Toggle("Look for Wii Remotes automatically", &g_wiiAutoPair, true,
-                 "While no Wii Remote is connected, keep searching for one in pairing mode. Searching can briefly disturb Bluetooth headphones.") & kChanged) {
-        RuntimeConfigFile::SetWiiAutoPairEnabled(g_wiiAutoPair);
-    }
     int sensorBar = g_wiiSensorBarAbove ? 1 : 0;
     static constexpr const char* kSensorBar[] = {"Below TV", "Above TV"};
-    if (v.Choice("Sensor bar", &sensorBar, kSensorBar, 2, 0, "Where the sensor bar sits. Takes effect the next time the game starts.",
+    if (v.Choice("Sensor bar", &sensorBar, kSensorBar, 2, 0,
+                 "Where your sensor bar sits. If the pointer is too high or too low, change this. Applies at next start.",
                  game_ui::kRowNextLaunch) & kChanged) {
         g_wiiSensorBarAbove = sensorBar == 1;
         RuntimeConfigFile::SetWiiSensorBarAbove(g_wiiSensorBarAbove);
     }
     float sensitivity = static_cast<float>(g_wiiIrSensitivity);
-    if (v.Slider("Pointer sensitivity", &sensitivity, 1.0f, 5.0f, 1.0f, "%.0f", 3.0f,
-                 "The sensor bar sensitivity from the Wii settings. Takes effect the next time the game starts.",
+    if (v.Slider("Sensor bar sensitivity", &sensitivity, 1.0f, 5.0f, 1.0f, "%.0f", 3.0f,
+                 "Same as the Wii setting. Raise it if the pointer drops out far from the TV. Applies at next start.",
                  game_ui::kRowNextLaunch) & kCommit) {
         g_wiiIrSensitivity = static_cast<int>(std::lround(sensitivity));
         RuntimeConfigFile::SetWiiIrSensitivity(g_wiiIrSensitivity);
     }
+    if (v.Toggle("Search for Wii Remotes automatically", &g_wiiAutoPair, false,
+                 "Keeps searching while no Wii Remote is connected. Can disturb Bluetooth headphones.") & kChanged) {
+        RuntimeConfigFile::SetWiiAutoPairEnabled(g_wiiAutoPair);
+    }
+
+    v.Section("Other controllers");
+    if (v.Toggle("Controller vibration", &g_rumbleEnabled, true, "Rumble on gamepads and Wii Remotes.") & kChanged) {
+        PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
+        RuntimeConfigFile::SetRumbleEnabled(g_rumbleEnabled);
+        if (!g_rumbleEnabled) {
+            // Stop whatever is already running: the game will not send another motor command until its own
+            // state machine decides to.
+            constexpr std::array<uint32_t, PAD_MAX_CONTROLLERS> stopAll{
+                PAD_MOTOR_STOP_HARD, PAD_MOTOR_STOP_HARD, PAD_MOTOR_STOP_HARD, PAD_MOTOR_STOP_HARD,
+            };
+            PADControlAllMotors(stopAll.data());
+        }
+    }
 
     const std::vector<controller_mapping_wizard::Candidate> candidates = controller_mapping_wizard::Candidates();
     if (!candidates.empty()) {
-        v.Section("Unrecognized controllers");
         v.Note("These devices have no usable gamepad mapping. Set one up by pressing each control when asked.");
         for (const auto& candidate : candidates) {
             if (v.Action(candidate.name.c_str(), candidate.incompleteMapping ? "Fix mapping" : "Set up",

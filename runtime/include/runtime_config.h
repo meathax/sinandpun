@@ -1463,7 +1463,9 @@ inline bool AttenuateMusicWhenMediaPlays(bool fallback = false) {
 
 // Bluetooth Wii Remotes. Read once before SDL's joystick subsystem comes up, so a
 // change only takes effect on the next launch.
-inline bool WiiRemotesEnabled(bool fallback = false) {
+// On by default: a physical Wii Remote + Nunchuk is passed straight to the game
+// with its original controls. Turn it off only to use a Wii U Pro Controller as a gamepad.
+inline bool WiiRemotesEnabled(bool fallback = true) {
     return Get().wiiRemotes.value_or(fallback);
 }
 
@@ -1482,7 +1484,9 @@ inline uint32_t SteamInputAppId(uint32_t fallback = 480) {
     return Get().steamInputAppId.value_or(fallback);
 }
 
-inline bool WiiAutoPairEnabled(bool fallback = true) {
+// Off by default: continuous Bluetooth inquiry disturbs headphones for players without
+// a Wii Remote. Paired remotes reconnect with any button; Pair searches on request.
+inline bool WiiAutoPairEnabled(bool fallback = false) {
     return Get().wiiAutoPair.value_or(fallback);
 }
 

@@ -777,14 +777,18 @@ void ConfigureSdlHints(bool enabled) {
     g_enabled = enabled;
     // The remotes belong to the game's Bluetooth stack: SDL must not open them
     // as gamepads (its own Wii driver, or the Linux kernel driver's evdev nodes).
+    // A Wii Remote seen as an SDL gamepad would drive the virtual remote through
+    // the gamepad bindings: no real pointer, the Nunchuk as a left stick and SDL's
+    // button layout, i.e. not the game's Wii controls. The original Wii Remote
+    // (057e:0306) is therefore always hidden from SDL. 057e:0330 is shared by the
+    // Wii Remote Plus and the Wii U Pro Controller, so it stays available to SDL
+    // only while "Use Wii Remotes" is off (for the Pro Controller).
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, enabled ? "0" : "1");
-    if (enabled) {
-        std::string ignored = "0x057e/0x0306,0x057e/0x0330";
-        if (const char* existing = SDL_GetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES); existing && *existing) {
-            ignored = std::string(existing) + "," + ignored;
-        }
-        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, ignored.c_str());
+    std::string ignored = enabled ? "0x057e/0x0306,0x057e/0x0330" : "0x057e/0x0306";
+    if (const char* existing = SDL_GetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES); existing && *existing) {
+        ignored = std::string(existing) + "," + ignored;
     }
+    SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, ignored.c_str());
 }
 
 void Initialize() {

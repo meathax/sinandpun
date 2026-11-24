@@ -1,5 +1,6 @@
 #include "bluetooth/bt_controller.h"
 #include "bluetooth/bt_sdp.h"
+#include "bluetooth/bt_slot_owner.h"
 
 #include <array>
 #include <cstdio>
@@ -353,12 +354,133 @@ void TestSdp() {
           found[11] == 0x5A);
 }
 
+// Same routing as VirtualRemote's CompositeHost: slot 0 is the real remote when one is attached, else the
+// virtual one, and SlotOwnership forces a reconnect when that changes under a live link.
+struct SwitchingHost : Bluetooth::RemoteHost {
+    FakeHost virt, real;
+    Bluetooth::SlotOwnership owner;
+    std::vector<LinkState> realStates;
+    Bluetooth::SlotBackend Backend(size_t slot) const {
+        return real.attached[slot] ? Bluetooth::SlotBackend::Real : Bluetooth::SlotBackend::Virtual;
+    }
+    Bluetooth::RemoteHost& For(size_t slot) { return real.attached[slot] ? static_cast<Bluetooth::RemoteHost&>(real) : virt; }
+    bool IsAttached(size_t slot) const override {
+        if (!owner.Matches(slot, Backend(slot))) return false;
+        return real.attached[slot] || virt.attached[slot];
+    }
+    bool ConsumeWake(size_t slot) override { return For(slot).ConsumeWake(slot); }
+    bool PopInputReport(size_t slot, Bytes& report) override { return For(slot).PopInputReport(slot, report); }
+    void SendOutputReport(size_t slot, const uint8_t* report, size_t size) override {
+        For(slot).SendOutputReport(slot, report, size);
+    }
+    void OnLinkStateChanged(size_t slot, LinkState state) override {
+        const Bluetooth::SlotBackend lost = owner.OnStateChanged(slot, state, Backend(slot));
+        if (lost == Bluetooth::SlotBackend::Real) { real.OnLinkStateChanged(slot, state); realStates.push_back(state); return; }
+        if (lost == Bluetooth::SlotBackend::Virtual) { virt.OnLinkStateChanged(slot, state); return; }
+        if (real.attached[slot]) realStates.push_back(state);
+        For(slot).OnLinkStateChanged(slot, state);
+    }
+    void OnGuestDisconnect(size_t slot) override { For(slot).OnGuestDisconnect(slot); }
+    void OnGuestInquiry(bool active) override { real.OnGuestInquiry(active); }
+    const char* DeviceName(size_t) const override { return "Nintendo RVL-CNT-01"; }
+};
+
+// Boots the controller with page scan on and slot 0 attached, then completes the remote-initiated connection.
+// Returns the connection-complete status (0 = ok).
+bool ConnectSlot0(Guest& guest, Bytes& key, bool bootFirst) {
+    if (bootFirst) {
+        guest.Run(0x0C03);
+        auto e = guest.Run(0x0C0D, {0, 0, 0, 0, 0, 0, 1});
+        if (!e.empty() && e[0].size() >= 25) key.assign(e[0].begin() + 9, e[0].begin() + 25);
+        guest.Run(0x0C1A, {0x02});
+    }
+    std::vector<Bytes> e;
+    for (int i = 0; i < 40; ++i) {  // the remote pages the guest (after its retry delay if it just dropped)
+        guest.now += 100'000;
+        guest.Tick();
+        e = guest.Events();
+        if (!e.empty()) break;
+    }
+    if (e.size() != 1 || e[0][0] != 0x04) return false;
+    const BdAddr addr = Controller::RemoteAddress(0);
+    Bytes accept(addr.begin(), addr.end());
+    accept.push_back(0x00);
+    e = guest.Run(0x0409, accept);
+    if (e.size() != 3 || e[2][0] != 0x03 || e[2][2] != 0x00) return false;
+    const uint16_t handle = Le16(e[2], 3);
+    guest.Run(0x0411, {static_cast<uint8_t>(handle), static_cast<uint8_t>(handle >> 8)});
+    Bytes reply(addr.begin(), addr.end());
+    reply.insert(reply.end(), key.begin(), key.end());
+    guest.Run(0x040B, reply);
+    guest.Tick();
+    AcceptRemoteChannel(guest, handle, 0x0011, 0x0041);
+    guest.Tick();
+    AcceptRemoteChannel(guest, handle, 0x0013, 0x0042);
+    return true;
+}
+
+void TestRealRemoteReplacesVirtualLink() {
+    SwitchingHost host;
+    Controller controller(host);
+    Guest guest{controller};
+    controller.Open(guest.now);
+    host.virt.attached[0] = true;
+    host.virt.wake[0] = true;
+    Bytes key;
+    CHECK(ConnectSlot0(guest, key, true));
+    CHECK(host.virt.states[0] == LinkState::Ready);
+    CHECK(host.owner.Owner(0) == Bluetooth::SlotBackend::Virtual);
+
+    // A physical Wii Remote connects to the PC mid-session and takes slot 0.
+    host.real.attached[0] = true;
+    host.real.wake[0] = true;
+    guest.Tick();
+    auto e = guest.Events();
+    // The virtual link is torn down (Disconnection Complete) instead of silently continuing on the real remote.
+    CHECK(!e.empty() && e[0][0] == 0x05);
+    CHECK(host.virt.states[0] == LinkState::Down);
+    CHECK(host.owner.Owner(0) == Bluetooth::SlotBackend::None);
+    CHECK(host.real.guestDisconnects.empty());  // the real remote is not told to power off
+
+    // The real remote then connects and initialises from scratch; its host sees the link come up.
+    CHECK(ConnectSlot0(guest, key, false));
+    CHECK(host.real.states[0] == LinkState::Ready);
+    CHECK(host.owner.Owner(0) == Bluetooth::SlotBackend::Real);
+    host.real.input[0].push_back({0x30, 0x00, 0x08});
+    guest.Tick();
+    guest.Events();
+    const auto acl = guest.Acl();
+    CHECK(acl.size() == 1 && acl[0].size() > 11 && acl[0][9] == 0x30 && acl[0][11] == 0x08);  // real passthrough
+
+    // The real remote leaves: the link drops again and the real host hears it go down.
+    host.real.attached[0] = false;
+    guest.Tick();
+    e = guest.Events();
+    CHECK(!e.empty() && e[0][0] == 0x05);
+    CHECK(host.real.states[0] == LinkState::Down);
+    CHECK(host.owner.Owner(0) == Bluetooth::SlotBackend::None);
+}
+
+void TestSlotOwnershipUnit() {
+    Bluetooth::SlotOwnership o;
+    using B = Bluetooth::SlotBackend;
+    CHECK(o.Matches(0, B::Virtual) && o.Matches(0, B::Real));
+    CHECK(o.OnStateChanged(0, LinkState::Connecting, B::Virtual) == B::None);
+    CHECK(o.OnStateChanged(0, LinkState::Ready, B::Real) == B::None);  // first claim wins
+    CHECK(o.Owner(0) == B::Virtual && o.Matches(0, B::Virtual) && !o.Matches(0, B::Real));
+    CHECK(o.OnStateChanged(0, LinkState::Down, B::Real) == B::Virtual);
+    CHECK(o.Owner(0) == B::None && o.Matches(0, B::Real));
+    CHECK(o.Matches(3, B::Real) && o.OnStateChanged(3, LinkState::Ready, B::Real) == B::None);
+}
+
 } // namespace
 
 int main() {
     TestBootAndConnection();
     TestInquiryAndPaging();
     TestSdp();
+    TestSlotOwnershipUnit();
+    TestRealRemoteReplacesVirtualLink();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return EXIT_FAILURE;
