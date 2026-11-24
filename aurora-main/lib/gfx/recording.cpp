@@ -1295,16 +1295,21 @@ bool note_projection_draw(bool orthographic) noexcept {
     const auto& size = current_render_passes()[g_recorder.currentRenderPass].colorAttachments[SceneColorAttachmentIndex].size;
     const float depthMin = std::clamp(1.f - vp.zfar, 0.f, 1.f);
     const float depthRange = std::clamp(1.f - vp.znear, 0.f, 1.f) - depthMin;
-    candidate.giProjection = {proj.m0[0] * vp.width / std::max(1u, size.width),
-                          proj.m1[1] * vp.height / std::max(1u, size.height),
-                          depthMin + proj.m2[2] * depthRange, proj.m2[3] * depthRange};
+    const std::array<float, 4> projection{proj.m0[0] * vp.width / std::max(1u, size.width),
+                                          proj.m1[1] * vp.height / std::max(1u, size.height),
+                                          depthMin + proj.m2[2] * depthRange, proj.m2[3] * depthRange};
     // Projection offsets use GX clip coordinates, while pixels have a top-left origin.
-    candidate.giScreenCenter = {
+    const std::array<float, 2> screenCenter{
         (2.f * vp.left + vp.width * (1.f - proj.m0[2])) / std::max(1u, size.width) - 1.f,
         (2.f * vp.top + vp.height * (1.f + proj.m1[2])) / std::max(1u, size.height) - 1.f,
     };
-    if (std::abs(candidate.giProjection[0]) > 0.0001f && std::abs(candidate.giProjection[1]) > 0.0001f &&
-        candidate.giProjection[3] < 0.f && vp.width > 0.5f * size.width && vp.height > 0.5f * size.height) {
+    // Only full-frame perspective draws define the pass projection. A later
+    // sub-viewport or degenerate draw must not replace it: GI, AO and RTGI
+    // reconstruct every pixel with this frustum and divide by its scale terms.
+    if (std::abs(projection[0]) > 0.0001f && std::abs(projection[1]) > 0.0001f &&
+        projection[3] < 0.f && vp.width > 0.5f * size.width && vp.height > 0.5f * size.height) {
+      candidate.giProjection = projection;
+      candidate.giScreenCenter = screenCenter;
       ++candidate.giGeometry;
     }
   }

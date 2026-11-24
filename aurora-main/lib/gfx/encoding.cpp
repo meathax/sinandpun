@@ -280,7 +280,13 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
       .size = size, .format = attachment.format, .sampler = webgpu::present_source().sampler};
     const webgpu::Viewport full{0,0,float(size.width),float(size.height),0,1};
     const bool rayTraced = !passInfo.giNodes.empty();
-    if (rayTraced) {
+    // Replays (interpolation slots and uncapped idle re-renders) are encoded and
+    // submitted while the next native frame may already have queued its GI
+    // writes. They composite the irradiance the native frame produced and never
+    // rewrite the shared BVH, triangle or gather inputs.
+    const bool replay = renderOnly;
+    const bool irradianceReady = webgpu::gi_irradiance_ready(rayTraced);
+    if (rayTraced && !replay) {
       const webgpu::Viewport quarter{0,0,float((size.width+3)/4),float((size.height+3)/4),0,1};
       if (!passInfo.giUnretainedNodes.empty() && webgpu::upscale::culled_comparison_pending()) {
         webgpu::resample_present_source(cmd, quarter, scene, SAMPLER_BILINEAR, false, depth,
@@ -299,24 +305,30 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
                                        webgpu::BouncePass::RayFilter, passInfo.giProjection);
     }
     auto lit = scene;
-    if (passInfo.applyGlobalIllumination && (!rayTraced || webgpu::upscale::gi_comparison_pending())) {
+    const bool screenSpace = !rayTraced || (!replay && webgpu::upscale::gi_comparison_pending());
+    if (passInfo.applyGlobalIllumination && screenSpace && (!replay || irradianceReady)) {
       const webgpu::Viewport half{0,0,float((size.width+1)/2),float((size.height+1)/2),0,1};
       const webgpu::Viewport coarse{0,0,float((size.width+31)/32),float((size.height+31)/32),0,1};
-      webgpu::resample_present_source(cmd, coarse, scene, SAMPLER_BILINEAR, false, depth,
-                                       webgpu::BouncePass::Radiance, passInfo.giProjection);
-      webgpu::resample_present_source(cmd, half, scene, SAMPLER_BILINEAR, false, depth,
-                                       webgpu::BouncePass::Gather, passInfo.giProjection);
+      if (!replay) {
+        webgpu::resample_present_source(cmd, coarse, scene, SAMPLER_BILINEAR, false, depth,
+                                         webgpu::BouncePass::Radiance, passInfo.giProjection);
+        webgpu::resample_present_source(cmd, half, scene, SAMPLER_BILINEAR, false, depth,
+                                         webgpu::BouncePass::Gather, passInfo.giProjection);
+      }
       lit = webgpu::resample_present_source(cmd, full, scene, SAMPLER_BILINEAR, false, depth,
-                                               webgpu::BouncePass::Composite, passInfo.giProjection);
-      webgpu::upscale::capture_gi_pair(cmd, scene, lit, passInfo.giDepth, passInfo.giProjection);
+                                               webgpu::BouncePass::Composite, passInfo.giProjection,
+                                               {}, {}, {}, false, replay);
+      if (!replay) webgpu::upscale::capture_gi_pair(cmd, scene, lit, passInfo.giDepth, passInfo.giProjection);
     }
-    if (rayTraced) {
+    if (rayTraced && (!replay || irradianceReady)) {
       lit = webgpu::resample_present_source(cmd, full, scene, SAMPLER_BILINEAR, false, depth,
-                                               webgpu::BouncePass::RayComposite, passInfo.giProjection);
-      webgpu::upscale::capture_rtgi(cmd, lit);
+                                               webgpu::BouncePass::RayComposite, passInfo.giProjection,
+                                               {}, {}, {}, false, replay);
+      if (!replay) webgpu::upscale::capture_rtgi(cmd, lit);
     }
     if (passInfo.applyAmbientOcclusion) {
-      lit = webgpu::resample_present_source(cmd, full, lit, SAMPLER_BILINEAR, false, depth);
+      lit = webgpu::resample_present_source(cmd, full, lit, SAMPLER_BILINEAR, false, depth,
+                                            webgpu::BouncePass::None, {}, {}, {}, {}, false, replay);
     }
     if (passInfo.msaaSamples == 1 && lit.texture.Get() != scene.texture.Get()) {
       const wgpu::TexelCopyTextureInfo src{.texture=lit.texture}, dst{.texture=scene.texture};

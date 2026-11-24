@@ -700,6 +700,9 @@ void ResetPage(int page) {
         break;
     default:
         pointerFields(s.aim, fresh);
+        // The gyro rows live on the Aiming page too. While gyro stays enabled,
+        // Sanitize also keeps the control scheme forced to pointer.
+        s.gyro = GyroAim::Config{};
         break;
     }
     AimSettings::Set(s);

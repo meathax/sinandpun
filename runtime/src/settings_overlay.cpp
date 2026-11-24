@@ -366,8 +366,7 @@ void ResetUpscaler() {
     g_fsrSharpness = static_cast<float>(RuntimeConfigFile::kDefaultFsrSharpness);
     g_dlssMode = static_cast<int>(RuntimeConfigFile::kDefaultDlssModeIndex);
     g_dlssSharpness = static_cast<float>(RuntimeConfigFile::kDefaultDlssSharpness);
-    g_frameGeneration = false;
-    g_reflex = true;
+    // Frame generation and Reflex are Graphics-page rows; ResetGraphicsPage owns them.
     g_dlssMotion = false;
     ApplyUpscaler();
     PersistUpscaler();
@@ -987,6 +986,14 @@ void ResetGraphicsPage() {
     config.gxWorker = true;
     RuntimeConfigFile::WriteSetting("video", "texture_dumps", "false");
     RuntimeConfigFile::WriteSetting("video", "gx_worker", "true");
+    // Rows shown on the Graphics page: scene glow, frame generation and Reflex.
+    g_sceneGlow.store(true, std::memory_order_relaxed);
+    RuntimeConfigFile::Mutable().sceneGlow = true;
+    RuntimeConfigFile::WriteSetting("video", "scene_glow", "true");
+    g_frameGeneration = false;
+    g_reflex = true;
+    ApplyUpscaler();
+    PersistUpscaler();
     g_graphicsDraft = CurrentGraphicsState();
 }
 
@@ -1005,7 +1012,6 @@ void ResetEnhancementsPage() {
     g_contactShadow = false;
     g_stageAtmosphere = false;
     g_pixelLighting = false;
-    g_sceneGlow.store(true, std::memory_order_relaxed);
     g_enhancedBloom = false;
     ResetUpscaler();
     SystemSettings::Values sys = SystemSettings::Get();
@@ -1041,8 +1047,6 @@ void ResetEnhancementsPage() {
     RuntimeConfigFile::WriteSetting("video", "stage_atmosphere", "false");
     userConfig.pixelLighting = false;
     RuntimeConfigFile::WriteSetting("video", "per_pixel_lighting", "false");
-    userConfig.sceneGlow = true;
-    RuntimeConfigFile::WriteSetting("video", "scene_glow", "true");
     userConfig.enhancedBloom = false;
     RuntimeConfigFile::WriteSetting("video", "enhancements_enabled", "true");
     RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", "false");
@@ -1653,7 +1657,9 @@ void BuildCoopPage(ListView& v) {
         for (uint32_t port = 0; port < 2; ++port) {
             int assigned = PADGetIndexForPort(port);
             const char* label = port == 0 ? "Player 1 controller" : "Player 2 controller";
-            if (v.Choice(label, &assigned, pointers.data(), static_cast<int>(pointers.size()), 0,
+            // The default is the current assignment, so the reset-row key cannot
+            // move controller 0 away from the other player.
+            if (v.Choice(label, &assigned, pointers.data(), static_cast<int>(pointers.size()), assigned,
                          "Choosing the other player's controller swaps their assignments.", 0, nullptr, "None") & kChanged) {
                 const int previous = PADGetIndexForPort(port);
                 const uint32_t other = 1 - port;

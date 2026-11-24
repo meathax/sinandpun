@@ -94,7 +94,10 @@ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& en
                                                   BouncePass bounce = BouncePass::None, std::array<float, 4> projection = {},
                                                   std::span<const rtgi::Triangle> triangles = {},
                                                   std::span<const rtgi::Node> nodes = {},
-                                                  std::array<float, 2> screenCenter = {}, bool independentGeometry = false);
+                                                  std::array<float, 2> screenCenter = {}, bool independentGeometry = false,
+                                                  bool replay = false);
+// True once a native frame has produced filtered irradiance that a replay can composite.
+bool gi_irradiance_ready(bool rayTraced) noexcept;
 void draw_clear(const wgpu::RenderPassEncoder& pass, bool clearColor, bool clearAlpha, bool clearDepth,
                 const Vec4<float>& clearColorValue, float clearDepthValue);
 

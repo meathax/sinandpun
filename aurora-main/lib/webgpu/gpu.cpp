@@ -63,6 +63,11 @@ static std::array<TextureWithSampler, 6> g_giTargets;
 static std::array<wgpu::Buffer, 6> g_giUniforms;
 static wgpu::Buffer g_giNodes, g_giTriangles;
 static wgpu::Buffer g_OcclusionUniformBuffer;
+// Replayed passes (interpolation slots and uncapped idle re-renders) are encoded
+// while the next native frame's GI queue writes may be queued but unsubmitted.
+// They use their own uniforms so those writes cannot cross frames.
+static std::array<wgpu::Buffer, 6> g_giReplayUniforms;
+static wgpu::Buffer g_OcclusionReplayUniformBuffer;
 static TextureWithSampler g_bloomFrameBuffer;
 static wgpu::Buffer g_BloomUniformBuffer;
 static TextureWithSampler g_resampledFrameBuffer;
@@ -1040,6 +1045,8 @@ void create_resample_pipeline() {
   g_BloomUniformBuffer = g_device.CreateBuffer(&uniformBufferDescriptor);
   g_OcclusionUniformBuffer = g_device.CreateBuffer(&uniformBufferDescriptor);
   for (auto& buffer : g_giUniforms) buffer = g_device.CreateBuffer(&uniformBufferDescriptor);
+  for (auto& buffer : g_giReplayUniforms) buffer = g_device.CreateBuffer(&uniformBufferDescriptor);
+  g_OcclusionReplayUniformBuffer = g_device.CreateBuffer(&uniformBufferDescriptor);
   const auto storage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Storage;
   const wgpu::BufferDescriptor nodeBuffer{.usage=storage, .size=sizeof(rtgi::Node)*rtgi::TriangleLimit};
   g_giNodes = g_device.CreateBuffer(&nodeBuffer);
@@ -1066,13 +1073,23 @@ wgpu::BindGroup create_copy_bind_group(const TextureWithSampler& source) {
   return g_device.CreateBindGroup(&bindGroupDescriptor);
 }
 
+bool gi_irradiance_ready(bool rayTraced) noexcept {
+  return rayTraced ? static_cast<bool>(g_giTargets[5].view) : static_cast<bool>(g_giTargets[0].view);
+}
+
 const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport,
                                                   const TextureWithSampler& source, AuroraSampler sampler, bool bloom, const wgpu::TextureView& depth, BouncePass bounce, std::array<float, 4> projection,
                                                   std::span<const rtgi::Triangle> triangles, std::span<const rtgi::Node> nodes,
-                                                  std::array<float, 2> screenCenter, bool independentGeometry) {
+                                                  std::array<float, 2> screenCenter, bool independentGeometry,
+                                                  bool replay) {
   const auto giPass = static_cast<unsigned>(bounce);
+  AURORA_ASSERT(!replay || (bounce != BouncePass::RayGather && bounce != BouncePass::RayFilter &&
+                            bounce != BouncePass::Gather && bounce != BouncePass::Radiance),
+                "Replays composite existing irradiance and must not rewrite GI inputs");
   auto& target = giPass ? g_giTargets[giPass-1] : depth ? g_occlusionFrameBuffer : bloom ? g_bloomFrameBuffer : g_resampledFrameBuffer;
-  auto& buffer = giPass ? g_giUniforms[giPass-1] : depth ? g_OcclusionUniformBuffer : bloom ? g_BloomUniformBuffer : g_ResampleUniformBuffer;
+  auto& buffer = giPass ? (replay ? g_giReplayUniforms : g_giUniforms)[giPass-1]
+               : depth ? (replay ? g_OcclusionReplayUniformBuffer : g_OcclusionUniformBuffer)
+               : bloom ? g_BloomUniformBuffer : g_ResampleUniformBuffer;
   const uint32_t width = viewport_extent(viewport.width);
   const uint32_t height = viewport_extent(viewport.height);
   if (!target.view || target.size.width != width ||
@@ -1598,6 +1615,8 @@ void shutdown() {
   g_ResampleUniformBuffer = {};
   g_giTargets = {};
   g_giUniforms = {};
+  g_giReplayUniforms = {};
+  g_OcclusionReplayUniformBuffer = {};
   g_giNodes = {};
   g_giTriangles = {};
   g_occlusionFrameBuffer = {};

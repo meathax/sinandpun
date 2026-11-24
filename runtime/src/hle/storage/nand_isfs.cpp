@@ -291,8 +291,9 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
                 if (!inBufPtr || inLen < 0x4c) {
                     return ISFS_EINVAL;
                 }
-                const char* path = (const char*)Memory::GetPointer(inBufPtr + 6);
-                const std::filesystem::path hostPath = TranslateNandPath(path);
+                // Bounded read: an unterminated guest buffer must not run past guest RAM.
+                const std::string path = ReadGuestCString(inBufPtr + 6, 64);
+                const std::filesystem::path hostPath = TranslateNandPath(path.c_str());
                 if (hostPath.empty()) {
                     return ISFS_EINVAL;
                 }
@@ -307,8 +308,11 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
                 if (!inBufPtr || inLen < 0x40) {
                     return ISFS_EINVAL;
                 }
-                const char* path = (const char*)Memory::GetPointer(inBufPtr);
-                const std::filesystem::path hostPath = TranslateNandPath(path);
+                const std::string path = ReadGuestCString(inBufPtr, 64);
+                const std::filesystem::path hostPath = TranslateNandPath(path.c_str());
+                if (hostPath.empty()) {
+                    return ISFS_EINVAL;
+                }
                 
                 // fs::remove refuses a non-empty directory, matching rmdir.
                 if (NandRemove(hostPath)) {
@@ -318,11 +322,14 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
             }
             
             case ISFS_IOCTL_GETATTR: {
-                if (!inBufPtr || !outBufPtr) {
+                if (!inBufPtr || !outBufPtr || inLen < 0x40) {
                     return ISFS_EINVAL;
                 }
-                const char* path = (const char*)Memory::GetPointer(inBufPtr);
-                const std::filesystem::path hostPath = TranslateNandPath(path);
+                const std::string path = ReadGuestCString(inBufPtr, 64);
+                const std::filesystem::path hostPath = TranslateNandPath(path.c_str());
+                if (hostPath.empty()) {
+                    return ISFS_EINVAL;
+                }
                 
                 if (!PathExists(hostPath)) {
                     return ISFS_ENOENT;
@@ -382,10 +389,13 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
                 if (!inBufPtr || inLen < 0x80) {
                     return ISFS_EINVAL;
                 }
-                const char* srcPath = (const char*)Memory::GetPointer(inBufPtr);
-                const char* dstPath = (const char*)Memory::GetPointer(inBufPtr + 0x40);
-                const std::filesystem::path srcHost = TranslateNandPath(srcPath);
-                const std::filesystem::path dstHost = TranslateNandPath(dstPath);
+                const std::string srcPath = ReadGuestCString(inBufPtr, 64);
+                const std::string dstPath = ReadGuestCString(inBufPtr + 0x40, 64);
+                const std::filesystem::path srcHost = TranslateNandPath(srcPath.c_str());
+                const std::filesystem::path dstHost = TranslateNandPath(dstPath.c_str());
+                if (srcHost.empty() || dstHost.empty()) {
+                    return ISFS_EINVAL;
+                }
                 
                 if (NandRename(srcHost, dstHost)) {
                     return ISFS_OK;

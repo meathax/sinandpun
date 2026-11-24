@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 
 // Guest events and VI run on the emulation thread. Aurora snapshots a synchronized
 // view-space packet for draws, so render workers never dereference guest memory.
@@ -83,14 +84,37 @@ uint32_t activeCamera() {
     return pointerAt(pointerAt(Memory::Read32(0x804B7700u-23904),88),448);
 }
 
-bool readRtCamera(float* view, uint32_t* scene) {
+// The ray tracer asks for the camera while GX commands are recorded, which
+// runs on the GX worker. Guest memory is only read on the emulation thread
+// (UpdateSceneLighting at retrace); the worker reads this snapshot.
+std::mutex rtCameraMutex;
+std::array<float, 12> rtCameraView{};
+uint32_t rtCameraScene = 0;
+bool rtCameraValid = false;
+
+void snapshotRtCamera() {
+    std::array<float, 12> view{};
+    bool valid = false;
     const auto camera = activeCamera();
-    if (!camera || !Memory::Contains(camera, 176)) return false;
-    for (unsigned i = 0; i < 12; ++i) {
-        view[i] = guestFloat(camera + 128 + 4*i);
-        if (!std::isfinite(view[i]) || std::abs(view[i]) > 1.e7f) return false;
+    if (camera && Memory::Contains(camera, 176)) {
+        valid = true;
+        for (unsigned i = 0; i < 12; ++i) {
+            view[i] = guestFloat(camera + 128 + 4*i);
+            valid &= std::isfinite(view[i]) && std::abs(view[i]) <= 1.e7f;
+        }
     }
-    *scene = Memory::Read8(0x804B1968u);
+    const uint32_t scene = Memory::Read8(0x804B1968u);
+    std::lock_guard lock(rtCameraMutex);
+    rtCameraView = view;
+    rtCameraScene = scene;
+    rtCameraValid = valid;
+}
+
+bool readRtCamera(float* view, uint32_t* scene) {
+    std::lock_guard lock(rtCameraMutex);
+    if (!rtCameraValid) return false;
+    std::copy(rtCameraView.begin(), rtCameraView.end(), view);
+    *scene = rtCameraScene;
     return true;
 }
 } // namespace
@@ -98,6 +122,7 @@ bool readRtCamera(float* view, uint32_t* scene) {
 void UpdateSceneLighting(uint8_t stage) {
     static const bool registered = [] { aurora_set_rt_camera_provider(readRtCamera); return true; }();
     (void)registered;
+    snapshotRtCamera();
     static int lastStage = -1;
     static unsigned previousMask = 0;
     const unsigned mask = aurora_scene_effect_mask();

@@ -53,11 +53,18 @@ bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channel
         SDL_DestroyAudioStream(m_stream);
         m_stream = nullptr;
     }
+    // Shutdown quits the subsystem once, so initialize it only once. Until the
+    // new stream opens, the backend is not ready: a later Init with the old
+    // format must not return early with no stream.
+    m_initialized = false;
+    m_sampleRate = 0;
+    m_channels = 0;
 
-    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+    if (!m_subsystemOpen && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         RT_LOG(RT_TAG_AUDIO) << "SDL_InitSubSystem(SDL_INIT_AUDIO) failed: " << SDL_GetError() << std::endl;
         return false;
     }
+    m_subsystemOpen = true;
 
     SDL_AudioSpec spec{};
     spec.format = SDL_AUDIO_S16LE;
@@ -104,8 +111,9 @@ void AudioBackend::Shutdown() {
         SDL_DestroyAudioStream(m_stream);
         m_stream = nullptr;
     }
-    if (m_initialized) {
+    if (m_subsystemOpen) {
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        m_subsystemOpen = false;
     }
     m_initialized = false;
     m_sampleRate = 0;
