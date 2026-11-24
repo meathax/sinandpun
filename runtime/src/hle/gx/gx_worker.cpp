@@ -188,7 +188,12 @@ void WorkerMain() {
     } signalExit;
     AuroraSetGxProducerThread();
 #if defined(_WIN32)
-    SetThreadDescription(GetCurrentThread(), L"GX worker");
+    // Windows 10 1607+; resolved at runtime so older builds still load the exe.
+    using SetThreadDescription_t = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+    if (auto fn = reinterpret_cast<SetThreadDescription_t>(reinterpret_cast<void*>(
+            GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription")))) {
+        fn(GetCurrentThread(), L"GX worker");
+    }
 #endif
     uint64_t tail = g_tail.load(std::memory_order_relaxed);
     for (;;) {

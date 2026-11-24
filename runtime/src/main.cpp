@@ -818,9 +818,11 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
                 message.append("\n\n[Additional details were written to the crash log.]");
             }
         }
-        message.append("\n\nSee the WiiCompiled Logs folder for the full diagnostic.");
+        message.append("\n\nThe full diagnostic is in:\n");
+        message.append(RuntimeConfigFile::PathToUtf8(GetDefaultRuntimeLogDirectory()));
+        message.append("\nPlease attach that run's log folder when reporting this.");
 #if defined(_WIN32)
-        ::MessageBoxA(nullptr, message.c_str(), "WiiCompiled - Fatal Error",
+        ::MessageBoxA(nullptr, message.c_str(), "Sin & Punishment Recomp - Fatal Error",
                       MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TASKMODAL);
 #else
         // The shipped product is Windows-first. Keep non-Windows builds safe
@@ -1361,6 +1363,11 @@ bool ValidateExtractedGameFolder(const std::filesystem::path& root, std::string&
         std::string(gameId.data(), gameId.size()) != DiscImport::kGameId) {
         error = "The selected extracted folder is not Sin & Punishment: Star Successor, "
                 "NTSC-U (R2VE01).";
+        return false;
+    }
+    if (!RuntimeConfigFile::IsThisGamesDiscRoot(root)) {
+        error = "The selected folder is the disc's UPDATE partition, not the game (DATA) partition: "
+                "files/gs2.sel is missing. Select the DATA folder of the extracted disc.";
         return false;
     }
     return true;

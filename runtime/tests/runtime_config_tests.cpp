@@ -256,5 +256,61 @@ int main() {
                      RuntimeConfigFile::PortControllerButtonKey(4, 0).empty() &&
                      RuntimeConfigFile::PortControllerButtonKey(0, 12).empty(),
                  "per-port button key layout is wrong")) return 1;
+    {
+        // Pre-1.0.10 data in the shared "WiiCompiled" folder moves only when it is this game's.
+        namespace fs = std::filesystem;
+        const fs::path base = fs::temp_directory_path() / "sin-legacy-migration-test";
+        std::error_code ec;
+        fs::remove_all(base, ec);
+        auto makeGame = [](const fs::path& root, const char* id) {
+            fs::create_directories(root / "files");
+            fs::create_directories(root / "sys");
+            std::ofstream(root / "sys" / "boot.bin", std::ios::binary) << id;
+            std::ofstream(root / "files" / "gs2.sel", std::ios::binary) << "sel";
+        };
+        const fs::path legacy = base / "ours" / RuntimeConfigFile::kLegacyApplicationDirectoryName;
+        const fs::path target = base / "ours" / RuntimeConfigFile::kApplicationDirectoryName;
+        makeGame(legacy / "Game", "R2VE01");
+        fs::create_directories(legacy / "NAND" / "title");
+        std::ofstream(legacy / "NAND" / "title" / "save.bin") << "save";
+        std::ofstream(legacy / RuntimeConfigFile::kConfigFileName) << "[paths]\ndvd_root = \"Game\"\n";
+        RuntimeConfigFile::MigrateLegacyApplicationData(target);
+        if (!Require(RuntimeConfigFile::DiscGameId(target / "Game") == "R2VE01" &&
+                         !fs::exists(legacy / "Game") && fs::exists(target / "NAND" / "title" / "save.bin") &&
+                         fs::exists(target / RuntimeConfigFile::kConfigFileName) &&
+                         fs::exists(legacy / "NAND" / "title" / "save.bin"),
+                     "legacy Sin & Punishment data was not migrated")) return 1;
+
+        // Another WiiCompiled port's data (Mario Kart Wii) must stay where it is and not be adopted.
+        const fs::path otherLegacy = base / "other" / RuntimeConfigFile::kLegacyApplicationDirectoryName;
+        const fs::path otherTarget = base / "other" / RuntimeConfigFile::kApplicationDirectoryName;
+        makeGame(otherLegacy / "Game", "RMCE01");
+        std::ofstream(otherLegacy / RuntimeConfigFile::kConfigFileName) << "[paths]\ndvd_root = \"Game\"\n";
+        RuntimeConfigFile::MigrateLegacyApplicationData(otherTarget);
+        if (!Require(!fs::exists(otherTarget) && fs::exists(otherLegacy / "Game" / "sys" / "boot.bin") &&
+                         !RuntimeConfigFile::IsThisGamesDiscRoot(otherLegacy / "Game"),
+                     "another game's WiiCompiled data was adopted")) return 1;
+
+        // dvd_root pointing at an extracted R2V folder elsewhere also identifies our data.
+        const fs::path extLegacy = base / "ext" / RuntimeConfigFile::kLegacyApplicationDirectoryName;
+        const fs::path extTarget = base / "ext" / RuntimeConfigFile::kApplicationDirectoryName;
+        makeGame(base / "extracted", "R2VE01");
+        fs::create_directories(extLegacy);
+        std::ofstream(extLegacy / RuntimeConfigFile::kConfigFileName)
+            << "[paths]\ndvd_root = '" << RuntimeConfigFile::PathToUtf8(base / "extracted") << "'\n";
+        RuntimeConfigFile::MigrateLegacyApplicationData(extTarget);
+        if (!Require(fs::exists(extTarget / RuntimeConfigFile::kConfigFileName) &&
+                         fs::exists(base / "extracted" / "sys" / "boot.bin"),
+                     "config-only legacy data was not migrated")) return 1;
+
+        // The disc's UPDATE partition shares the game ID but is not game data.
+        const fs::path update = base / "update";
+        fs::create_directories(update / "files");
+        fs::create_directories(update / "sys");
+        std::ofstream(update / "sys" / "boot.bin", std::ios::binary) << "R2VE01";
+        if (!Require(!RuntimeConfigFile::IsThisGamesDiscRoot(update),
+                     "UPDATE partition was accepted as game data")) return 1;
+        fs::remove_all(base, ec);
+    }
     return 0;
 }

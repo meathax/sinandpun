@@ -40,8 +40,13 @@ namespace {
 
 bool LooksLikeGameRoot(const fs::path& root) {
     std::error_code ec;
-    return !root.empty() && fs::is_directory(root / "files", ec) && fs::is_regular_file(root / "sys" / "fst.bin", ec) &&
-           fs::is_regular_file(root / "sys" / "main.dol", ec);
+    if (root.empty() || !fs::is_directory(root / "files", ec) || !fs::is_regular_file(root / "sys" / "fst.bin", ec) ||
+        !fs::is_regular_file(root / "sys" / "main.dol", ec)) {
+        return false;
+    }
+    // Another game's extracted data (e.g. left by a different WiiCompiled port) is not usable:
+    // treat it as missing so the player is asked for this game's disc instead of booting it.
+    return !fs::is_regular_file(root / "sys" / "boot.bin", ec) || RuntimeConfigFile::IsThisGamesDiscRoot(root);
 }
 
 void PointConfigAtManagedGame() {

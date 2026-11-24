@@ -298,6 +298,19 @@ static const fs::path& GetDvdRoot() {
                         "', but this build was compiled for region " + ::GuestRegion::CurrentFacts().gameId +
                         ".\nThe extracted game assets must match the region of the compiled executable.");
             }
+            // Any other game's files would boot a foreign main.dol against this game's
+            // translated code and die later in an unrelated MMIO/memory fault.
+            if (std::memcmp(id, ::GuestRegion::CurrentFacts().gameId, 6) != 0) {
+                FailDvd("dvd_wrong_game", "DVD root holds a different game",
+                        std::string("Configured DVD root has disc ID '") + id +
+                        "', not Sin & Punishment: Star Successor (" + ::GuestRegion::CurrentFacts().gameId +
+                        ").\nPoint [paths] dvd_root at this game's data, or import its disc again.");
+            }
+            if (!RuntimeConfigFile::IsThisGamesDiscRoot(path)) {
+                FailDvd("dvd_update_partition", "DVD root is not the game partition",
+                        "Configured DVD root has no files/gs2.sel. It is most likely the disc's UPDATE "
+                        "partition; point [paths] dvd_root at the extracted DATA partition instead.");
+            }
         }
         g_dvdRoot = path;
     });

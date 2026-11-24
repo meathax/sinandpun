@@ -98,7 +98,15 @@ void InitProcess() {
             for (ULONG cpu : cpus) {
                 group.Mask |= KAFFINITY{1} << cpu;
             }
-            SetProcessDefaultCpuSetMasks(GetCurrentProcess(), &group, 1);
+            // Windows 11+ only: a static import stops the exe loading at all on Windows 10,
+            // so resolve it at runtime and skip P-core pinning where it is absent.
+            using SetProcessDefaultCpuSetMasks_t = BOOL(WINAPI*)(HANDLE, PGROUP_AFFINITY, USHORT);
+            if (auto fn = reinterpret_cast<SetProcessDefaultCpuSetMasks_t>(reinterpret_cast<void*>(
+                    GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetProcessDefaultCpuSetMasks")))) {
+                fn(GetCurrentProcess(), &group, 1);
+            } else {
+                RT_LOGF(RT_TAG_RUNTIME, "[sched] SetProcessDefaultCpuSetMasks unavailable (pre-Windows 11)\n");
+            }
         }
         RT_LOGF(RT_TAG_RUNTIME, "[sched] mask=0x%x P-core logical cpus=%zu\n", mask, cpus.size());
     } else {

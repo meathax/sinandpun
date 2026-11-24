@@ -196,7 +196,11 @@ inline std::optional<std::filesystem::path> ProcessArgumentDataDirectory() {
 }
 
 inline constexpr const char* kConfigFileName = "Config.toml";
-inline constexpr const char* kApplicationDirectoryName = "WiiCompiled";
+// Game-specific so this port never shares Config.toml, Game/ or NAND/ with another WiiCompiled-based
+// port: a foreign Game/ folder booted that game's main.dol against this game's translated code.
+inline constexpr const char* kApplicationDirectoryName = "SinAndPunishmentRecomp";
+// Folder used up to 1.0.9; migrated by MigrateLegacyApplicationData when it holds this game's data.
+inline constexpr const char* kLegacyApplicationDirectoryName = "WiiCompiled";
 
 // Portable layout. A directory holding kPortableMarkerFileName is a portable root; every piece of
 // runtime user state (Config.toml, NAND, cache, Logs) lives in <root>/UserData instead of
@@ -468,6 +472,76 @@ inline const std::optional<std::filesystem::path>& PortableRootDirectory() {
     return root;
 }
 
+// Six-character disc ID from <root>/sys/boot.bin, or empty when absent/unreadable.
+inline std::string DiscGameId(const std::filesystem::path& root) {
+    std::ifstream file(root / "sys" / "boot.bin", std::ios::binary);
+    char id[6] = {};
+    if (!file || !file.read(id, sizeof id)) return {};
+    return std::string(id, sizeof id);
+}
+
+// True when the folder holds Sin & Punishment: Star Successor game-partition data (any region;
+// dvd.cpp enforces the exact region). The disc's UPDATE partition carries the same R2Vxxx ID but a
+// tiny foreign FST, so a real game file (the stage module list) is required as well.
+inline bool IsThisGamesDiscRoot(const std::filesystem::path& root) {
+    std::error_code ec;
+    return DiscGameId(root).compare(0, 3, "R2V") == 0 &&
+           std::filesystem::is_regular_file(root / "files" / "gs2.sel", ec);
+}
+
+// One-time move of this game's data out of the shared pre-1.0.10 "WiiCompiled" folder. Only
+// happens when that folder demonstrably belongs to this game (its Game/ or configured dvd_root
+// is an R2V disc); another port's data there is left alone. Never throws: a failed step just
+// means the player is asked for the disc again.
+inline void MigrateLegacyApplicationData(const std::filesystem::path& directory) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path legacy = directory.parent_path() / kLegacyApplicationDirectoryName;
+    if (directory.empty() || fs::exists(directory, ec) || !fs::is_directory(legacy, ec)) return;
+
+    const fs::path legacyGame = legacy / "Game";
+    bool ours = IsThisGamesDiscRoot(legacyGame);
+    if (!ours) {
+        // An extracted folder configured elsewhere: [paths] dvd_root.
+        try {
+            std::ifstream stream(legacy / kConfigFileName, std::ios::binary);
+            if (stream) {
+                const auto data = toml::parse(stream, PathToUtf8(legacy / kConfigFileName));
+                const auto text = toml::find<std::string>(data, "paths", "dvd_root");
+                if (!text.empty()) {
+                    fs::path root = PathFromUtf8(text);
+                    if (root.is_relative()) root = legacy / root;
+                    ours = IsThisGamesDiscRoot(root);
+                }
+            }
+        } catch (...) {
+        }
+    }
+    if (!ours) return;
+
+    try {
+        fs::create_directories(directory);
+        for (const char* file : {kConfigFileName, "imgui.ini", "gamecontrollerdb.txt"}) {
+            if (fs::is_regular_file(legacy / file, ec)) fs::copy_file(legacy / file, directory / file, ec);
+        }
+        for (const char* folder : {"NAND", "texture_replacements"}) {
+            if (fs::is_directory(legacy / folder, ec)) {
+                fs::copy(legacy / folder, directory / folder, fs::copy_options::recursive, ec);
+            }
+        }
+        // The extracted disc is gigabytes and is only this game's: move it (same volume) instead of copying.
+        if (IsThisGamesDiscRoot(legacyGame)) {
+            fs::rename(legacyGame, directory / "Game", ec);
+            if (!ec && fs::is_regular_file(legacy / "prepared.txt", ec)) {
+                fs::rename(legacy / "prepared.txt", directory / "prepared.txt", ec);
+            }
+        }
+    } catch (...) {
+    }
+}
+
+inline std::filesystem::path DefaultApplicationDataDirectory();
+
 inline std::filesystem::path ApplicationDataDirectory() {
     if (const auto& override = ApplicationDataDirectoryOverride()) {
         return *override;
@@ -486,6 +560,15 @@ inline std::filesystem::path ApplicationDataDirectory() {
     if (const auto& portableRoot = PortableRootDirectory()) {
         return *portableRoot / kPortableUserDataDirectoryName;
     }
+    static const std::filesystem::path directory = [] {
+        std::filesystem::path path = DefaultApplicationDataDirectory();
+        MigrateLegacyApplicationData(path);
+        return path;
+    }();
+    return directory;
+}
+
+inline std::filesystem::path DefaultApplicationDataDirectory() {
 #ifdef _WIN32
     PWSTR rawPath = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &rawPath)) && rawPath) {
