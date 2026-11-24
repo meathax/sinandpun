@@ -26,7 +26,7 @@ class GczImage final : public RawImage {
     uint32_t cached = UINT32_MAX;
 public:
     explicit GczImage(const fs::path& path) : file(path) {
-        uint32_t magic, count;
+        uint32_t magic = 0, count = 0;
         CheckContainer(file.Read(0, &magic, 4) && magic == 0xb10bc001 &&
             file.Read(8, &storedSize, 8) && file.Read(16, &discSize, 8) &&
             file.Read(24, &blockSize, 4) && file.Read(28, &count, 4));
@@ -98,12 +98,34 @@ class RvzImage final : public RawImage {
     Bytes header, parts, groups, block;
     std::vector<bool> badSector;
     uint32_t partStride;
+    bool wia = false;          // WIA: 8-byte group entries, purge codec, no packing
+    size_t groupStride = 12;
     std::vector<Range> raw, partition;
     const Range* cachedRange = nullptr;
     uint32_t cachedIndex = UINT32_MAX;
 
+    // WIA "purge": {offset, size, data} segments over a zero background, then a
+    // SHA-1 of everything before it (including uncompressed exception lists).
+    Bytes Purge(const Bytes& input, size_t start, size_t expected) const {
+        CheckContainer(start <= input.size() && input.size() - start >= 20 && expected <= (128u << 20));
+        const size_t end = input.size() - 20;
+        uint8_t digest[20];
+        Sha1().Digest(input.data(), end, digest);
+        CheckContainer(!std::memcmp(digest, input.data() + end, 20));
+        Bytes out(expected, 0);
+        for (size_t i = start; i < end;) {
+            CheckContainer(end - i >= 8);
+            const uint32_t offset = Be32(input.data() + i), size = Be32(input.data() + i + 4);
+            i += 8;
+            CheckContainer(size <= end - i && offset <= expected && size <= expected - offset);
+            std::memcpy(out.data() + offset, input.data() + i, size);
+            i += size;
+        }
+        return out;
+    }
     Bytes Decode(Bytes input, uint32_t method, size_t limit) const {
         CheckContainer(limit <= (128u << 20));
+        if (method == 1) return Purge(input, 0, limit);
         if (!method) {
             CheckContainer(input.size() <= limit);
             return input;
@@ -150,12 +172,12 @@ class RvzImage final : public RawImage {
         if (!range.length) return;
         CheckContainer(range.start <= UINT64_MAX - range.length &&
             (range.length - 1) / unit + 1 == range.count &&
-            uint64_t(range.first) + range.count <= groups.size() / 12);
+            uint64_t(range.first) + range.count <= groups.size() / groupStride);
         ranges.push_back(range);
     }
     void Load(const Range& range, uint32_t relative, size_t unit, bool plain) {
-        const auto* g = groups.data() + size_t(range.first + relative) * 12;
-        const uint32_t flags = Be32(g+4), stored = flags & 0x7fffffff, packed = Be32(g+8);
+        const auto* g = groups.data() + size_t(range.first + relative) * groupStride;
+        const uint32_t flags = Be32(g+4), stored = wia ? flags : flags & 0x7fffffff, packed = wia ? 0 : Be32(g+8);
         const uint64_t pos = uint64_t(relative) * unit;
         const size_t expected = std::min<uint64_t>(unit, range.length - pos);
         block.resize(expected);
@@ -165,9 +187,12 @@ class RvzImage final : public RawImage {
             return;
         }
         const unsigned lists = plain ? std::max(1u, chunkSize / 0x200000) : 0;
-        const uint32_t method = flags >> 31 ? codec : 0;
-        auto input = Decode(ReadBytes(file, uint64_t(Be32(g)) * 4, stored), method,
-                            uint64_t(packed ? packed : expected) + lists * (3328 * 22 + 4));
+        // Exception lists are compressed with the data, except in uncompressed
+        // RVZ groups and in WIA NONE/PURGE groups (then padded to 4 bytes).
+        const bool compressedGroup = wia ? codec >= 2 : (flags >> 31) != 0;
+        auto input = ReadBytes(file, uint64_t(Be32(g)) * 4, stored);
+        if (compressedGroup)
+            input = Decode(std::move(input), codec, uint64_t(packed ? packed : expected) + lists * (3328 * 22 + 4));
         size_t i = 0;
         for (unsigned list = 0; list < lists; ++list) {
             CheckContainer(i + 2 <= input.size());
@@ -183,7 +208,11 @@ class RvzImage final : public RawImage {
                     badSector[sector] = true;
             }
         }
-        if (!method) i = (i + 3) & ~size_t(3);
+        if (!compressedGroup) i = (i + 3) & ~size_t(3);
+        if (wia && codec == 1) {
+            input = Purge(input, i, expected);
+            i = 0;
+        }
         CheckContainer(i <= input.size() && input.size() - i == (packed ? packed : expected));
         if (!packed) { std::memcpy(block.data(), input.data() + i, expected); return; }
         size_t produced = 0;
@@ -230,7 +259,9 @@ class RvzImage final : public RawImage {
 public:
     explicit RvzImage(const fs::path& path) : file(path) {
         auto first = ReadBytes(file, 0, 0x48);
-        CheckContainer(!std::memcmp(first.data(), "RVZ\1", 4) && Be32(first.data()+8) <= 0x01000000 &&
+        wia = !std::memcmp(first.data(), "WIA\1", 4);
+        groupStride = wia ? 8 : 12;
+        CheckContainer((wia || !std::memcmp(first.data(), "RVZ\1", 4)) && Be32(first.data()+8) <= 0x01000000 &&
                        Be64(first.data()+0x2c) == file.Size());
         CheckHash(first.data(), 0x34, first.data()+0x34);
         discSize = Be64(first.data()+0x24);
@@ -239,14 +270,14 @@ public:
         CheckHash(header.data(), header.size(), first.data()+16);
         codec = Be32(header.data()+4);
         chunkSize = Be32(header.data()+12);
-        CheckContainer(codec != 1 && codec <= 5 && chunkSize >= kClusterSize && chunkSize <= (64u << 20) &&
+        CheckContainer((wia ? codec <= 4 : codec != 1 && codec <= 5) && chunkSize >= kClusterSize && chunkSize <= (64u << 20) &&
             (chunkSize < 0x200000 ? (chunkSize & (chunkSize - 1)) == 0 : chunkSize % 0x200000 == 0));
         partStride = Be32(header.data()+0x94);
         const uint32_t count = Be32(header.data()+0x90);
         CheckContainer(count == 0 || partStride >= 16);
         parts = ReadBytes(file, Be64(header.data()+0x98), uint64_t(count) * partStride);
         CheckHash(parts.data(), parts.size(), header.data()+0xa0);
-        groups = Table(0xc4, 12);
+        groups = Table(0xc4, groupStride);
         auto entries = Table(0xb4, 24);
         for (size_t i = 0; i < entries.size(); i += 24) {
             const auto* p = entries.data() + i;
@@ -290,5 +321,48 @@ public:
     }
     void ReadPartition(uint64_t off, void* dst, size_t size) override {
         CheckContainer(ReadRanges(partition, off, static_cast<uint8_t*>(dst), size, true));
+    }
+};
+
+// CISO (wiimms/USB loader): "CISO", little-endian block size, a 0x7FF8-entry
+// presence map, then the present blocks in order from offset 0x8000.
+class CisoImage final : public RawImage {
+    FileStream file;
+    uint32_t blockSize = 0;
+    std::vector<int64_t> slot;  // stored block index, -1 = zeros
+public:
+    explicit CisoImage(const fs::path& path) : file(path) {
+        auto head = ReadBytes(file, 0, 0x8000);
+        CheckContainer(!std::memcmp(head.data(), "CISO", 4));
+        std::memcpy(&blockSize, head.data() + 4, 4);
+        CheckContainer(blockSize >= 0x8000 && blockSize <= (64u << 20) && (blockSize & (blockSize - 1)) == 0);
+        slot.assign(0x8000 - 8, -1);
+        int64_t stored = 0;
+        size_t last = 0;
+        for (size_t i = 0; i < slot.size(); ++i) {
+            CheckContainer(head[8 + i] <= 1);
+            if (head[8 + i]) { slot[i] = stored++; last = i + 1; }
+        }
+        CheckContainer(stored > 0 && 0x8000 + uint64_t(stored - 1) * blockSize < file.Size());
+        slot.resize(last);
+    }
+    uint64_t Size() const override { return uint64_t(slot.size()) * blockSize; }
+    bool Read(uint64_t off, void* dst, size_t size) override {
+        auto* out = static_cast<uint8_t*>(dst);
+        while (size) {
+            const uint64_t index = off / blockSize;
+            const size_t within = static_cast<size_t>(off % blockSize), n = std::min<size_t>(size, blockSize - within);
+            if (index >= slot.size()) {
+                if (off >= 0x230480000ull) return false;  // past a dual-layer Wii disc
+                std::memset(out, 0, size);
+                return true;
+            }
+            if (slot[index] < 0) std::memset(out, 0, n);
+            else if (!file.Read(0x8000 + uint64_t(slot[index]) * blockSize + within, out, n)) return false;
+            off += n;
+            out += n;
+            size -= n;
+        }
+        return true;
     }
 };

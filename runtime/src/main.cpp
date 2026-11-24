@@ -1471,7 +1471,11 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
 
     std::string error;
     if (std::filesystem::is_directory(absoluteGamePath, ec)) {
-        if (!PrepareExtractedFolder(absoluteGamePath, error)) {
+        // Dolphin extracts the game into <folder>/DATA beside UPDATE.
+        auto gameFolder = absoluteGamePath;
+        if (!DiscImport::IsGameDirectoryComplete(gameFolder) && DiscImport::IsGameDirectoryComplete(gameFolder / "DATA"))
+            gameFolder /= "DATA";
+        if (!PrepareExtractedFolder(gameFolder, error)) {
             std::cerr << "[prepare] " << error << '\n';
             return EXIT_FAILURE;
         }
@@ -1481,7 +1485,7 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
 
     if (!std::filesystem::is_regular_file(absoluteGamePath, ec) ||
         !DiscImport::IsSupportedDiscExtension(absoluteGamePath)) {
-        std::cerr << "[prepare] Select a supported R2VE01 .iso, .wbfs, .rvz, .gcz, .gcm, .bin or .cue disc, "
+        std::cerr << "[prepare] Select a supported R2VE01 .iso, .wbfs, .rvz, .wia, .chd, .ciso, .gcz, .gcm, .bin or .cue disc, "
                      "or an extracted folder containing sys/ and files/.\n";
         return EXIT_FAILURE;
     }

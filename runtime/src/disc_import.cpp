@@ -251,6 +251,49 @@ private:
     uint32_t m_stride, m_dataOffset;
 };
 
+// A WBFS split by a FAT32 tool: game.wbfs, game.wbf1, game.wbf2, ... all but the
+// last part share the first part's size.
+class SplitFile {
+public:
+    explicit SplitFile(const fs::path& path) {
+        m_parts.push_back(std::make_unique<FileStream>(path));
+        for (int i = 1; i < 10; ++i) {
+            fs::path next = path;
+            next.replace_extension(".wbf" + std::to_string(i));
+            std::error_code ec;
+            if (!fs::is_regular_file(next, ec)) break;
+            m_parts.push_back(std::make_unique<FileStream>(next));
+        }
+        m_partSize = m_parts.front()->Size();
+        for (const auto& part : m_parts) m_size += part->Size();
+    }
+    explicit SplitFile(const std::vector<fs::path>& paths) {
+        for (const auto& path : paths) m_parts.push_back(std::make_unique<FileStream>(path));
+        m_partSize = m_parts.front()->Size();
+        for (const auto& part : m_parts) m_size += part->Size();
+    }
+    uint64_t Size() const { return m_size; }
+    size_t Parts() const { return m_parts.size(); }
+    bool Read(uint64_t off, void* dst, size_t size) {
+        auto* out = static_cast<uint8_t*>(dst);
+        while (size) {
+            const uint64_t index = m_partSize ? off / m_partSize : 0;
+            if (index >= m_parts.size()) return false;
+            const uint64_t within = off - index * m_partSize;
+            const size_t n = static_cast<size_t>(std::min<uint64_t>(size, m_partSize - within));
+            if (!m_parts[static_cast<size_t>(index)]->Read(within, out, n)) return false;
+            off += n;
+            out += n;
+            size -= n;
+        }
+        return true;
+    }
+
+private:
+    std::vector<std::unique_ptr<FileStream>> m_parts;
+    uint64_t m_partSize = 0, m_size = 0;
+};
+
 class WbfsImage : public RawImage {
 public:
     explicit WbfsImage(const fs::path& path) : m_stream(path) {
@@ -279,6 +322,8 @@ public:
             if (m_table[static_cast<size_t>(index)] == 0) {
                 std::memset(out, 0, chunk);
             } else if (!m_stream.Read((static_cast<uint64_t>(m_table[static_cast<size_t>(index)]) << m_wbfsShift) + within, out, chunk)) {
+                if (m_stream.Parts() == 1)
+                    throw ImportError("The WBFS file is incomplete. If it was split (.wbf1, .wbf2, ...), keep all parts next to it.");
                 return false;
             }
             out += chunk;
@@ -290,9 +335,23 @@ public:
     uint64_t Size() const override { return static_cast<uint64_t>(m_table.size()) << m_wbfsShift; }
 
 private:
-    FileStream m_stream;
+    SplitFile m_stream;
     uint32_t m_wbfsShift = 0;
     std::vector<uint16_t> m_table;
+};
+
+// FAT32-split ISOs: game.part0.iso / game.part1.iso, game.iso.001 / .002, game.iso.0 / .1, game.001 / game.002.
+// Returns the ordered parts when `path` is one of them, else empty.
+std::vector<fs::path> FindSplitParts(const fs::path& path);
+
+class SplitIsoImage : public RawImage {
+public:
+    explicit SplitIsoImage(const std::vector<fs::path>& parts) : m_split(parts) {}
+    bool Read(uint64_t off, void* dst, size_t size) override { return m_split.Read(off, dst, size); }
+    uint64_t Size() const override { return m_split.Size(); }
+
+private:
+    SplitFile m_split;
 };
 
 std::string Lower(std::string s) {
@@ -321,20 +380,93 @@ fs::path BinFromCue(const fs::path& cue) {
 
 #include "compressed_disc.inc"
 
+#include "chd_disc.inc"
+
+std::vector<fs::path> FindSplitParts(const fs::path& path) {
+    std::error_code ec;
+    const std::string name = path.filename().string();
+    const std::string lower = Lower(name);
+    auto exists = [&](const fs::path& p) { return fs::is_regular_file(p, ec); };
+    auto collect = [&](auto makeName, int first) {
+        std::vector<fs::path> parts;
+        for (int i = first; i < first + 64; ++i) {
+            const fs::path next = path.parent_path() / makeName(i);
+            if (!exists(next)) break;
+            parts.push_back(next);
+        }
+        return parts;
+    };
+    // name.partN.iso
+    const size_t part = lower.rfind(".part");
+    if (part != std::string::npos && lower.size() > part + 9 && lower.compare(lower.size() - 4, 4, ".iso") == 0) {
+        const std::string digits = lower.substr(part + 5, lower.size() - part - 9);
+        if (!digits.empty() && std::all_of(digits.begin(), digits.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); })) {
+            const std::string stem = name.substr(0, part);
+            auto parts = collect([&](int i) { return stem + ".part" + std::to_string(i) + ".iso"; }, 0);
+            if (parts.empty()) parts = collect([&](int i) { return stem + ".part" + std::to_string(i) + ".iso"; }, 1);
+            if (parts.size() > 1) return parts;
+        }
+    }
+    // numeric extension: .001/.002 (zero padded) or .0/.1
+    const std::string ext = path.extension().string();
+    if (ext.size() >= 2 && ext.size() <= 4 && std::all_of(ext.begin() + 1, ext.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); })) {
+        const std::string stem = name.substr(0, name.size() - ext.size());
+        const size_t width = ext.size() - 1;
+        auto numbered = [&](int i) {
+            std::string digits = std::to_string(i);
+            return stem + "." + std::string(width > digits.size() ? width - digits.size() : 0, '0') + digits;
+        };
+        auto parts = collect(numbered, 0);
+        if (parts.empty()) parts = collect(numbered, 1);
+        if (parts.size() > 1) return parts;
+    }
+    return {};
+}
+
 std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
     const std::string ext = ExtensionOf(chosen);
-    if (ext == ".rvz") return std::make_unique<RvzImage>(chosen);
-    if (ext == ".gcz") return std::make_unique<GczImage>(chosen);
-    if (ext == ".wad") throw ImportError("WAD files install Wii titles or channels. This port needs the R2VE01 game disc or its extracted files.");
-    if (ext == ".wia" || ext == ".ciso" || ext == ".nfs") {
-        throw ImportError("Compressed or container formats (" + ext + ") are not supported. Convert the disc to a plain .iso (Dolphin: right-click the game, Convert) and select that instead.");
+    {
+        auto parts = FindSplitParts(chosen);
+        if (parts.size() > 1) {
+            uint8_t magic[8] = {};
+            FileStream(parts.front()).Read(0x18, magic, 8);
+            if (Be32(magic) == kWiiMagic || Be32(magic + 4) == kGcMagic) return std::make_unique<SplitIsoImage>(parts);
+        }
     }
+    if (ext == ".wad") throw ImportError("WAD files install Wii titles or channels. This port needs the R2VE01 game disc or its extracted files.");
+    if (ext == ".dol" || ext == ".elf" || ext == ".app" || ext == ".tik" || ext == ".tmd")
+        throw ImportError("That is a single Wii file, not a disc image. Select the whole game disc image (ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ) or the extracted game folder.");
+    if (ext == ".nfs") throw ImportError("Wii U virtual-console .nfs files are not supported. Use an ISO, WBFS, RVZ, WIA, CHD, CISO or GCZ image of the Wii disc.");
+    if (ext == ".zip" || ext == ".7z" || ext == ".rar" || ext == ".gz" || ext == ".xz" || ext == ".bz2" || ext == ".zst" || ext == ".tar")
+        throw ImportError("Disc images inside archives must be extracted first. Unpack the archive and select the image inside.");
+    {
+        std::error_code ec;
+        if (fs::is_regular_file(chosen, ec)) {
+            // Detect the container by content so a renamed file still works.
+            FileStream probe(chosen);
+            uint8_t magic[8] = {};
+            probe.Read(0, magic, std::min<uint64_t>(sizeof magic, probe.Size()));
+            if (!std::memcmp(magic, "RVZ\1", 4) || !std::memcmp(magic, "WIA\1", 4)) return std::make_unique<RvzImage>(chosen);
+            if (!std::memcmp(magic, "MComprHD", 8)) return std::make_unique<ChdImage>(chosen);
+            if (!std::memcmp(magic, "CISO", 4)) return std::make_unique<CisoImage>(chosen);
+            uint32_t gcz = 0;
+            std::memcpy(&gcz, magic, 4);
+            if (gcz == 0xb10bc001) return std::make_unique<GczImage>(chosen);
+        }
+    }
+    if (ext == ".rvz" || ext == ".wia" || ext == ".chd" || ext == ".ciso" || ext == ".gcz")
+        throw ImportError("This " + ext + " file is damaged or not really a " + ext.substr(1) + " image.");
     fs::path image = chosen;
     {
         std::error_code dirEc;
         if (fs::is_directory(chosen, dirEc)) {
-            throw ImportError("That is a folder. Select the disc image file itself (.iso, .wbfs or .cue/.bin).");
+            throw ImportError("That is a folder. Select the disc image file itself, or use \"Select extracted folder\" for a folder with sys and files.");
         }
+    }
+    if (ext.size() == 5 && ext.compare(0, 4, ".wbf") == 0 && ext[4] >= '1' && ext[4] <= '9') {
+        image.replace_extension(".wbfs");
+        std::error_code ec;
+        if (!fs::is_regular_file(image, ec)) throw ImportError("This is part of a split WBFS. Keep the .wbfs part next to it and select that.");
     }
     if (ext == ".cue") {
         image = BinFromCue(chosen);
@@ -374,54 +506,67 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
     if (probe.Read(0x200, nk, 4) && std::memcmp(nk, "NKIT", 4) == 0) {
         throw ImportError("NKit-compressed images are not supported. Use a regular .iso dump (or convert it back with NKit's Recover function).");
     }
-    throw ImportError("This does not look like a Wii disc image. Select the .iso, .wbfs or .cue/.bin of your Sin & Punishment: Star Successor disc.");
+    throw ImportError("This does not look like a Wii disc image. Select an ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ or CUE/BIN image of your Sin & Punishment: Star Successor disc.");
 }
 
 // ---- Wii partition ----------------------------------------------------------------------------------------
 
 #include "disc_key.inc"
 
-struct KeyRequired {};
-
 class WiiPartition {
 public:
-    WiiPartition(RawImage& raw, uint64_t partitionOffset, const Sha1& sha, std::atomic<bool>& cancel,
-                 const fs::path& requestedKeyFile)
-        : m_raw(raw), m_sha(sha), m_cancel(cancel) {
+    WiiPartition(RawImage& raw, uint64_t partitionOffset, const Sha1& sha, Progress& progress, const fs::path& image,
+                 const fs::path& requestedKeyFile, const uint8_t gameId[6], std::string& keySource)
+        : m_raw(raw), m_sha(sha), m_cancel(progress.cancel) {
         uint8_t ticket[0x2C0];
         if (!raw.Read(partitionOffset, ticket, sizeof ticket)) throw ImportError("The disc image is truncated (partition header).");
         const uint8_t commonIndex = ticket[0x1F1];
         if (commonIndex > 2) throw ImportError("The disc uses an unknown common key; the image may be damaged.");
-        struct Key {
-            uint8_t bytes[16]{};
-            ~Key() { SecureZeroMemory(bytes, sizeof bytes); }
-        } commonKey, titleKey;
         m_dataStart = partitionOffset + (static_cast<uint64_t>(Be32(ticket + 0x2B8)) << 2);
         const uint64_t encryptedSize = static_cast<uint64_t>(Be32(ticket + 0x2BC)) << 2;
         m_clusters = encryptedSize / kClusterSize;
         if (m_clusters == 0) throw ImportError("The disc image has an empty data partition.");
-        if (requestedKeyFile.empty() && raw.SelectPartition(m_dataStart, m_clusters, nullptr)) {
+        // RVZ/WIA usually store the partition already decrypted: no key needed.
+        if (raw.SelectPartition(m_dataStart, m_clusters, nullptr)) {
+            keySource = "not needed (decrypted partition)";
             m_plainPartition = true;
             m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
             return;
         }
-        auto keyFile = requestedKeyFile;
-        if (keyFile.empty()) {
-            if (const wchar_t* configured = _wgetenv(L"SIN_WII_KEY_FILE")) keyFile = configured;
-        }
-        if (keyFile.empty()) {
-            throw KeyRequired{};
-        }
-        const bool suppliedTitleKey = ReadDiscKey(keyFile, commonIndex, commonKey.bytes);
-        if (suppliedTitleKey) {
-            std::memcpy(titleKey.bytes, commonKey.bytes, sizeof titleKey.bytes);
+        uint8_t cluster0[kClusterHashBytes + 32];
+        if (!raw.Read(m_dataStart, cluster0, sizeof cluster0)) throw ImportError("The disc image is truncated (first game sector).");
+        KeyMatcher matcher(ticket, cluster0, gameId);
+        KeyReport report;
+        std::vector<std::pair<fs::path, std::string>> notes;
+        auto scan = [&](const fs::path& file) {
+            if (m_cancel.load(std::memory_order_relaxed)) throw ImportCancelled{};
+            progress.SetStage("Looking for your Wii key", file.filename().string());
+            std::string note = ScanKeyFile(file, matcher, report);
+            if (matcher.Matched()) {
+                keySource = file.filename().string();
+                return true;
+            }
+            notes.emplace_back(file, std::move(note));
+            return false;
+        };
+        bool explicitFile = false;
+        if (!requestedKeyFile.empty()) {
+            explicitFile = true;
+            scan(requestedKeyFile);
         } else {
-            uint8_t iv[16] = {};
-            std::memcpy(iv, ticket + 0x1DC, 8);
-            AesCbcDecryptor(commonKey.bytes).Decrypt(iv, ticket + 0x1BF, titleKey.bytes, 16);
+            const wchar_t* configured = _wgetenv(L"SIN_WII_KEY_FILE");
+            if (configured && *configured) {
+                explicitFile = true;
+                scan(fs::path(configured));
+            } else {
+                for (const auto& file : NearbyKeyFiles(image))
+                    if (scan(file)) break;
+            }
         }
-        m_plainPartition = raw.SelectPartition(m_dataStart, m_clusters, titleKey.bytes);
-        if (!m_plainPartition) m_aes = std::make_unique<AesCbcDecryptor>(titleKey.bytes);
+        if (!matcher.Matched()) throw KeyRequired{KeyFailureMessage(notes, report, explicitFile)};
+        const uint8_t* titleKey = matcher.TitleKey();
+        m_plainPartition = raw.SelectPartition(m_dataStart, m_clusters, titleKey);
+        if (!m_plainPartition) m_aes = std::make_unique<AesCbcDecryptor>(titleKey);
         m_raw_buf.resize(size_t(kChunkClusters) * kClusterSize);
         m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
     }
@@ -585,7 +730,37 @@ void WriteFile(const fs::path& path, const void* data, size_t size, Progress& pr
 
 bool IsSupportedDiscExtension(const fs::path& path) {
     const std::string ext = ExtensionOf(path);
-    return ext == ".rvz" || ext == ".gcz" || ext == ".iso" || ext == ".wbfs" || ext == ".bin" || ext == ".cue" || ext == ".gcm";
+    static const char* const kExtensions[] = {".rvz", ".wia", ".chd", ".ciso", ".cso", ".gcz", ".iso", ".wbfs", ".bin", ".cue", ".gcm",
+                                              ".img", ".wbf1", ".wbf2", ".wbf3", ".nkit", ".tgc"};
+    for (const char* known : kExtensions)
+        if (ext == known) return true;
+    // Numbered split parts: .001, .002 or .0, .1
+    return ext.size() >= 2 && ext.size() <= 4 && std::all_of(ext.begin() + 1, ext.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); });
+}
+
+bool ProbeDisc(const fs::path& image, DiscInfo& info, std::string& error) {
+    info = {};
+    try {
+        auto raw = OpenDiscImage(image);
+        uint8_t header[0x60] = {};
+        if (!raw->Read(0, header, sizeof header)) throw ImportError("The disc image is truncated.");
+        info.gameId = UpperId(reinterpret_cast<const char*>(header));
+        info.wii = Be32(header + 0x18) == kWiiMagic;
+        char title[0x41] = {};
+        std::memcpy(title, header + 0x20, 0x40);
+        info.title = title;
+        const std::string ext = ExtensionOf(image);
+        uint8_t magic[8] = {};
+        FileStream(image).Read(0, magic, 8);
+        info.format = !std::memcmp(magic, "RVZ\1", 4) ? "RVZ" : !std::memcmp(magic, "WIA\1", 4) ? "WIA" :
+                      !std::memcmp(magic, "MComprHD", 8) ? "CHD" : !std::memcmp(magic, "CISO", 4) ? "CISO" :
+                      !std::memcmp(magic, "WBFS", 4) ? "WBFS" : ext == ".gcz" ? "GCZ" : ext == ".cue" || ext == ".bin" ? "BIN" : "ISO";
+        info.supported = info.wii && info.gameId == kGameId;
+        return true;
+    } catch (const std::exception& e) {
+        error = e.what();
+        return false;
+    }
 }
 
 bool IsGameDirectoryComplete(const fs::path& gameDir) {
@@ -652,7 +827,9 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         if (partitionOffset == 0) throw ImportError("The disc image has no game partition (damaged or scrubbed image).");
 
         Sha1 sha;
-        WiiPartition part(*raw, partitionOffset, sha, progress.cancel, requestedKeyFile);
+        WiiPartition part(*raw, partitionOffset, sha, progress, image, requestedKeyFile,
+                          reinterpret_cast<const uint8_t*>(kGameId), summary.keySource);
+        progress.SetStage("Reading disc image");
 
         uint8_t bootBin[0x440];
         part.Read(0, bootBin, sizeof bootBin);
@@ -785,8 +962,8 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         summary.bytes = bytes;
         summary.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         return Result::Ok;
-    } catch (const KeyRequired&) {
-        error = "This encrypted disc requires your Wii common key or R2VE01 title key.";
+    } catch (const KeyRequired& required) {
+        error = required.message;
         return Result::KeyRequired;
     } catch (const ImportCancelled&) {
         cleanup();

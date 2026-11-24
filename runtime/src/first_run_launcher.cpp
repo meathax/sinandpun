@@ -69,11 +69,25 @@ namespace {
 
 using game_ui::Px;
 
-enum class Phase { Idle, Importing, Done, Failed };
+enum class Phase { Idle, Importing, Done, Failed, NeedKey };
+
+// A disc image or extracted folder found without asking.
+struct FoundGame {
+    fs::path path;
+    std::string label;   // file name shown to the player
+    std::string format;  // "RVZ", "WBFS", "Folder", ...
+    bool folder = false;
+};
 
 struct Launcher {
     Phase phase = Phase::Idle;
     int focus = 0;
+
+    // background search for discs in the usual places
+    std::thread scanThread;
+    std::atomic<bool> scanDone{false};
+    std::vector<FoundGame> found;  // valid once scanDone
+    size_t foundIndex = 0;
 
     // file dialog thread
     std::thread dialogThread;
@@ -138,13 +152,13 @@ void PickInput(Launcher& launcher, HWND owner, Picker picker) {
     launcher.dialogState = 1;
     launcher.dialogThread = std::thread([&launcher, owner, picker] {
         if (picker == Picker::Disc) {
-            launcher.picked = PickFile(owner, L"Select your Wii disc image", L"Wii images and packages",
-                                       L"*.iso;*.wbfs;*.rvz;*.wad;*.gcz;*.cue;*.bin;*.gcm");
+            launcher.picked = PickFile(owner, L"Select your Wii disc image", L"Wii disc images",
+                                       L"*.iso;*.wbfs;*.rvz;*.wia;*.chd;*.ciso;*.cso;*.gcz;*.gcm;*.cue;*.bin;*.img;*.nkit;*.wbf1;*.001;*.part0.iso");
         } else if (picker == Picker::Folder) {
             launcher.picked = PickFile(owner, L"Select the game folder containing sys and files", nullptr, nullptr);
         } else {
-            launcher.pickedKeys = PickFile(owner, L"This disc is encrypted. Select your Wii key file",
-                                           L"Wii key files", L"*.bin;*.key;*.hex;*.txt;*.7z;common-key");
+            launcher.pickedKeys = PickFile(owner, L"Select a file containing your Wii key", L"Wii key files",
+                                           L"*.bin;*.key;*.keys;*.hex;*.txt;*.dat;*.json;*.ini;*.cfg;*.xml;*.csv;*.h;*.7z;*.zip;*.rar;*.gz;*.xz;*.bz2;*.zst;*.tar;*.rvz;*.wia;common-key");
             if (!launcher.pickedKeys.empty()) launcher.picked = launcher.currentImage;
         }
         launcher.dialogState = 2;
@@ -153,6 +167,78 @@ void PickInput(Launcher& launcher, HWND owner, Picker picker) {
 
 void JoinFinished(std::thread& t) {
     if (t.joinable()) t.join();
+}
+
+fs::path ExecutableDirectory() {
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (n == 0) return {};
+        if (n < buffer.size()) return fs::path(buffer.substr(0, n)).parent_path();
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
+// Looks for the game next to the executable, in rom/roms/games folders beside it
+// or its parents, in the working directory and in Downloads. Only file headers
+// are read; nothing is decrypted or copied.
+std::vector<FoundGame> FindGames() {
+    std::vector<fs::path> dirs;
+    auto addDir = [&](const fs::path& dir) {
+        std::error_code ec;
+        if (dir.empty() || !fs::is_directory(dir, ec)) return;
+        const auto canonical = fs::weakly_canonical(dir, ec);
+        if (std::find(dirs.begin(), dirs.end(), canonical) == dirs.end()) dirs.push_back(canonical);
+    };
+    auto addWithSubfolders = [&](const fs::path& base) {
+        addDir(base);
+        for (const char* sub : {"rom", "roms", "ROM", "ROMs", "Roms", "games", "Games", "iso", "ISO", "wii", "Wii", "disc", "Disc"})
+            addDir(base / sub);
+    };
+    fs::path at = ExecutableDirectory();
+    for (int level = 0; level < 4 && !at.empty(); ++level) {
+        addWithSubfolders(at);
+        const fs::path parent = at.parent_path();
+        if (parent == at) break;
+        at = parent;
+    }
+    std::error_code ec;
+    addWithSubfolders(fs::current_path(ec));
+    if (const wchar_t* profile = _wgetenv(L"USERPROFILE")) addDir(fs::path(profile) / "Downloads");
+
+    std::vector<FoundGame> games;
+    unsigned probed = 0;
+    for (const auto& dir : dirs) {
+        std::error_code it_ec;
+        for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, it_ec), end; !it_ec && it != end;
+             it.increment(it_ec)) {
+            std::error_code fileEc;
+            const fs::path& path = it->path();
+            if (it->is_directory(fileEc)) {
+                // Dolphin extracts the game into <folder>/DATA (next to UPDATE).
+                if (LooksLikeGameRoot(path)) games.push_back({path, path.filename().string(), "Folder", true});
+                else if (LooksLikeGameRoot(path / "DATA")) games.push_back({path / "DATA", path.filename().string() + "/DATA", "Folder", true});
+                continue;
+            }
+            if (!it->is_regular_file(fileEc) || !DiscImport::IsSupportedDiscExtension(path)) continue;
+            // Wii images are hundreds of megabytes; skip small .bin files and similar.
+            const std::string ext = path.extension().string();
+            if (ext != ".cue" && it->file_size(fileEc) < (64ull << 20)) continue;
+            if (++probed > 48) break;
+            DiscImport::DiscInfo info;
+            std::string error;
+            if (DiscImport::ProbeDisc(path, info, error) && info.supported)
+                games.push_back({path, path.filename().string(), info.format, false});
+        }
+    }
+    // Extracted folders and RVZ/WIA (normally keyless) first.
+    auto rank = [](const FoundGame& g) {
+        if (g.folder) return 0;
+        if (g.format == "RVZ" || g.format == "WIA") return 1;
+        return 2;
+    };
+    std::stable_sort(games.begin(), games.end(), [&](const FoundGame& a, const FoundGame& b) { return rank(a) < rank(b); });
+    return games;
 }
 
 void StartImport(Launcher& l, const fs::path& image, const fs::path& keys) {
@@ -251,7 +337,18 @@ bool Run(PrepareFolder prepareFolder) {
         l.progress.cancel = true;
         JoinFinished(l.importThread);
         JoinFinished(l.dialogThread);
+        JoinFinished(l.scanThread);
     };
+    if (!std::getenv("SIN_LAUNCHER_NO_SCAN")) {
+        l.scanThread = std::thread([&l] {
+            auto games = FindGames();
+            std::lock_guard<std::mutex> guard(l.lock);
+            l.found = std::move(games);
+            l.scanDone = true;
+        });
+    } else {
+        l.scanDone = true;
+    }
 
     while (!finished) {
         // ---- events
@@ -299,6 +396,7 @@ bool Run(PrepareFolder prepareFolder) {
             if (!l.picked.empty()) {
                 std::error_code ec;
                 if (fs::is_directory(l.picked, ec)) {
+                    if (!LooksLikeGameRoot(l.picked) && LooksLikeGameRoot(l.picked / "DATA")) l.picked /= "DATA";
                     finished = prepareFolder(l.picked, l.error);
                     if (!finished) l.phase = Phase::Failed;
                 } else {
@@ -313,7 +411,13 @@ bool Run(PrepareFolder prepareFolder) {
             auto file = std::move(l.dropped);
             l.dropped.clear();
             if (l.dialogState.load() == 0 && l.phase != Phase::Importing && l.phase != Phase::Done) {
-                l.picked = std::move(file);
+                // A file dropped on the key screen is the key for the current disc.
+                if (l.phase == Phase::NeedKey && !DiscImport::IsSupportedDiscExtension(file)) {
+                    l.pickedKeys = std::move(file);
+                    l.picked = l.currentImage;
+                } else {
+                    l.picked = std::move(file);
+                }
                 l.dialogState = 2;
             }
         }
@@ -325,8 +429,7 @@ bool Run(PrepareFolder prepareFolder) {
                 l.phase = Phase::Done;
                 hookClock = std::chrono::steady_clock::now();
             } else if (state == 4) {
-                l.phase = Phase::Idle;
-                PickInput(l, WindowHandle(), Picker::Key);
+                l.phase = Phase::NeedKey;
             } else {
                 l.phase = Phase::Failed;
                 if (state == 3) l.phase = Phase::Idle;
@@ -360,6 +463,14 @@ bool Run(PrepareFolder prepareFolder) {
         bool primary = false, secondary = false;
 
         if (l.phase == Phase::Idle || l.phase == Phase::Failed) {
+            // Discs found in the usual places become a one-press choice.
+            std::vector<FoundGame> found;
+            if (l.scanDone.load()) {
+                std::lock_guard<std::mutex> guard(l.lock);
+                found = l.found;
+            }
+            if (!found.empty()) l.foundIndex %= found.size();
+            const FoundGame* pick = found.empty() ? nullptr : &found[l.foundIndex];
             if (l.phase == Phase::Failed) {
                 std::string message;
                 {
@@ -367,24 +478,88 @@ bool Run(PrepareFolder prepareFolder) {
                     message = l.error;
                 }
                 game_ui::DrawWrapped(dl, 28.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kBad, "Import failed", game_ui::Outline::Thin, 1.0f, true);
-                game_ui::DrawWrapped(dl, 26.0f, ImVec2(bodyX, bodyY + Px(50.0f)), bodyW, game_ui::kWhite, message, game_ui::Outline::Thin, 1.0f, true);
+                game_ui::DrawWrapped(dl, pick ? 22.0f : 26.0f, ImVec2(bodyX, bodyY + Px(45.0f)), bodyW, game_ui::kWhite, message,
+                                     game_ui::Outline::Thin, 1.0f, true);
+            } else if (pick) {
+                game_ui::DrawWrapped(dl, 30.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kWhite, "Welcome! Your game was found:",
+                                     game_ui::Outline::Thin, 1.0f, true);
+                std::string line = pick->label + "  (" + pick->format + ")";
+                if (found.size() > 1) line = "<  " + line + "  >";
+                game_ui::TextCentered(dl, 26.0f, ImVec2(cx, bodyY + Px(70.0f)), game_ui::kTitleYellow,
+                                      game_ui::Ellipsize(line, 26.0f, bodyW, true).c_str(), game_ui::Outline::Thin);
+                if (found.size() > 1) {
+                    char more[96];
+                    std::snprintf(more, sizeof more, "%zu of %zu found. Press left or right to choose another.", l.foundIndex + 1, found.size());
+                    game_ui::TextCentered(dl, 20.0f, ImVec2(cx, bodyY + Px(104.0f)), game_ui::kTextDim, more, game_ui::Outline::Thin);
+                }
             } else {
                 game_ui::DrawWrapped(dl, 30.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kWhite,
                                      "Welcome! To get started, choose your North American Star Successor disc image or extracted game folder.",
                                      game_ui::Outline::Thin, 1.0f, true);
                 game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(105.0f)), bodyW, game_ui::kTextDim,
-                                     "For extracted games, choose the folder containing both sys and files. Encrypted discs will prompt for a key.",
+                                     l.scanDone.load()
+                                         ? "ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ, split and CUE/BIN images work. Keys next to the disc are found automatically."
+                                         : "Looking for your game...",
                                      game_ui::Outline::Thin, 1.0f, true);
             }
             // A dialog may finish during this frame. Consume its result and
             // join the worker before accepting another activation.
             const bool busy = l.dialogState.load() != 0;
-            const char* label = busy ? "Waiting for file dialog..." : (l.phase == Phase::Failed ? "Select another disc image" : "Select disc image");
+            const int buttons = pick ? 3 : 2;
+            if (l.focus >= buttons) l.focus = 0;
+            if (!busy && in.up) l.focus = (l.focus + buttons - 1) % buttons;
+            if (!busy && in.down) l.focus = (l.focus + 1) % buttons;
+            if (!busy && pick && found.size() > 1 && (in.left || in.right)) {
+                l.foundIndex = (l.foundIndex + (in.left ? found.size() - 1 : 1)) % found.size();
+                l.focus = 0;
+            }
+            int activated = -1;
+            float y = btnY - Px(80.0f) * float(buttons - 1);
+            if (pick) {
+                const std::string label = busy ? "Waiting for file dialog..." : "Use this " + std::string(pick->folder ? "folder" : "disc");
+                if (Button(dl, in, ImVec2(cx, y), 560.0f, label.c_str(), l.focus == 0, true)) activated = 0;
+                y += Px(80.0f);
+            }
+            const int discButton = pick ? 1 : 0;
+            const char* discLabel = busy && !pick ? "Waiting for file dialog..."
+                                    : l.phase == Phase::Failed ? "Select another disc image"
+                                    : pick                     ? "Select a different disc image"
+                                                               : "Select disc image";
+            if (Button(dl, in, ImVec2(cx, y), 560.0f, discLabel, l.focus == discButton, !pick)) activated = discButton;
+            y += Px(80.0f);
+            if (Button(dl, in, ImVec2(cx, y), 560.0f, "Select extracted folder", l.focus == discButton + 1, false)) activated = discButton + 1;
+            if (activated < 0 && in.accept) activated = l.focus;
+            if (!busy && activated >= 0) {
+                if (pick && activated == 0) {
+                    l.picked = pick->path;
+                    l.pickedKeys.clear();
+                    l.dialogState = 2;
+                } else {
+                    PickInput(l, WindowHandle(), activated == discButton ? Picker::Disc : Picker::Folder);
+                }
+            }
+        } else if (l.phase == Phase::NeedKey) {
+            std::string message;
+            {
+                std::lock_guard<std::mutex> guard(l.lock);
+                message = l.error;
+            }
+            game_ui::DrawWrapped(dl, 28.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kTitleYellow, "Wii key needed", game_ui::Outline::Thin, 1.0f, true);
+            game_ui::DrawWrapped(dl, 20.0f, ImVec2(bodyX, bodyY + Px(42.0f)), bodyW, game_ui::kWhite, message, game_ui::Outline::Thin, 1.0f, false);
+            const bool busy = l.dialogState.load() != 0;
             if (!busy && (in.up || in.down)) l.focus = 1 - l.focus;
-            primary = Button(dl, in, ImVec2(cx, btnY - Px(80.0f)), 560.0f, label, l.focus == 0, true);
-            secondary = Button(dl, in, ImVec2(cx, btnY), 560.0f, "Select extracted folder", l.focus == 1, false);
-            if (!busy && (primary || secondary || in.accept)) {
-                PickInput(l, WindowHandle(), (secondary || (!primary && l.focus == 1)) ? Picker::Folder : Picker::Disc);
+            primary = Button(dl, in, ImVec2(cx, btnY - Px(80.0f)), 560.0f, busy ? "Waiting for file dialog..." : "Select key file", l.focus == 0, true);
+            secondary = Button(dl, in, ImVec2(cx, btnY), 560.0f, "Choose a different disc", l.focus == 1, false);
+            if (!busy && in.back) {
+                l.phase = Phase::Idle;
+                l.focus = 0;
+            } else if (!busy && (primary || secondary || in.accept)) {
+                if (secondary || (!primary && l.focus == 1)) {
+                    l.phase = Phase::Idle;
+                    l.focus = 0;
+                } else {
+                    PickInput(l, WindowHandle(), Picker::Key);
+                }
             }
         } else if (l.phase == Phase::Importing) {
             std::string stage, detail;
@@ -417,8 +592,10 @@ bool Run(PrepareFolder prepareFolder) {
             char text[256];
             std::snprintf(text, sizeof text, "%u game files (%s) and %u stage modules prepared in %.0f seconds.", s.files,
                           Megabytes(s.bytes).c_str(), s.modules, s.seconds);
-            game_ui::DrawWrapped(dl, 26.0f, ImVec2(bodyX, bodyY + Px(70.0f)), bodyW, game_ui::kWhite, text, game_ui::Outline::Thin, 1.0f, true);
-            game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(150.0f)), bodyW, game_ui::kTextDim,
+            std::string done = text;
+            if (!s.keySource.empty()) done += "\nWii key: " + (s.keySource.rfind("not needed", 0) == 0 ? s.keySource : "found in " + s.keySource);
+            game_ui::DrawWrapped(dl, 26.0f, ImVec2(bodyX, bodyY + Px(55.0f)), bodyW, game_ui::kWhite, done, game_ui::Outline::Thin, 1.0f, true);
+            game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(175.0f)), bodyW, game_ui::kTextDim,
                                  "Your disc image is no longer needed. Game data lives in: " + RuntimeConfigFile::PathToUtf8(ManagedGameDirectory()),
                                  game_ui::Outline::Thin, 1.0f, true);
             primary = Button(dl, in, ImVec2(cx, btnY), 420.0f, "Play", l.focus == 0, true);
@@ -429,6 +606,7 @@ bool Run(PrepareFolder prepareFolder) {
         std::vector<std::pair<std::string, std::string>> hints;
         if (l.phase == Phase::Importing) hints = {{"B", "Cancel"}};
         else if (l.phase == Phase::Done) hints = {{"A", "Play"}};
+        else if (l.phase == Phase::NeedKey) hints = {{"A", "Select"}, {"B", "Back"}};
         else hints = {{"A", "Select"}};
         game_ui::DrawHints(dl, ImVec2(cx, pmax.y + Px(70.0f)), hints, 1.0f, 1);
 

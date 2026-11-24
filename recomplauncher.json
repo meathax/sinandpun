@@ -5,7 +5,7 @@
   "repo": "meathax/sinandpun",
   "game": {
     "kind": "iso_or_folder",
-    "label": "NTSC-U R2VE01 disc image or extracted game folder. For encrypted disc images, configure SIN_WII_KEY_FILE first.",
+    "label": "NTSC-U R2VE01 disc image (ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ, CUE/BIN, split) or extracted game folder. A key next to an encrypted image is found automatically; otherwise set SIN_WII_KEY_FILE.",
     "check": {
       "file": "sys/main.dol",
       "ids": [

@@ -1,6 +1,6 @@
 #pragma once
 
-// First-run disc import: reads a Wii disc image (.iso, .wbfs, .bin + .cue), checks that it is
+// First-run disc import: reads a Wii disc image (.iso, .wbfs, .rvz, .wia, .chd, .ciso, .gcz, .bin + .cue), checks that it is
 // Sin & Punishment: Star Successor (R2VE01), decrypts the Wii data partition and extracts the game files into
 // <gameDir>/{sys,files}. Everything the runtime derives from the disc (the prelinked stage module images,
 // formerly tools/rso_link.py) is generated into <gameDir>/modules/stgNN.bin at the same time.
@@ -40,6 +40,13 @@ struct Summary {
     uint64_t bytes = 0;
     uint32_t modules = 0;
     double seconds = 0.0;
+    std::string keySource;  // file the Wii key came from, or why none was needed (never the key itself)
+};
+
+struct DiscInfo {
+    std::string gameId, title, format;
+    bool wii = false;
+    bool supported = false;  // the North American R2VE01 disc
 };
 
 enum class Result { Ok, Cancelled, Failed, KeyRequired };
@@ -59,5 +66,8 @@ bool BuildModuleImage(const std::vector<uint8_t>& rso, const std::vector<uint8_t
 
 // Locations a disc picker may return: .cue is resolved to its .bin by the importer.
 bool IsSupportedDiscExtension(const std::filesystem::path& path);
+
+// Cheap header check for the first-run picker (no decryption, no key needed).
+bool ProbeDisc(const std::filesystem::path& image, DiscInfo& info, std::string& error);
 
 }  // namespace DiscImport
