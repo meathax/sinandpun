@@ -87,6 +87,7 @@ struct RuntimeUserConfig {
     std::optional<bool> stageAtmosphere;
     std::optional<bool> pixelLighting;
     std::optional<bool> hdHud;
+    std::optional<bool> hdWorld;
     std::optional<bool> generateMips;
     std::optional<bool> textureReplacements;
     std::optional<bool> textureDumps;
@@ -908,6 +909,7 @@ inline void RecoverInvalidConfigFile(const std::filesystem::path& path, const st
             }
             size_t end = line.find_last_not_of(" \t\r");
             const std::string literal = line.substr(eq + 1, end == std::string::npos ? 0 : end - eq);
+    config.hdWorld = FindConfigValue<bool>(document, "video", "hd_world");
             WriteSetting("paths", key, literal);  // ignored when the literal does not parse
         }
     }
@@ -1686,6 +1688,8 @@ inline void LogLoadedConfig() {
             }
             if (config.frameInterpolationFps) {
                 std::cout << " frame_interpolation_fps=" << *config.frameInterpolationFps;
+// Built-in HD environment, object and character textures from hd_world/ beside the executable (default on).
+inline bool HdWorld() { return Get().hdWorld.value_or(true); }
             }
             if (config.frameRate) {
                 std::cout << " frame_rate=" << *config.frameRate;

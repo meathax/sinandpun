@@ -68,6 +68,12 @@ if (-not (Test-Path -LiteralPath $hdHud -PathType Container) -or
     throw "release source is missing the HD HUD pack: $hdHud (refresh it with tools\update_ready.ps1)"
 }
 Copy-Item -LiteralPath $hdHud -Destination (Join-Path $stagePath "hd_hud") -Recurse
+$hdWorld = Join-Path $sourcePath "hd_world"
+if (-not (Test-Path -LiteralPath $hdWorld -PathType Container) -or
+    (Get-ChildItem -LiteralPath $hdWorld -Filter *.dds).Count -eq 0) {
+    throw "release source is missing the HD world pack: $hdWorld (refresh it with tools\update_ready.ps1)"
+}
+Copy-Item -LiteralPath $hdWorld -Destination (Join-Path $stagePath "hd_world") -Recurse
 $achievementNotices = Join-Path $nativePath "recomp_achievements_licenses"
 if (Test-Path -LiteralPath $achievementNotices) {
     Copy-Item -LiteralPath $achievementNotices -Destination $stagePath -Recurse

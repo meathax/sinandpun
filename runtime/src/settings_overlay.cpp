@@ -316,6 +316,7 @@ bool g_pixelLighting = RuntimeConfigFile::PixelLighting();
 std::atomic<bool> g_sceneGlow{RuntimeConfigFile::SceneGlow()};
 bool g_enhancedBloom = RuntimeConfigFile::EnhancedBloom();
 bool g_hdHud = RuntimeConfigFile::HdHud();
+bool g_hdWorld = RuntimeConfigFile::HdWorld();
 // Built-in HD HUD pack (hd_hud/ next to the exe), registered below user texture packs.
 aurora::texture::ReplacementGroup g_hdHudGroup;
 void ApplyHdHud(bool enabled) {
@@ -330,6 +331,23 @@ void ApplyHdHud(bool enabled) {
     } else if (!enabled && !g_hdHudGroup.registrations.empty()) {
         aurora::texture::unregister_replacements(g_hdHudGroup);
         g_hdHudGroup = {};
+    }
+}
+// Built-in HD world/character texture pack (hd_world/ next to the exe: remastered DXT1/DXT5 DDS), priority above the
+// HUD pack and below user texture packs.
+aurora::texture::ReplacementGroup g_hdWorldGroup;
+void ApplyHdWorld(bool enabled) {
+    if (enabled && g_hdWorldGroup.registrations.empty()) {
+        if (const auto dir = RuntimeConfigFile::ExecutableDirectory()) {
+            const auto root = *dir / "hd_world";
+            std::error_code ec;
+            if (std::filesystem::is_directory(root, ec)) {
+                g_hdWorldGroup = aurora::texture::load_replacement_directory(root, {.priority = -8});
+            }
+        }
+    } else if (!enabled && !g_hdWorldGroup.registrations.empty()) {
+        aurora::texture::unregister_replacements(g_hdWorldGroup);
+        g_hdWorldGroup = {};
     }
 }
 int g_upscaler = UpscalerIndexFromConfig();
@@ -360,6 +378,7 @@ void ApplyUpscaler() {
     aurora_set_stage_atmosphere(g_enhancementsEnabled && g_stageAtmosphere);
     aurora_set_pixel_lighting(g_enhancementsEnabled && g_pixelLighting);
     ApplyHdHud(g_hdHud);
+    ApplyHdWorld(g_hdWorld);
     aurora_set_enhanced_bloom(g_sceneGlow.load(std::memory_order_relaxed) && g_enhancementsEnabled && g_enhancedBloom);
     const bool fsr = g_enhancementsEnabled && (g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal);
     const bool dlss = g_enhancementsEnabled && g_upscaler == kUpscalerDlss;
@@ -473,6 +492,7 @@ struct GraphicsState {
     bool sceneGlow = g_sceneGlow.load(std::memory_order_relaxed);
     bool enhancedBloom = g_enhancedBloom;
     bool hdHud = g_hdHud;
+    bool hdWorld = g_hdWorld;
     bool generateMips = RuntimeConfigFile::GenerateMips();
     bool textureReplacements = RuntimeConfigFile::TextureReplacements(false);
     bool textureDumps = RuntimeConfigFile::TextureDumps(false);
@@ -519,6 +539,7 @@ GraphicsState CurrentGraphicsState() {
         .sceneGlow = g_sceneGlow.load(std::memory_order_relaxed),
         .enhancedBloom = g_enhancedBloom,
         .hdHud = g_hdHud,
+        .hdWorld = g_hdWorld,
         .generateMips = RuntimeConfigFile::GenerateMips(),
         .textureReplacements = RuntimeConfigFile::TextureReplacements(false),
         .textureDumps = RuntimeConfigFile::TextureDumps(false),
@@ -612,6 +633,7 @@ void ApplyGraphicsLive(GraphicsState next) {
     g_sceneGlow.store(next.sceneGlow, std::memory_order_relaxed);
     g_enhancedBloom = next.enhancedBloom;
     g_hdHud = next.hdHud;
+    g_hdWorld = next.hdWorld;
     g_upscaler = next.upscaler;
     g_fsrQuality = next.fsrQuality;
     g_fsrSharpness = next.fsrSharpness;
@@ -697,6 +719,8 @@ void PersistGraphics(const GraphicsState& state) {
     RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", state.enhancedBloom ? "true" : "false");
     userConfig.hdHud = state.hdHud;
     RuntimeConfigFile::WriteSetting("video", "hd_hud", state.hdHud ? "true" : "false");
+    userConfig.hdWorld = state.hdWorld;
+    RuntimeConfigFile::WriteSetting("video", "hd_world", state.hdWorld ? "true" : "false");
     userConfig.generateMips = state.generateMips;
     RuntimeConfigFile::WriteSetting("video", "generate_mips", state.generateMips ? "true" : "false");
     userConfig.textureReplacements = state.textureReplacements;
@@ -744,6 +768,7 @@ bool GraphicsDraftDirty() {
              g_graphicsDraft.sceneGlow == g_sceneGlow.load(std::memory_order_relaxed) &&
              g_graphicsDraft.enhancedBloom == g_enhancedBloom &&
              g_graphicsDraft.hdHud == g_hdHud &&
+             g_graphicsDraft.hdWorld == g_hdWorld &&
              g_graphicsDraft.generateMips == RuntimeConfigFile::GenerateMips() &&
              g_graphicsDraft.textureReplacements == RuntimeConfigFile::TextureReplacements(false) &&
              g_graphicsDraft.textureDumps == RuntimeConfigFile::TextureDumps(false));
@@ -1032,6 +1057,9 @@ void ResetGraphicsPage() {
     g_hdHud = true;
     RuntimeConfigFile::Mutable().hdHud = true;
     RuntimeConfigFile::WriteSetting("video", "hd_hud", "true");
+    g_hdWorld = true;
+    RuntimeConfigFile::Mutable().hdWorld = true;
+    RuntimeConfigFile::WriteSetting("video", "hd_world", "true");
     g_frameGeneration = false;
     g_reflex = true;
     ApplyUpscaler();
@@ -1578,6 +1606,8 @@ void BuildGraphicsPage(ListView& v) {
              "Draws the original glare, blur trails and full-screen blur. Turning this off also suppresses enhanced bloom.");
     v.Toggle("HD HUD and text", &g_graphicsDraft.hdHud, true,
              "Rebuilt high-resolution HUD, reticles, text, subtitles and menus that stay sharp at 4K. Off shows the original low-resolution art. Your own texture pack takes priority.");
+    v.Toggle("HD world and character textures", &g_graphicsDraft.hdWorld, true,
+             "Remastered 4x environment, object and character textures that stay sharp at 4K. Needs about 350 MB of extra video memory. Off shows the original art. Your own texture pack takes priority.");
     v.Section("Quality");
     int preset = DetectPreset(next.resolution, g_graphicsDraft.msaa, g_graphicsDraft.anisotropy);
     if (v.Choice("Graphics preset", &preset, kGraphicsPresetNames.data(), static_cast<int>(kGraphicsPresetNames.size()), 1,

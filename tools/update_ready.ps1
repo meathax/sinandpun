@@ -84,6 +84,18 @@ if (Test-Path -LiteralPath $hdHudSrc -PathType Container) {
     Write-Warning "assets-local\hd_hud not found: the package will use the original low-resolution HUD"
 }
 
+# Built-in HD world pack (292 remastered environment/object/character textures, DXT1/DXT5 DDS with mips, ~350 MB).
+# Outside git in assets-local\hd_world, loaded from hd_world\ beside the exe (see docs/HD-WORLD.md).
+$hdWorldSrc = Join-Path $root "assets-local\hd_world"
+$hdWorldDst = Join-Path $dst "hd_world"
+if (Test-Path -LiteralPath $hdWorldSrc -PathType Container) {
+    if (Test-Path -LiteralPath $hdWorldDst) { Remove-Item -LiteralPath $hdWorldDst -Recurse -Force }
+    Copy-Item -LiteralPath $hdWorldSrc -Destination $hdWorldDst -Recurse -Force
+    Write-Host ("HD world pack: {0} textures" -f (Get-ChildItem -LiteralPath $hdWorldDst -File -Filter "*.dds").Count)
+} else {
+    throw "assets-local\hd_world not found: the HD world texture pack must ship with every build (docs/HD-WORLD.md)"
+}
+
 $dlssDir = Join-Path $root "third_party\nvidia\streamline"
 if (-not $NoDlss) {
     $dllSrc = Join-Path $dlssDir "bin\x64"
