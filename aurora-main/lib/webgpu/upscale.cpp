@@ -507,7 +507,9 @@ float resolution_divisor() noexcept {
 
 bool locks_native_resolution() noexcept {
   const auto s = settings();
-  return s.mode == AURORA_UPSCALER_DLSS && s.scaleFactor <= 1.001f && dlss::ready();
+  // DLAA and AMD FSR Native AA run the temporal pass at the window size.
+  return s.scaleFactor <= 1.001f && ((s.mode == AURORA_UPSCALER_DLSS && dlss::ready()) ||
+                                     (s.mode == AURORA_UPSCALER_FSR3 && dlss::fsr_ready()));
 }
 
 Result fsr1_dispatch(const wgpu::CommandEncoder& encoder, const TextureWithSampler& source, const Viewport& viewport) {

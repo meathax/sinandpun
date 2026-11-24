@@ -72,6 +72,18 @@ Copy-Item (Join-Path $root "recomplauncher.json") $dst -Force
 $codecNotices = New-Item -ItemType Directory -Force (Join-Path $dst "disc_codec_licenses")
 Copy-Item (Join-Path $root "third_party\disc_codecs\*.txt") $codecNotices -Force
 
+# Built-in HD HUD/GUI pack (rebuilt high-resolution HUD textures; see docs/HD-HUD.md). It lives outside git in
+# assets-local\hd_hud and is loaded from hd_hud\ beside the exe. Replaced wholesale so removed files do not linger.
+$hdHudSrc = Join-Path $root "assets-local\hd_hud"
+$hdHudDst = Join-Path $dst "hd_hud"
+if (Test-Path -LiteralPath $hdHudSrc -PathType Container) {
+    if (Test-Path -LiteralPath $hdHudDst) { Remove-Item -LiteralPath $hdHudDst -Recurse -Force }
+    Copy-Item -LiteralPath $hdHudSrc -Destination $hdHudDst -Recurse -Force
+    Write-Host ("HD HUD pack: {0} textures" -f (Get-ChildItem -LiteralPath $hdHudDst -File -Filter "*.png").Count)
+} else {
+    Write-Warning "assets-local\hd_hud not found: the package will use the original low-resolution HUD"
+}
+
 $dlssDir = Join-Path $root "third_party\nvidia\streamline"
 if (-not $NoDlss) {
     $dllSrc = Join-Path $dlssDir "bin\x64"

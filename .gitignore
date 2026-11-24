@@ -53,3 +53,6 @@ third_party/amd/
 /decomp/.github.example/
 /decomp/.vscode/
 /decomp/README.example.md
+
+# HD HUD pack: rebuilt from game art (build/qa/hud-sharp), shipped beside the exe, never committed
+/assets-local/

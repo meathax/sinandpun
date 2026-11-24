@@ -163,6 +163,9 @@ void aurora_set_contact_shadow(bool enabled);
 void aurora_set_water_frame(uint32_t frame);
 void aurora_set_stage_atmosphere(bool enabled);
 void aurora_set_pixel_lighting(bool enabled);
+// Rebuilds magnified HUD/text/reticle texture edges at output resolution (orthographic draws only).
+void aurora_set_sharp_hud(bool enabled);
+bool aurora_sharp_hud_enabled(void);
 bool aurora_enhanced_bloom_enabled(void);
 bool aurora_ambient_occlusion_enabled(void);
 bool aurora_global_illumination_enabled(void);

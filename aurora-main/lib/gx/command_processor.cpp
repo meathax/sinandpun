@@ -528,6 +528,17 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     }
   }
 
+  // Orthographic, depth-free textured draws are the HUD, text and reticles. Their small textures are
+  // magnified several times at high output resolutions; hud_sample rebuilds their edges per output pixel.
+  const bool wantSharpHud = aurora_sharp_hud_enabled() && state.projType == GX_ORTHOGRAPHIC &&
+                            (!cache.config.depthCompare || cache.config.depthFunc == GX_ALWAYS) &&
+                            cache.shaderInfo.sampledTextures.any() && !cache.shaderInfo.usesZTexture;
+  if (bool(cache.config.shaderConfig.sharpHud) != wantSharpHud) {
+    cache.config.shaderConfig.sharpHud = wantSharpHud;
+    cache.pipelineRef = gfx::pipeline_ref(cache.config);
+    cache.presentationPipeline = {};
+  }
+
   const auto usesDestinationAlpha = [](GXBlendFactor factor) {
     return factor == GX_BL_DSTALPHA || factor == GX_BL_INVDSTALPHA;
   };
@@ -547,6 +558,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
 
   const bool bindGroupsValid =
       (state.dirty & DirtyTextures) == 0 && cache.bindGeneration == texture::current_bind_generation();
+  const bool orthoDraw = state.projType == GX_ORTHOGRAPHIC;
   if (!bindGroupsValid) {
     const auto prevBindGroup = cache.bindGroups.textureBindGroup;
     resolve_sampled_textures(cache.shaderInfo);
@@ -558,6 +570,10 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
       state.dirty |= DirtyUniform;
     }
   }
+  if (orthoDraw) {
+    note_ortho_draw_textures(cache.shaderInfo);
+  }
+
 
   const bool nativeScene = native_scene_enabled() && state.projType == GX_PERSPECTIVE;
   const bool translucent = cache.config.blendMode == GX_BM_BLEND && !cache.config.depthUpdate;

@@ -56,6 +56,10 @@ extern "C" void aurora_set_atmosphere_type(AuroraAtmosphere type) { s_atmosphere
 extern "C" void aurora_set_stage_atmosphere(bool enabled) { s_stageAtmosphere.store(enabled, std::memory_order_relaxed); }
 static std::atomic<bool> s_pixelLighting{false};
 extern "C" void aurora_set_pixel_lighting(bool enabled) { s_pixelLighting.store(enabled); }
+// Edge-reconstructed sampling for orthographic (HUD, text, reticle) draws; see hud_sample in shader.cpp.
+static std::atomic<bool> s_sharpHud{false};
+extern "C" void aurora_set_sharp_hud(bool enabled) { s_sharpHud.store(enabled, std::memory_order_relaxed); }
+extern "C" bool aurora_sharp_hud_enabled() { return s_sharpHud.load(std::memory_order_relaxed); }
 
 namespace aurora::gx {
 using webgpu::g_device;

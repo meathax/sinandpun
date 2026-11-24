@@ -86,6 +86,7 @@ struct RuntimeUserConfig {
     std::optional<bool> contactShadow;
     std::optional<bool> stageAtmosphere;
     std::optional<bool> pixelLighting;
+    std::optional<bool> hdHud;
     std::optional<bool> generateMips;
     std::optional<bool> textureReplacements;
     std::optional<bool> textureDumps;
@@ -823,6 +824,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.contactShadow = FindConfigValue<bool>(document, "video", "contact_shadow");
     config.stageAtmosphere = FindConfigValue<bool>(document, "video", "stage_atmosphere");
     config.pixelLighting = FindConfigValue<bool>(document, "video", "per_pixel_lighting");
+    config.hdHud = FindConfigValue<bool>(document, "video", "hd_hud");
     config.sceneGlow = FindConfigValue<bool>(document, "video", "scene_glow");
     config.enhancedBloom = FindConfigValue<bool>(document, "video", "enhanced_bloom");
     config.generateMips = FindConfigValue<bool>(document, "video", "generate_mips");
@@ -1599,6 +1601,8 @@ inline bool CombatLight() { return Get().combatLight.value_or(false); }
 inline bool ContactShadow() { return Get().contactShadow.value_or(false); }
 inline bool StageAtmosphere() { return Get().stageAtmosphere.value_or(false); }
 inline bool PixelLighting() { return Get().pixelLighting.value_or(false); }
+// Built-in high-resolution HUD/GUI textures from hd_hud/ beside the executable (default on).
+inline bool HdHud() { return Get().hdHud.value_or(true); }
 inline bool SceneGlow() { return Get().sceneGlow.value_or(true); }
 inline bool EnhancedBloom() { return Get().enhancedBloom.value_or(false); }
 inline bool GenerateMips() { return Get().generateMips.value_or(false); }

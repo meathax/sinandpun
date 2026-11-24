@@ -55,6 +55,7 @@
 extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled);
 #include <dolphin/vi.h>
 #include <aurora/aurora.h>
+#include <aurora/texture.hpp>
 #include <aurora/gfx.h>
 
 extern "C" int g_gxFrameCount;
@@ -235,10 +236,22 @@ AuroraFrameRateMode AuroraModeFor(RuntimeConfigFile::FrameRateKind kind) {
 }
 
 bool g_frameGeneration = RuntimeConfigFile::Get().frameGeneration.value_or(false);
+// Frame generation needs Direct3D 12 (main.cpp gates the launch request the same way).
+bool FrameGenerationSupportedBackend() {
+    const AuroraBackend backend = aurora_get_backend();
+    return backend == BACKEND_D3D12 || backend == BACKEND_AUTO;
+}
+bool FrameGenerationRequested() { return g_frameGeneration && FrameGenerationSupportedBackend(); }
+// The value ApplyFrameRate last used; Draw() re-applies when NVIDIA confirms or drops frame generation.
+bool g_frameGenerationAppliedActive = false;
 
 void ApplyFrameRate(int index) {
     const FrameRateItem& item = kFrameRates[static_cast<size_t>(index)];
-    aurora_set_frame_rate(g_frameGeneration ? AURORA_FRAME_RATE_OFF : AuroraModeFor(item.kind), item.fps, g_frameRateCap);
+    // Suppress the built-in interpolation only once DLSS-G is actually generating frames. Suppressing it on the
+    // request alone left Vulkan, non-RTX and mid-session requests at 60 FPS with neither path running.
+    g_frameGenerationAppliedActive = FrameGenerationRequested() && aurora_frame_generation_active();
+    aurora_set_frame_rate(g_frameGenerationAppliedActive ? AURORA_FRAME_RATE_OFF : AuroraModeFor(item.kind), item.fps,
+                          g_frameRateCap);
 }
 
 void SetResolutionScale(float scale) {
@@ -302,6 +315,23 @@ bool g_stageAtmosphere = RuntimeConfigFile::StageAtmosphere();
 bool g_pixelLighting = RuntimeConfigFile::PixelLighting();
 std::atomic<bool> g_sceneGlow{RuntimeConfigFile::SceneGlow()};
 bool g_enhancedBloom = RuntimeConfigFile::EnhancedBloom();
+bool g_hdHud = RuntimeConfigFile::HdHud();
+// Built-in HD HUD pack (hd_hud/ next to the exe), registered below user texture packs.
+aurora::texture::ReplacementGroup g_hdHudGroup;
+void ApplyHdHud(bool enabled) {
+    if (enabled && g_hdHudGroup.registrations.empty()) {
+        if (const auto dir = RuntimeConfigFile::ExecutableDirectory()) {
+            const auto root = *dir / "hd_hud";
+            std::error_code ec;
+            if (std::filesystem::is_directory(root, ec)) {
+                g_hdHudGroup = aurora::texture::load_replacement_directory(root, {.priority = -10});
+            }
+        }
+    } else if (!enabled && !g_hdHudGroup.registrations.empty()) {
+        aurora::texture::unregister_replacements(g_hdHudGroup);
+        g_hdHudGroup = {};
+    }
+}
 int g_upscaler = UpscalerIndexFromConfig();
 int g_fsrQuality = FsrQualityIndexFromConfig();
 float g_fsrSharpness = static_cast<float>(RuntimeConfigFile::FsrSharpness());
@@ -311,7 +341,7 @@ bool g_reflex = RuntimeConfigFile::Get().reflex.value_or(true);
 bool g_dlssMotion = RuntimeConfigFile::DlssMotionVectors(false);
 
 bool UpscalerActive() {
-    return ((g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal) && g_fsrQuality > 0) || g_upscaler == kUpscalerDlss;
+    return (g_upscaler == kUpscalerFsr1 && g_fsrQuality > 0) || g_upscaler == kUpscalerTemporal || g_upscaler == kUpscalerDlss;
 }
 
 // Live apply: the scale factor changes the internal render size, which aurora re-evaluates at the next frame.
@@ -329,6 +359,7 @@ void ApplyUpscaler() {
     aurora_set_contact_shadow(g_enhancementsEnabled && g_contactShadow);
     aurora_set_stage_atmosphere(g_enhancementsEnabled && g_stageAtmosphere);
     aurora_set_pixel_lighting(g_enhancementsEnabled && g_pixelLighting);
+    ApplyHdHud(g_hdHud);
     aurora_set_enhanced_bloom(g_sceneGlow.load(std::memory_order_relaxed) && g_enhancementsEnabled && g_enhancedBloom);
     const bool fsr = g_enhancementsEnabled && (g_upscaler == kUpscalerFsr1 || g_upscaler == kUpscalerTemporal);
     const bool dlss = g_enhancementsEnabled && g_upscaler == kUpscalerDlss;
@@ -339,13 +370,15 @@ void ApplyUpscaler() {
         factor = RuntimeConfigFile::kDlssModes[static_cast<size_t>(g_dlssMode)].factor;
         sharpness = g_dlssSharpness;
     }
-    aurora_set_frame_generation(g_frameGeneration);
+    aurora_set_frame_generation(FrameGenerationRequested());
     ApplyFrameRate(g_frameInterpolationMode);
-    aurora_set_reflex(g_frameGeneration || g_reflex);
+    aurora_set_reflex(FrameGenerationRequested() || g_reflex);
     aurora_set_dlss_motion_vectors(g_dlssMotion);
     AuroraUpscaler mode = AURORA_UPSCALER_OFF;
     if (dlss) mode = AURORA_UPSCALER_DLSS;
-    if (fsr && g_fsrQuality > 0) mode = g_upscaler == kUpscalerTemporal ? AURORA_UPSCALER_FSR3 : AURORA_UPSCALER_FSR1;
+    // Temporal FSR at Native quality is AMD's native anti-aliasing (render size = window size).
+    if (fsr && (g_fsrQuality > 0 || g_upscaler == kUpscalerTemporal))
+        mode = g_upscaler == kUpscalerTemporal ? AURORA_UPSCALER_FSR3 : AURORA_UPSCALER_FSR1;
     aurora_set_upscaler(mode, factor, g_sharpeningEnabled ? sharpness / 100.0f : 0.0f);
 }
 
@@ -439,6 +472,7 @@ struct GraphicsState {
     bool pixelLighting = g_pixelLighting;
     bool sceneGlow = g_sceneGlow.load(std::memory_order_relaxed);
     bool enhancedBloom = g_enhancedBloom;
+    bool hdHud = g_hdHud;
     bool generateMips = RuntimeConfigFile::GenerateMips();
     bool textureReplacements = RuntimeConfigFile::TextureReplacements(false);
     bool textureDumps = RuntimeConfigFile::TextureDumps(false);
@@ -484,6 +518,7 @@ GraphicsState CurrentGraphicsState() {
         .pixelLighting = g_pixelLighting,
         .sceneGlow = g_sceneGlow.load(std::memory_order_relaxed),
         .enhancedBloom = g_enhancedBloom,
+        .hdHud = g_hdHud,
         .generateMips = RuntimeConfigFile::GenerateMips(),
         .textureReplacements = RuntimeConfigFile::TextureReplacements(false),
         .textureDumps = RuntimeConfigFile::TextureDumps(false),
@@ -576,6 +611,7 @@ void ApplyGraphicsLive(GraphicsState next) {
     g_pixelLighting = next.pixelLighting;
     g_sceneGlow.store(next.sceneGlow, std::memory_order_relaxed);
     g_enhancedBloom = next.enhancedBloom;
+    g_hdHud = next.hdHud;
     g_upscaler = next.upscaler;
     g_fsrQuality = next.fsrQuality;
     g_fsrSharpness = next.fsrSharpness;
@@ -659,6 +695,8 @@ void PersistGraphics(const GraphicsState& state) {
     userConfig.enhancedBloom = state.enhancedBloom;
     RuntimeConfigFile::WriteSetting("video", "enhancements_enabled", state.enhancementsEnabled ? "true" : "false");
     RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", state.enhancedBloom ? "true" : "false");
+    userConfig.hdHud = state.hdHud;
+    RuntimeConfigFile::WriteSetting("video", "hd_hud", state.hdHud ? "true" : "false");
     userConfig.generateMips = state.generateMips;
     RuntimeConfigFile::WriteSetting("video", "generate_mips", state.generateMips ? "true" : "false");
     userConfig.textureReplacements = state.textureReplacements;
@@ -705,6 +743,7 @@ bool GraphicsDraftDirty() {
              g_graphicsDraft.pixelLighting == g_pixelLighting &&
              g_graphicsDraft.sceneGlow == g_sceneGlow.load(std::memory_order_relaxed) &&
              g_graphicsDraft.enhancedBloom == g_enhancedBloom &&
+             g_graphicsDraft.hdHud == g_hdHud &&
              g_graphicsDraft.generateMips == RuntimeConfigFile::GenerateMips() &&
              g_graphicsDraft.textureReplacements == RuntimeConfigFile::TextureReplacements(false) &&
              g_graphicsDraft.textureDumps == RuntimeConfigFile::TextureDumps(false));
@@ -990,6 +1029,9 @@ void ResetGraphicsPage() {
     g_sceneGlow.store(true, std::memory_order_relaxed);
     RuntimeConfigFile::Mutable().sceneGlow = true;
     RuntimeConfigFile::WriteSetting("video", "scene_glow", "true");
+    g_hdHud = true;
+    RuntimeConfigFile::Mutable().hdHud = true;
+    RuntimeConfigFile::WriteSetting("video", "hd_hud", "true");
     g_frameGeneration = false;
     g_reflex = true;
     ApplyUpscaler();
@@ -1273,7 +1315,11 @@ struct QualityPreset {
     int msaa;
     int anisotropy;
 };
-constexpr std::array<QualityPreset, 4> kPresets = {{{1.0f, 1, 2}, {1.0f, 1, 16}, {2.0f, 4, 16}, {4.0f, 4, 16}}};
+// Resolution 0 is Auto (the window's pixel size). A fixed multiplier is relative to 640x480, so 2x renders
+// only 960 lines: below Auto on every 1080p or larger window. High therefore keeps Auto and adds MSAA, and
+// Medium matches the defaults (Auto, MSAA off, 16x filtering) that Reset and a fresh Config.toml produce.
+constexpr std::array<QualityPreset, 3> kPresets = {{{1.0f, 1, 4}, {0.0f, 1, 16}, {0.0f, 4, 16}}};
+constexpr std::array<const char*, 4> kGraphicsPresetNames = {"Low (original)", "Medium", "High", "Custom"};
 constexpr std::array<const char*, 5> kPresetNames = {"Low", "Medium", "High", "Ultra", "Custom"};
 
 int DetectPreset(float resolution, int msaa, int anisotropy) {
@@ -1283,7 +1329,7 @@ int DetectPreset(float resolution, int msaa, int anisotropy) {
             return static_cast<int>(i);
         }
     }
-    return 4;
+    return static_cast<int>(kPresets.size());
 }
 
 void BuildUpscalingSection(ListView& v) {
@@ -1309,9 +1355,15 @@ void BuildUpscalingSection(ListView& v) {
     }
     if (g_graphicsDraft.upscaler == kUpscalerFsr1 || g_graphicsDraft.upscaler == kUpscalerTemporal) {
         int quality = g_graphicsDraft.fsrQuality;
-        if (v.Choice("FSR quality", &quality, kFsrQualityLabels.data(), static_cast<int>(kFsrQualityLabels.size()),
+        static std::array<const char*, kFsrQualityLabels.size()> temporalLabels = [] {
+            auto labels = kFsrQualityLabels;
+            labels[0] = "Native AA (1.0x, anti-aliasing)";
+            return labels;
+        }();
+        const bool temporal = g_graphicsDraft.upscaler == kUpscalerTemporal;
+        if (v.Choice("FSR quality", &quality, temporal ? temporalLabels.data() : kFsrQualityLabels.data(), static_cast<int>(kFsrQualityLabels.size()),
                      kDefaultFsrQualityIndex,
-                     "Ratio between output and internal resolution (per axis). Ultra Quality renders 77% of the window size, Quality 67%, Balanced 59%, Performance 50%, Ultra Performance 33%. Native turns upscaling off.") & kChanged) {
+                     "Ratio between output and internal resolution (per axis). Ultra Quality renders 77% of the window size, Quality 67%, Balanced 59%, Performance 50%, Ultra Performance 33%. Native turns FSR 1 off; with temporal FSR it is Native AA, AMD's equivalent of DLAA (Direct3D 12).") & kChanged) {
             g_graphicsDraft.fsrQuality = quality;
         }
         if (v.Slider("FSR sharpness", &g_graphicsDraft.fsrSharpness, 0.0f, 100.0f, 5.0f, "%.0f%%",
@@ -1328,13 +1380,18 @@ void BuildUpscalingSection(ListView& v) {
                                         : ResolutionText(window.native_fb_width, window.native_fb_height);
         v.Info("Internal resolution", internal);
         v.Info("Output resolution", output);
-        v.Note(info.active == AURORA_UPSCALER_FSR3 ? "AMD temporal FSR is running." : live ? "Spatial upscaling is running." : "FSR 1 is selected but not running (Native quality, or the window is not larger than the internal size).");
+        const bool temporalSelected = g_graphicsDraft.upscaler == kUpscalerTemporal;
+        v.Note(info.active == AURORA_UPSCALER_FSR3 ? "AMD temporal FSR is running."
+               : live ? (temporalSelected ? "Temporal FSR is not available on this frame (it needs Direct3D 12); FSR 1 spatial upscaling is running instead."
+                                          : "Spatial upscaling is running.")
+               : (temporalSelected ? "Temporal FSR is selected but not running (Native quality, changes not applied yet, or the window is not larger than the internal size)."
+                                   : "FSR 1 is selected but not running (Native quality, changes not applied yet, or the window is not larger than the internal size)."));
     }
     if (g_graphicsDraft.upscaler == kUpscalerDlss) {
         int mode = g_graphicsDraft.dlssMode;
         if (v.Choice("DLSS mode", &mode, kDlssModeLabels.data(), static_cast<int>(kDlssModeLabels.size()),
                      static_cast<int>(RuntimeConfigFile::kDefaultDlssModeIndex),
-                     "NVIDIA DLSS Super Resolution. The percentage is the internal resolution relative to the window (per axis): Ultra Performance 33%, Performance 50%, Balanced 58%, Quality 67%. DLAA renders at the full window size and only improves anti-aliasing. The game has no motion-vector buffer, so DLSS works from the image itself and is less sharp in motion than in a native DLSS game.") & kChanged) {
+                     "NVIDIA DLSS Super Resolution. The percentage is the internal resolution relative to the window (per axis): Ultra Performance 33%, Performance 50%, Balanced 58%, Quality 67%. DLAA renders at the full window size and only improves anti-aliasing. Motion comes from the game's 3D geometry; flat screen copies without geometry motion can look softer while moving.") & kChanged) {
             g_graphicsDraft.dlssMode = mode;
         }
         if (v.Slider("DLSS sharpness", &g_graphicsDraft.dlssSharpness, 0.0f, 100.0f, 5.0f, "%.0f%%",
@@ -1397,19 +1454,22 @@ void VisitEnhancementPreset(int tier, bool dlss, Visit visit) {
     visit(&GraphicsState::retainCulledGi, ultra);
     visit(&GraphicsState::textureReplacements, high);
     visit(&GraphicsState::generateMips, high);
-    visit(&GraphicsState::msaa, ultra ? SystemSettings::kMsaaChoices.back() : 1);
-    constexpr int filtering[] = {2, 4, 8, SystemSettings::kAnisotropyChoices.back()};
-    visit(&GraphicsState::anisotropy, filtering[tier]);
-    visit(&GraphicsState::sharpeningEnabled, medium);
+    // MSAA and anisotropic filtering belong to the Graphics preset; visiting them here made the two presets
+    // overwrite each other (any Enhancement preset turned the Graphics preset into Custom and vice versa).
+    visit(&GraphicsState::sharpeningEnabled, true);
     if (ultra && dlss) {
         visit(&GraphicsState::upscaler, kUpscalerDlss);
         visit(&GraphicsState::dlssMode, static_cast<int>(kDlssModeLabels.size()) - 1); // DLAA
         visit(&GraphicsState::dlssMotion, true);
-        visit(&GraphicsState::dlssSharpness, 100.0f);
+        visit(&GraphicsState::dlssSharpness, 0.0f); // DLAA at native size needs no added sharpening.
+    } else if (medium && !high) {
+        // Medium renders natively: the game costs about 1 ms of GPU time at 4K, so a spatial upscale
+        // only lowers image quality.
+        visit(&GraphicsState::upscaler, 0);
     } else {
         visit(&GraphicsState::upscaler, high ? kUpscalerTemporal : kUpscalerFsr1);
-        visit(&GraphicsState::fsrQuality, ultra ? 1 : medium ? kDefaultFsrQualityIndex : 4);
-        visit(&GraphicsState::fsrSharpness, ultra ? 100.0f : medium ? 50.0f : 0.0f);
+        visit(&GraphicsState::fsrQuality, ultra ? 0 : high ? kDefaultFsrQualityIndex : 4); // Ultra: Native AA
+        visit(&GraphicsState::fsrSharpness, ultra || high ? static_cast<float>(RuntimeConfigFile::kDefaultFsrSharpness) : 50.0f);
     }
 }
 
@@ -1429,7 +1489,7 @@ void BuildEnhancementsPage(ListView& v) {
         }
     }
     if ((v.Choice("Enhancement preset", &preset, kPresetNames.data(), static_cast<int>(kPresetNames.size()), 1,
-                  "Sets effects, textures, filtering and upscaling together. Ultra enables every effect and uses DLAA when available. Apply to preview. Textures, MSAA and filtering take effect next launch.",
+                  "Sets effects, textures and upscaling together; resolution, MSAA and filtering stay with the Graphics preset. Medium renders natively. High adds temporal FSR. Ultra enables every effect and uses DLAA when available. Apply to preview. Textures take effect next launch.",
                   game_ui::kRowConfirm) & kChanged) && preset < custom) {
         AuroraDlssStatus status{};
         aurora_get_dlss_status(&status);
@@ -1510,16 +1570,18 @@ void BuildEnhancementsPage(ListView& v) {
 void BuildGraphicsPage(ListView& v) {
     DisplayState next = g_graphicsDraft.display;
     const bool draftUpscalerActive =
-        g_graphicsDraft.enhancementsEnabled && (((g_graphicsDraft.upscaler == kUpscalerFsr1 || g_graphicsDraft.upscaler == kUpscalerTemporal) && g_graphicsDraft.fsrQuality > 0) ||
-        g_graphicsDraft.upscaler == kUpscalerDlss);
+        g_graphicsDraft.enhancementsEnabled && ((g_graphicsDraft.upscaler == kUpscalerFsr1 && g_graphicsDraft.fsrQuality > 0) ||
+        g_graphicsDraft.upscaler == kUpscalerTemporal || g_graphicsDraft.upscaler == kUpscalerDlss);
 
     v.Note("A green star marks the recommended value of a row.");
     v.Toggle("Scene glow and blur", &g_graphicsDraft.sceneGlow, true,
              "Draws the original glare, blur trails and full-screen blur. Turning this off also suppresses enhanced bloom.");
+    v.Toggle("HD HUD and text", &g_graphicsDraft.hdHud, true,
+             "Rebuilt high-resolution HUD, reticles, text, subtitles and menus that stay sharp at 4K. Off shows the original low-resolution art. Your own texture pack takes priority.");
     v.Section("Quality");
     int preset = DetectPreset(next.resolution, g_graphicsDraft.msaa, g_graphicsDraft.anisotropy);
-    if (v.Choice("Graphics preset", &preset, kPresetNames.data(), static_cast<int>(kPresetNames.size()), 1,
-                 "Sets resolution scale, anti-aliasing and anisotropic filtering together. Medium is the stock setup. Resolution changes on Apply. Anti-aliasing and filtering take effect next launch.",
+    if (v.Choice("Graphics preset", &preset, kGraphicsPresetNames.data(), static_cast<int>(kGraphicsPresetNames.size()), 1,
+                 "Sets resolution scale, anti-aliasing and anisotropic filtering together. Low is the original 640x480 picture, Medium renders at the window size (the default) and High adds 4x MSAA. Resolution changes on Apply. Anti-aliasing and filtering take effect next launch.",
                  game_ui::kRowConfirm) & kChanged) {
         if (preset < static_cast<int>(kPresets.size())) {
             const QualityPreset& p = kPresets[static_cast<size_t>(preset)];
@@ -1530,13 +1592,14 @@ void BuildGraphicsPage(ListView& v) {
     }
     BuildGraphicsApplyAction(v);
 
-    int resolutionIndex = 1;
+    int resolutionIndex = 0;
     static std::array<const char*, kResolutions.size()> resolutionLabels{};
     for (size_t i = 0; i < kResolutions.size(); ++i) {
         resolutionLabels[i] = kResolutions[i].label;
         if (std::fabs(kResolutions[i].scale - next.resolution) < 0.001f) resolutionIndex = static_cast<int>(i);
     }
-    if (v.Choice("Resolution scale", &resolutionIndex, resolutionLabels.data(), static_cast<int>(resolutionLabels.size()), 1,
+    // Default 0 (Auto) matches the Config.toml fallback and Reset page.
+    if (v.Choice("Resolution scale", &resolutionIndex, resolutionLabels.data(), static_cast<int>(resolutionLabels.size()), 0,
                  draftUpscalerActive
                      ? "Not used while an upscaler is on: Upscaler on the Enhancements tab sets the internal resolution from the window size."
                      : "Rendering scale relative to the original 640x480 picture. Native (1x) is the original look. 6x and 8x are capped to 4x while frame interpolation is on.",
@@ -1548,12 +1611,17 @@ void BuildGraphicsPage(ListView& v) {
 
     // The built-in transform-based interpolation; it is not AMD's optical-flow FSR 3 Frame Generation (docs/FSR-NOTES.md).
     v.Section("Frame generation");
+    const bool fgBackend = FrameGenerationSupportedBackend();
     v.Toggle("NVIDIA DLSS Frame Generation (2x)", &g_graphicsDraft.frameGeneration, false,
-             "Enable before launch to prepare the presentation window. Requires D3D12 and DLSS or DLAA. Uses the original game rate and Reflex.");
-    if (g_frameGeneration) v.Info("Generated frames", aurora_frame_generation_active() ? "Active (NVIDIA confirmed)" : "Inactive (requires launch support, DLSS or DLAA, and a focused window)");
+             fgBackend ? "Enable before launch to prepare the presentation window. Requires DLSS or DLAA. While generated frames are confirmed it replaces the Frame rate interpolation and uses Reflex; otherwise Frame rate stays in charge."
+                       : "Requires Direct3D 12 (set graphics_api = \"d3d12\" or \"auto\" in Config.toml).",
+             game_ui::kRowNextLaunch | (fgBackend || g_graphicsDraft.frameGeneration ? 0u : game_ui::kRowDisabled));
+    if (g_frameGeneration) v.Info("Generated frames", !fgBackend ? "Unavailable (needs Direct3D 12)"
+                                  : aurora_frame_generation_active() ? "Active (NVIDIA confirmed; Frame rate interpolation paused)"
+                                  : "Inactive (requires launch support, DLSS or DLAA, and a focused window); Frame rate interpolation is used");
     v.Toggle("NVIDIA Reflex", &g_graphicsDraft.reflex, true,
              "Enable driver low-latency pacing on a supported NVIDIA GPU in Direct3D 12. Applies with graphics changes.");
-    if (g_reflex || g_frameGeneration) v.Info("Reflex driver", aurora_reflex_active() ? "Active" : "Unavailable");
+    if (g_reflex || FrameGenerationRequested()) v.Info("Reflex driver", aurora_reflex_active() ? "Active" : "Unavailable");
     static std::array<const char*, kFrameRates.size()> frameRateLabels{};
     for (size_t i = 0; i < kFrameRates.size(); ++i) {
         frameRateLabels[i] = kFrameRates[i].label;
@@ -2518,6 +2586,12 @@ void Draw() noexcept {
     PollGamepadMenuChord();
     ApplyConfiguredMappings();
     PersistDisplayModeIfChanged();
+    // DLSS-G confirms asynchronously; hand presentation back to the built-in interpolation if it never starts
+    // or stops, and take it away once generated frames are confirmed.
+    if ((FrameGenerationRequested() && aurora_frame_generation_active()) != g_frameGenerationAppliedActive) {
+        GX_SYNC_INLINE();
+        ApplyFrameRate(g_frameInterpolationMode);
+    }
 
     UpdateBootShaderState();
     game_ui::Frame& in = game_ui::PollInput();

@@ -1,5 +1,6 @@
 #include "texture.hpp"
 
+#include "../gfx/dds_io.hpp"
 #include "../gfx/lru_cache.hpp"
 #include "../gfx/presentation.hpp"
 #include "../gfx/recording.hpp"
@@ -104,6 +105,7 @@ struct TextureContentKey {
 };
 
 constexpr size_t SourceKeyCacheMaxEntries = 16384;
+
 
 struct SourceKeyCacheEntry {
   aurora::texture::TextureSourceKey sourceKey;
@@ -327,6 +329,20 @@ struct TextureKeys {
   TextureContentKey contentKey;
   std::optional<aurora::texture::TextureSourceKey> sourceKey;
 };
+// SIN_HUD_TEXLOG: name of every texture sampled by an orthographic (2D/HUD) draw, logged once each.
+bool hud_texlog_enabled() noexcept {
+  static const bool enabled = std::getenv("SIN_HUD_TEXLOG") != nullptr;
+  return enabled;
+}
+std::mutex s_hudNameMutex;
+absl::flat_hash_map<const void*, std::string> s_hudTexNames;
+absl::flat_hash_set<std::string> s_hudLogged;
+void remember_hud_name(const gfx::TextureHandle& handle, const std::optional<TextureKeys>& keys) {
+  if (!hud_texlog_enabled() || !handle || !keys.has_value() || !keys->sourceKey.has_value()) return;
+  std::lock_guard lock(s_hudNameMutex);
+  s_hudTexNames[handle.get()] = gfx::texture_replacement::build_texture_replacement_name(*keys->sourceKey);
+}
+
 
 TextureKeys hash_texture_source(const GXTexObj_& obj, const GXTlutObj_* tlut, bool buildSourceKey) {
   ZoneScoped;
@@ -742,6 +758,24 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
       cache_content_texture(std::move(keys->contentKey), handle);
     }
   }
+  remember_hud_name(handle, keys);
+  // SIN_HUD_GRAB=<name substring> + SIN_HUD_GRAB_DIR: write that texture's decoded RGBA (for textures the dump path
+  // never reports because something else satisfies the lookup).
+  if (hud_texlog_enabled() && keys.has_value() && keys->sourceKey.has_value()) {
+    static const char* grab = std::getenv("SIN_HUD_GRAB");
+    static const char* grabDir = std::getenv("SIN_HUD_GRAB_DIR");
+    if (grab && grabDir && !is_palette_format(obj.format())) {
+      const auto nm = gfx::texture_replacement::build_texture_replacement_name(*keys->sourceKey);
+      if (nm.find(grab) != std::string::npos) {
+        const size_t bytes = texture_source_size(obj.format(), obj.width(), obj.height(), 1);
+        auto px = gfx::convert_texture(obj.format(), obj.width(), obj.height(), 1,
+                                       {static_cast<const uint8_t*>(obj.data), bytes});
+        if (px.format == wgpu::TextureFormat::RGBA8Unorm && !px.data.empty())
+          gfx::dds::write_rgba8_dds(std::filesystem::path(grabDir) / nm, obj.width(), obj.height(), px.data);
+        Log.info("[hud-grab] {} fmt={} -> {}", nm, unsigned(px.format), grabDir);
+      }
+    }
+  }
   if (!obj.no_cache()) {
     const SourceStamp textureStamp =
         keys.has_value() ? make_stamp(keys->contentKey.textureHash, textureGeneration) : SourceStamp{};
@@ -803,6 +837,7 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
       cache_content_texture(std::move(keys->contentKey), handle);
     }
   }
+  remember_hud_name(handle, keys);
   if (!obj.no_cache() && !tlut.no_cache()) {
     SourceStamp textureStamp;
     SourceStamp tlutStamp;
@@ -968,6 +1003,25 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
 
     obj.mFormat = resolved_format_for_handle(handle);
     textureBind = gfx::TextureBind{obj, std::move(handle), s_bindGeneration};
+  }
+}
+
+void note_ortho_draw_textures(const ShaderInfo& info) noexcept {
+  if (!hud_texlog_enabled()) return;
+  for (u32 i = 0; i < MaxTextures; ++i) {
+    if (!info.sampledTextures.test(i)) continue;
+    const auto& bind = g_gxState.textures[i];
+    std::string name;
+    {
+      std::lock_guard lock(s_hudNameMutex);
+      if (const auto it = s_hudTexNames.find(bind.ref.get()); it != s_hudTexNames.end()) name = it->second;
+    }
+    if (name.empty()) {
+      name = fmt::format("unnamed {}x{} fmt{}{}", bind.texObj.width(), bind.texObj.height(), unsigned(bind.texObj.format()),
+                         g_gxState.copyTextures.contains(bind.texObj.data) ? " (EFB copy)" : "");
+    }
+    std::lock_guard lock(s_hudNameMutex);
+    if (s_hudLogged.insert(name).second) Log.info("[hud-tex] {}", name);
   }
 }
 } // namespace aurora::gx

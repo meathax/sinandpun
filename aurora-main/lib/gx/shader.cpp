@@ -1748,9 +1748,9 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
       uvIn = fmt::format("tex{0}_uv", underlying(stage.texCoordId));
     }
 
-    fragmentFnPre +=
-        fmt::format("\n    var sampled{0} = textureSampleBias(tex{1}, tex{1}_samp, {2}, ubuf.tex{1}_size_bias.z);", i,
-                    underlying(stage.texMapId), uvIn);
+    fragmentFnPre += fmt::format("\n    var sampled{0} = {3}(tex{1}, tex{1}_samp, {2}, ubuf.tex{1}_size_bias.z);", i,
+                                 underlying(stage.texMapId), uvIn,
+                                 config.sharpHud ? "hud_sample" : "textureSampleBias");
   }
 
   if (info.usesPTTexMtx.any()) {
@@ -1932,6 +1932,54 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
         "@group(2) @binding({2})\n"
         "var tex{0}_samp: sampler;",
         i, i * 2, i * 2 + 1);
+  }
+
+  if (config.sharpHud) {
+    // HUD texture reconstruction for magnified 2D art (text, icons, reticles). The GX texture is still
+    // sampled normally; where it is magnified, its alpha silhouette is rebuilt as an isocontour of the
+    // bilinear alpha with an anti-aliased transition exactly one output pixel wide (the distance-field
+    // text technique, without needing a distance field). Interiors near a silhouette use a premultiplied
+    // Catmull-Rom filter so colour detail is crisper and no dark fringe bleeds in. Smooth, uniformly
+    // translucent images (glows, full-screen copies) have no alpha edge and keep the original result.
+    texBindings += R"""(
+fn hud_texel(t: texture_2d<f32>, p: vec2i, size: vec2i, wrap: bool) -> vec4f {
+    let q = select(clamp(p, vec2i(0), size - vec2i(1)), ((p % size) + size) % size, wrap);
+    let c = textureLoad(t, q, 0);
+    return vec4f(c.rgb * c.a, c.a);
+}
+fn hud_sample(t: texture_2d<f32>, s: sampler, uv: vec2f, bias: f32) -> vec4f {
+    let base = textureSampleBias(t, s, uv, bias);
+    let size = vec2i(textureDimensions(t, 0));
+    let texel = uv * vec2f(size);
+    let footprint = max(length(dpdx(texel)), length(dpdy(texel)));
+    let p = texel - vec2f(0.5);
+    let ip = vec2i(floor(p));
+    let f = p - floor(p);
+    let wrap = any(uv < vec2f(-0.001)) || any(uv > vec2f(1.001));
+    let c00 = hud_texel(t, ip, size, wrap);
+    let c10 = hud_texel(t, ip + vec2i(1, 0), size, wrap);
+    let c01 = hud_texel(t, ip + vec2i(0, 1), size, wrap);
+    let c11 = hud_texel(t, ip + vec2i(1, 1), size, wrap);
+    let bil = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    let innerMin = min(min(c00.a, c10.a), min(c01.a, c11.a));
+    let innerMax = max(max(c00.a, c10.a), max(c01.a, c11.a));
+    // Silhouette: isocontour halfway across this texel step, anti-aliased over one output pixel. Only
+    // single-texel steps count as edges, so authored soft shadows and glows keep their gradients.
+    let edge = smoothstep(0.35, 0.65, innerMax - innerMin);
+    let threshold = 0.5 * (innerMin + innerMax);
+    let width = max(fwidth(bil.a), 1.0e-4);
+    let sharpAlpha = mix(innerMin, innerMax, clamp((bil.a - threshold) / width + 0.5, 0.0, 1.0));
+    let alpha = mix(base.a, sharpAlpha, edge);
+    // Unpremultiplied colour so transparent texels do not darken the rebuilt edge.
+    let rgb = mix(base.rgb, bil.rgb / max(bil.a, 1.0e-3), edge * step(0.02, bil.a));
+    // Intensity textures (I4/I8) carry the silhouette in rgb as well (rgb == a in every texel).
+    let intensityLike = all(abs(base.rgb - vec3f(base.a)) < vec3f(0.02));
+    let sharp = vec4f(select(rgb, vec3f(alpha), intensityLike && edge > 0.0), alpha);
+    // Only where the texture is magnified (fewer than about one texel per output pixel).
+    let magnified = 1.0 - smoothstep(0.75, 1.0, footprint);
+    return mix(base, sharp, magnified);
+}
+)""";
   }
 
   if (info.sceneShading) uniBufAttrs += "\n    scene: array<vec4f, 4>,";

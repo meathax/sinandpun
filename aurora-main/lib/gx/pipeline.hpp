@@ -22,7 +22,7 @@ struct DrawData {
   uint32_t dstAlpha;
 };
 
-constexpr uint32_t GXPipelineConfigVersion = 17;
+constexpr uint32_t GXPipelineConfigVersion = 18; // 18: ShaderConfig.sharpHud
 struct PipelineConfig {
   uint32_t version = GXPipelineConfigVersion;
   uint32_t msaaSamples = 1; // deprecated

@@ -475,6 +475,8 @@ void copy_tex(const void* dest, GXBool clear, u32 copyControl) noexcept;
 void copy_disp(GXBool clear, u32 copyControl) noexcept;
 const gfx::TextureBind& get_texture(GXTexMapID id) noexcept;
 void resolve_sampled_textures(const ShaderInfo& info) noexcept;
+// SIN_HUD_TEXLOG debug: log (once) every texture an orthographic draw samples.
+void note_ortho_draw_textures(const ShaderInfo& info) noexcept;
 
 inline float clear_depth_value() {
   const float normalizedDepth = static_cast<float>(g_gxState.clearDepth) / 16777215.f;
@@ -528,6 +530,11 @@ struct ShaderConfig {
   u8 forceAlphaOne : 1 = false;
   u8 pixelLighting : 1 = false;
   u8 atmosphere : 2 = 0;
+  // Orthographic HUD draw: sample textures through hud_sample (edge reconstruction at output resolution).
+  u8 sharpHud : 1 = false;
+  u8 reservedBits : 7 = 0;
+  u8 reserved0 = 0;
+  u16 reserved1 = 0;
   std::array<AttrConfig, MaxVtxAttr> attrs;
   std::array<TevSwap, MaxTevSwap> tevSwapTable;
   std::array<TevStage, MaxTevStages> tevStages;

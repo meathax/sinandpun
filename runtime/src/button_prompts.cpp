@@ -16,6 +16,7 @@ bool Update() {
     // GX-worker-owned storage: the raw registration borrows the pixel bytes.
     static uint32_t generation=std::numeric_limits<uint32_t>::max();
     static std::unique_ptr<Atlas> pixels;
+    static std::vector<uint8_t> hdPixels;  // borrowed by the registration; replaced only after re-registering
     static aurora::texture::ReplacementRegistration registration;
     const uint32_t next=AimSettings::Generation();
     static bool previousCombat = false;
@@ -33,11 +34,16 @@ bool Update() {
     const aurora::texture::TextureSourceKey key{
         .textureHash=0x7d9cbe2a23379258ull,.width=256,.height=256,.format=6
     };
+    // 4x atlas (1024x1024 + mips) so prompts stay sharp at high output resolutions; same frames and UVs.
+    std::vector<uint8_t> hd;
+    BuildAtlasHD(AimSettings::Get(), hd, combat);
     const auto fresh=aurora::texture::register_replacement(key,
-        {.bytes=*candidate,.width=256,.height=256,.mipCount=1,.gxFormat=6,.label="Sin modern button prompts"},
+        {.bytes=hd,.width=kHdAtlasSize,.height=kHdAtlasSize,.mipCount=kHdAtlasMips,.gxFormat=GX_TF_RGBA8_PC,
+         .label="Sin modern button prompts (4x)"},
         {.priority=100});
     aurora::texture::unregister_replacement(registration);
     registration=fresh;
+    hdPixels=std::move(hd);
     pixels=std::move(candidate);
     return true;
 }
