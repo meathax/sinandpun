@@ -62,6 +62,12 @@ foreach ($notice in $graphicsNotices) {
 foreach ($file in $graphicsFiles) {
     Copy-Item -LiteralPath (Join-Path $sourcePath $file.Name) -Destination (Join-Path $stagePath $file.Name)
 }
+$hdHud = Join-Path $sourcePath "hd_hud"
+if (-not (Test-Path -LiteralPath $hdHud -PathType Container) -or
+    (Get-ChildItem -LiteralPath $hdHud -Filter *.png).Count -eq 0) {
+    throw "release source is missing the HD HUD pack: $hdHud (refresh it with tools\update_ready.ps1)"
+}
+Copy-Item -LiteralPath $hdHud -Destination (Join-Path $stagePath "hd_hud") -Recurse
 $achievementNotices = Join-Path $nativePath "recomp_achievements_licenses"
 if (Test-Path -LiteralPath $achievementNotices) {
     Copy-Item -LiteralPath $achievementNotices -Destination $stagePath -Recurse

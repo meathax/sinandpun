@@ -19,6 +19,7 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 - **Remappable controls.** Configure gamepad and keyboard/mouse bindings in-game. The port supports Wii Remote + Nunchuk and Classic Controller input schemes.
 - **High-resolution rendering.** Render at window size or choose an internal resolution multiplier. The Windows release includes AMD temporal FSR, FSR 1 spatial upscaling, NVIDIA DLSS and DLAA on RTX systems, and 4× MSAA. See the [FSR notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/FSR-NOTES.md) and [DLSS notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/DLSS-NOTES.md).
 - **Readable HUD.** Eligible Wii HUD and text draws are rendered over the upscaled scene at output resolution using the original textures and blending. Integer presentation can keep display pixels evenly sized when the source fits the selected aspect ratio.
+- **4K HUD and text.** A rebuilt high-resolution HUD pack ships with the game: reticles, score and health digits, labels, subtitles, menus, the title logo and 4× button prompts. Toggle it in **Options → Graphics → HD HUD and text** (on by default).
 - **Flexible frame pacing.** Choose original 60 Hz, match-display, or interpolated presentation. Variable refresh rate is available on compatible displays.
 - **In-game settings.** Open the game's **Options** from the title or pause menu. Display changes offer a Keep/Revert prompt.
 
@@ -30,6 +31,15 @@ Open **Options → Enhancements** to choose the effects you want.
 - **Materials and combat lighting.** Glossy armor catches reflections, shot impacts and explosions briefly light nearby surfaces, and contact shadows ground characters in the scene.
 - **Stage atmosphere.** Moving patterns of light play across underwater surfaces in Stage 2. Distance haze gives the scenery in Stage 5 more depth.
 - **High-refresh presentation.** On supported NVIDIA hardware, D3D12 frame generation adds intermediate frames for smoother motion, with Reflex to manage latency.
+
+## 4K HUD
+
+Every 2D HUD and menu texture the game draws has been rebuilt at high resolution, so text and reticles stay sharp at 4K instead of being stretched from 480p. Text is retypeset with a fitted font and the original colours and shadows; thin digits and reticles are redrawn as clean vector shapes; menu art is AI-upscaled. Turning the option off restores the original art instantly, and a user `texture_replacements/` pack takes priority.
+
+| Original (top) vs rebuilt (bottom), in-game at 4K |
+| --- |
+| ![HUD comparison](docs/screenshots/hd-hud-ingame.png) |
+| ![Menu comparison](docs/screenshots/hd-hud-menus.png) |
 
 ## Getting started
 
