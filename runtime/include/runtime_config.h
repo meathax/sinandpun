@@ -909,6 +909,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.stageAtmosphere = FindConfigValue<bool>(document, "video", "stage_atmosphere");
     config.pixelLighting = FindConfigValue<bool>(document, "video", "per_pixel_lighting");
     config.hdHud = FindConfigValue<bool>(document, "video", "hd_hud");
+    config.hdWorld = FindConfigValue<bool>(document, "video", "hd_world");
     config.sceneGlow = FindConfigValue<bool>(document, "video", "scene_glow");
     config.enhancedBloom = FindConfigValue<bool>(document, "video", "enhanced_bloom");
     config.generateMips = FindConfigValue<bool>(document, "video", "generate_mips");
@@ -992,7 +993,6 @@ inline void RecoverInvalidConfigFile(const std::filesystem::path& path, const st
             }
             size_t end = line.find_last_not_of(" \t\r");
             const std::string literal = line.substr(eq + 1, end == std::string::npos ? 0 : end - eq);
-    config.hdWorld = FindConfigValue<bool>(document, "video", "hd_world");
             WriteSetting("paths", key, literal);  // ignored when the literal does not parse
         }
     }
@@ -1688,6 +1688,8 @@ inline bool StageAtmosphere() { return Get().stageAtmosphere.value_or(false); }
 inline bool PixelLighting() { return Get().pixelLighting.value_or(false); }
 // Built-in high-resolution HUD/GUI textures from hd_hud/ beside the executable (default on).
 inline bool HdHud() { return Get().hdHud.value_or(true); }
+// Built-in HD environment, object and character textures from hd_world/ beside the executable (default on).
+inline bool HdWorld() { return Get().hdWorld.value_or(true); }
 inline bool SceneGlow() { return Get().sceneGlow.value_or(true); }
 inline bool EnhancedBloom() { return Get().enhancedBloom.value_or(false); }
 inline bool GenerateMips() { return Get().generateMips.value_or(false); }
@@ -1771,8 +1773,6 @@ inline void LogLoadedConfig() {
             }
             if (config.frameInterpolationFps) {
                 std::cout << " frame_interpolation_fps=" << *config.frameInterpolationFps;
-// Built-in HD environment, object and character textures from hd_world/ beside the executable (default on).
-inline bool HdWorld() { return Get().hdWorld.value_or(true); }
             }
             if (config.frameRate) {
                 std::cout << " frame_rate=" << *config.frameRate;
