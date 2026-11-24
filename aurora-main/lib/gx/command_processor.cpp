@@ -580,6 +580,8 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   // Direct translucent vertices have no persistent particle IDs in either replay path.
   const bool directParticles = translucent && cache.config.shaderConfig.attrs[GX_VA_POS].attrType == GX_DIRECT;
   const bool interpolate = !nativeScene && !directParticles && frame_interpolation_active() && state.projType == GX_PERSPECTIVE;
+  if (directParticles && !nativeScene && frame_interpolation_active() && state.projType == GX_PERSPECTIVE)
+    audit_note_direct_particle_draw();
   const bool indexedMatrices = state.vtxDesc[GX_VA_PNMTXIDX] != GX_NONE;
   bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0;
   if (uniformValid && interpolate != cache.interpRecorded)

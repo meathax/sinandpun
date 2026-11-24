@@ -19,6 +19,8 @@
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -227,6 +229,8 @@ void recycle_transform_entries(std::vector<FrameTransformEntry>& entries) noexce
 // Whether the frame in s_previousFrameTransforms recorded any palette draw;
 // record_interpolation_draw uses it to decide whether staging can pay off.
 bool s_previousFrameHasIndexedMatrices = false;
+std::atomic<uint32_t> s_auditDirectParticles{0};
+std::array<uint64_t, 3> s_auditUnresolvedDetail{}; // unmatched, matched+mask changed, matched+same mask
 
 // Hands the frame that just sealed to the next frame's matching and returns
 // the retiring one's matrix blocks to the pool.
@@ -1369,6 +1373,33 @@ void finalize_frame_interpolation() noexcept {
                 return lhs.slot < rhs.slot;
               });
 
+    // A draw's own matched partner is authoritative for its slots. Distinct bones can
+    // hold byte-identical matrices in one frame (coincident or collapsed joints) while
+    // their previous matrices differ; pooling them by content marks the shared hash
+    // ambiguous and used to drop the whole palette to its end pose while every
+    // neighbouring draw interpolated, which opened visible seams in skinned models.
+    // Sibling borrowing below only fills slots a draw cannot resolve itself.
+    for (uint32_t palette = 0; palette < paletteDraws.size(); ++palette) {
+      const uint32_t drawIndex = paletteDraws[palette];
+      const size_t previousIndex = currentToPrevious[drawIndex];
+      if (previousIndex >= s_previousFrameTransforms.size()) {
+        continue;
+      }
+      const auto& current = s_currentFrameTransforms[drawIndex].transform;
+      const auto& previous = s_previousFrameTransforms[previousIndex].transform;
+      if (!previous.indexedMatrices || previous.usedMatrixMask != current.usedMatrixMask) {
+        continue;
+      }
+      for (uint32_t slot = 0; slot < MaxPnMtx; ++slot) {
+        if ((current.usedMatrixMask & (1u << slot)) == 0) {
+          continue;
+        }
+        resolvedSlots[static_cast<size_t>(palette) * MaxPnMtx + slot] = {
+            &previous.indexedMatrices->position[slot], &previous.indexedMatrices->normal[slot]};
+      }
+      resolvedProjectionEntry[palette] = previousIndex;
+    }
+
     for (size_t runStart = 0; runStart < paletteSlotKeys.size();) {
       size_t runEnd = runStart + 1;
       while (runEnd < paletteSlotKeys.size() &&
@@ -1412,8 +1443,11 @@ void finalize_frame_interpolation() noexcept {
       }
       for (size_t keyIndex = runStart; keyIndex < runEnd; ++keyIndex) {
         const auto& key = paletteSlotKeys[keyIndex];
-        resolvedSlots[static_cast<size_t>(key.palette) * MaxPnMtx + key.slot] = {sourcePosition,
-                                                                                sourceNormal};
+        auto& resolved = resolvedSlots[static_cast<size_t>(key.palette) * MaxPnMtx + key.slot];
+        if (resolved.position != nullptr) {
+          continue;
+        }
+        resolved = {sourcePosition, sourceNormal};
         if (resolvedProjectionEntry[key.palette] == kNoPreparedPair) {
           resolvedProjectionEntry[key.palette] = sourceEntry;
         }
@@ -1467,6 +1501,80 @@ void finalize_frame_interpolation() noexcept {
         prepared.previousProjectionEntry = previousTransformIndex;
         prepared.nonIndexedPairOffset = appendPreparedPair(
             previous.position, current.position, previous.normal, current.normal);
+      }
+    }
+
+    // SIN_INTERP_AUDIT=1: classify every recorded perspective draw of this frame as
+    // interpolated or presented at its end pose, and count viewports that mix both
+    // (a mixed viewport is where split models can open seams).
+    static const bool audit = [] {
+      const char* v = std::getenv("SIN_INTERP_AUDIT");
+      return v && *v && *v != '0';
+    }();
+    if (audit) {
+      static uint32_t auditFrames = 0;
+      enum Reason : uint8_t { Ok, Unstaged, Unmatched, NoPalette, Unresolved, BadPair, kReasons };
+      static std::array<uint64_t, kReasons> totals{};
+      static std::array<uint64_t, kReasons> mixedTotals{};
+      static uint64_t mixedViewports = 0, viewportsSeen = 0;
+      std::vector<uint8_t> reason(s_currentFrameTransforms.size(), Unstaged);
+      for (size_t i = 0; i < s_currentFrameTransforms.size(); ++i) {
+        if (!preparedTransformState[i]) continue;
+        const auto& cur = s_currentFrameTransforms[i].transform;
+        const auto& prep = preparedTransforms[i];
+        if (cur.indexedMatrices) {
+          if (paletteDrawIndex[i] < 0) reason[i] = NoPalette;
+          else if (prep.indexedValid) reason[i] = Ok;
+          else {
+            bool unresolved = false;
+            for (size_t slot = 0; slot < MaxPnMtx; ++slot)
+              if ((cur.usedMatrixMask & (1u << slot)) &&
+                  resolvedSlots[static_cast<size_t>(paletteDrawIndex[i]) * MaxPnMtx + slot].position == nullptr)
+                unresolved = true;
+            reason[i] = unresolved ? Unresolved : BadPair;
+            if (unresolved) {
+              const size_t prevIndex = currentToPrevious[i];
+              const bool selfMatched = prevIndex < s_previousFrameTransforms.size();
+              const bool sameMask = selfMatched && s_previousFrameTransforms[prevIndex].transform.indexedMatrices &&
+                                    s_previousFrameTransforms[prevIndex].transform.usedMatrixMask == cur.usedMatrixMask;
+              s_auditUnresolvedDetail[selfMatched ? (sameMask ? 2 : 1) : 0]++;
+            }
+          }
+        } else {
+          reason[i] = currentToPrevious[i] < s_previousFrameTransforms.size() ? Ok : Unmatched;
+        }
+      }
+      std::unordered_map<HashType, std::pair<uint32_t, uint32_t>> perViewport;
+      for (size_t i = 0; i < reason.size(); ++i) {
+        auto& counts = perViewport[s_currentFrameTransforms[i].transform.viewportIdentity];
+        (reason[i] == Ok ? counts.first : counts.second)++;
+      }
+      for (size_t i = 0; i < reason.size(); ++i) {
+        totals[reason[i]]++;
+        const auto& counts = perViewport[s_currentFrameTransforms[i].transform.viewportIdentity];
+        if (counts.first && counts.second) mixedTotals[reason[i]]++;
+      }
+      for (const auto& [vp, counts] : perViewport) {
+        viewportsSeen++;
+        mixedViewports += counts.first && counts.second;
+      }
+      if (++auditFrames % 120 == 0) {
+        std::fprintf(stderr,
+                     "[interp-audit] frames=%u directParticles=%u draws ok=%llu unstaged=%llu unmatched=%llu nopalette=%llu "
+                     "unresolved=%llu badpair=%llu | in-mixed-viewports: unstaged=%llu unmatched=%llu "
+                     "nopalette=%llu unresolved=%llu badpair=%llu | mixed viewports %llu/%llu | unresolved: self-unmatched=%llu mask-changed=%llu own-partner-ok=%llu\n",
+                     auditFrames, s_auditDirectParticles.exchange(0), (unsigned long long)totals[Ok], (unsigned long long)totals[Unstaged],
+                     (unsigned long long)totals[Unmatched], (unsigned long long)totals[NoPalette],
+                     (unsigned long long)totals[Unresolved], (unsigned long long)totals[BadPair],
+                     (unsigned long long)mixedTotals[Unstaged], (unsigned long long)mixedTotals[Unmatched],
+                     (unsigned long long)mixedTotals[NoPalette], (unsigned long long)mixedTotals[Unresolved],
+                     (unsigned long long)mixedTotals[BadPair], (unsigned long long)mixedViewports,
+                     (unsigned long long)viewportsSeen, (unsigned long long)s_auditUnresolvedDetail[0],
+                     (unsigned long long)s_auditUnresolvedDetail[1], (unsigned long long)s_auditUnresolvedDetail[2]);
+        s_auditUnresolvedDetail.fill(0);
+        totals.fill(0);
+        mixedTotals.fill(0);
+        mixedViewports = viewportsSeen = 0;
       }
     }
 
@@ -1589,6 +1697,16 @@ void mark_frame_interpolation_replay_unsafe() noexcept {
 
 bool frame_interpolation_replay_safe() noexcept {
   return s_frameInterpolationReplaySafe.load(std::memory_order_acquire);
+}
+
+void audit_note_direct_particle_draw() noexcept {
+  static const bool enabled = [] {
+    const char* v = std::getenv("SIN_INTERP_AUDIT");
+    return v && *v && *v != '0';
+  }();
+  if (enabled) {
+    s_auditDirectParticles.fetch_add(1, std::memory_order_relaxed);
+  }
 }
 
 void extend_interpolation_draw(uint16_t usedPnMtxMask) noexcept {

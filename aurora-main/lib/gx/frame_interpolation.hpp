@@ -85,6 +85,7 @@ std::array<gfx::Range, MaxInterpolatedFrames> record_interpolation_draw(
 
 // Folds a merged draw back into the snapshot of the draw it joined. aurora renders merged
 // primitives through the first one's uniform block, so without this the merged-in bones tear.
+void audit_note_direct_particle_draw() noexcept;
 void extend_interpolation_draw(uint16_t usedPnMtxMask) noexcept;
 
 bool interpolate_transform(const Mat3x4<float>& previous, const Mat3x4<float>& current,
