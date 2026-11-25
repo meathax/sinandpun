@@ -2542,7 +2542,7 @@ void ReleaseControllers() noexcept {
 
 // QA hook: SIN_UI_FUZZ=<seed>,<interval_ms>,<key list e.g. DOWN+UP+LEFT+RIGHT+ENTER+TAB+DEL+F10> pushes random key presses
 // into the SDL queue once SIN_UI_FUZZ_START seconds have passed (logs each key to the console for replay).
-// Capture aid: SIN_TRAILER_MENU="TAG:OPEN,+N:KEY,+N:KEY,..." opens the options overlay when the trailer
+// Capture aid: SIN_TRAILER_MENU="TAG:OPEN,+N:KEY,+N:KEY,..." (, or ; separated) opens the options overlay when the trailer
 // bot's frame tag reaches TAG, then presses each KEY N overlay frames after the previous step (the game
 // may pause behind the overlay, so later steps count overlay frames, not guest frames). Keys: Q E UP
 // DOWN LEFT RIGHT ENTER ESC.
@@ -2558,7 +2558,7 @@ void RunTrailerMenuScript() {
             {"ESC", SDL_SCANCODE_ESCAPE}};
         std::string spec = env;
         for (size_t at = 0; at < spec.size();) {
-            size_t comma = spec.find(',', at);
+            size_t comma = spec.find_first_of(",;", at);
             const std::string item = spec.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
             const size_t colon = item.find(':');
             if (colon != std::string::npos) {

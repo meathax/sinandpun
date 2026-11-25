@@ -22,7 +22,7 @@ def decode(path):
             if int(w0) >= 640:
                 h = int(h0)
                 break
-    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", path, "-vf", f"crop=144:8:0:{h - 8},format=gray",
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", path, "-fps_mode", "passthrough", "-vf", f"crop=144:8:0:{h - 8},format=gray",
            "-f", "rawvideo", "-"]
     raw = subprocess.run(cmd, capture_output=True).stdout
     frames = np.frombuffer(raw, np.uint8).reshape(-1, 8, 144)
