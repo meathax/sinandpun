@@ -16,5 +16,11 @@ struct Output {
 bool Enabled();
 // port 0 = P1, 1 = P2. Returns false when the bot is off.
 bool Sample(int port, Output& out);
+// Guest frame clock for deterministic capture: vi.cpp calls OnFramePresented() once per produced guest
+// frame. The bot's time base is frames since gameplay first became controllable, so two runs with
+// different graphics settings replay identical input. FrameTag() is that index + 1 (0 = not started).
+void OnFramePresented();
+unsigned FrameTag();
+bool TagEnabled();  // SIN_TRAILER_TAG=1: overlay draws FrameTag() as a 16-bit block code bottom-left
 
 } // namespace TrailerBot

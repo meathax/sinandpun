@@ -2,6 +2,7 @@
 #include <rl_achievements.h>
 #endif
 
+#include "wiimote/trailer_bot.h"
 #include "hle_stubs.h"
 #include "button_prompts.h"
 #include "virtual_remote.h"
@@ -645,6 +646,7 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         s_lastPacedRetraceCount = g_vi.retraceCount;
     }
     settings_overlay::AdvancePresentedFrame();
+    TrailerBot::OnFramePresented();
     PerfStats::OnFramePresented();
     g_auroraFrameActive.store(false, std::memory_order_release);
     g_auroraFrameHadWork.store(false, std::memory_order_release);

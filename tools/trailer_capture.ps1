@@ -9,7 +9,9 @@ param(
     [int]$Seed = 7,
     [switch]$NoBot,
     [string]$OutDir = "build\trailer\raw",
-    [string[]]$Env = @()
+    [string[]]$Env = @(),
+    [string]$Profile = "",       # tools/trailer_config.py profile (max/original/nofx/notex); config restored after
+    [string[]]$Set = @()         # extra [video] key=value overrides for the profile
 )
 # Capture-only: records the primary 3840x2160 display at 60 fps (lossless-ish HEVC NVENC) while the
 # game runs with the trailer bot driving both seats. Usage (repo root):
@@ -21,7 +23,8 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 Get-Process sinandpun -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
 
-$vars = @{}
+$vars = @{ "SIN_TRAILER_TAG" = "1" }
+if ($Profile) { python tools/trailer_config.py $Profile @Set; if ($LASTEXITCODE) { throw "config profile failed" } }
 if (-not $NoBot) { $vars["SIN_TRAILER_BOT"] = "1"; $vars["SIN_TRAILER_BOT_GOD"] = "1"; $vars["SIN_TRAILER_BOT_SEED"] = "$Seed"; $vars["SIN_VIRTUAL_REMOTE"] = "1" }
 if ($Stage -ge 0) {
     $vars["SIN_AUTOSTAGE"] = "$Stage"; $vars["SIN_AUTOSTAGE_A"] = "$A"; $vars["SIN_AUTOSTAGE_B"] = "$B"
@@ -35,11 +38,12 @@ $p = Start-Process -FilePath "$root\build\native\sinandpun.exe" -WorkingDirector
     -RedirectStandardOutput "$log.out" -RedirectStandardError $log -PassThru
 Start-Sleep -Milliseconds ([int]($Lead * 1000))
 $video = Join-Path $OutDir "$Name.mkv"
-& $ffmpeg -hide_banner -loglevel error -y -f lavfi -i "gfxcapture=window_exe=sinandpun.exe:capture_cursor=0:max_framerate=60,hwdownload,format=bgra,fps=60" `
-    -t $Record -c:v hevc_nvenc -preset p4 -tune hq -rc constqp -qp 14 $video
+& $ffmpeg -hide_banner -loglevel error -y -f lavfi -i "gfxcapture=window_exe=sinandpun.exe:capture_cursor=0:max_framerate=240,hwdownload,format=bgra" `
+    -t $Record -fps_mode passthrough -c:v hevc_nvenc -preset p4 -tune hq -rc constqp -qp 14 $video
 "ffmpeg exit $LASTEXITCODE"
 $null = $p.CloseMainWindow()
 Start-Sleep -Seconds 3
 if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
 foreach ($k in $vars.Keys) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
+if ($Profile) { python tools/trailer_config.py restore }
 Get-Item $video | Select-Object Name, Length

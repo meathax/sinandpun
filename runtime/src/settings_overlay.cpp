@@ -18,6 +18,7 @@
 #include "runtime_log.h"
 #include "system_settings.h"
 #include "wiimote_host.h"
+#include "wiimote/trailer_bot.h"
 
 #include <imgui.h>
 #include <SDL3/SDL_events.h>
@@ -2541,6 +2542,63 @@ void ReleaseControllers() noexcept {
 
 // QA hook: SIN_UI_FUZZ=<seed>,<interval_ms>,<key list e.g. DOWN+UP+LEFT+RIGHT+ENTER+TAB+DEL+F10> pushes random key presses
 // into the SDL queue once SIN_UI_FUZZ_START seconds have passed (logs each key to the console for replay).
+// Capture aid: SIN_TRAILER_MENU="TAG:OPEN,+N:KEY,+N:KEY,..." opens the options overlay when the trailer
+// bot's frame tag reaches TAG, then presses each KEY N overlay frames after the previous step (the game
+// may pause behind the overlay, so later steps count overlay frames, not guest frames). Keys: Q E UP
+// DOWN LEFT RIGHT ENTER ESC.
+void RunTrailerMenuScript() {
+    struct Step { bool open; int wait; SDL_Scancode key; };
+    static std::vector<Step> steps = [] {
+        std::vector<Step> out;
+        const char* env = std::getenv("SIN_TRAILER_MENU");
+        if (!env) return out;
+        static const std::pair<const char*, SDL_Scancode> table[] = {
+            {"Q", SDL_SCANCODE_Q}, {"E", SDL_SCANCODE_E}, {"UP", SDL_SCANCODE_UP}, {"DOWN", SDL_SCANCODE_DOWN},
+            {"LEFT", SDL_SCANCODE_LEFT}, {"RIGHT", SDL_SCANCODE_RIGHT}, {"ENTER", SDL_SCANCODE_RETURN},
+            {"ESC", SDL_SCANCODE_ESCAPE}};
+        std::string spec = env;
+        for (size_t at = 0; at < spec.size();) {
+            size_t comma = spec.find(',', at);
+            const std::string item = spec.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+            const size_t colon = item.find(':');
+            if (colon != std::string::npos) {
+                Step s{false, std::atoi(item.c_str() + (item[0] == '+' ? 1 : 0)), SDL_SCANCODE_UNKNOWN};
+                const std::string name = item.substr(colon + 1);
+                if (name == "OPEN") s.open = true;
+                for (const auto& e : table)
+                    if (name == e.first) s.key = e.second;
+                out.push_back(s);
+            }
+            if (comma == std::string::npos) break;
+            at = comma + 1;
+        }
+        return out;
+    }();
+    static size_t next = 0;
+    static int lastFrame = 0;
+    if (next >= steps.size()) return;
+    const Step& s = steps[next];
+    const int frame = ImGui::GetFrameCount();
+    if (next == 0 ? static_cast<int>(TrailerBot::FrameTag()) < s.wait : frame - lastFrame < s.wait) return;
+    lastFrame = frame;
+    ++next;
+    if (s.open) {
+        OpenFromGame();
+        return;
+    }
+    if (s.key == SDL_SCANCODE_UNKNOWN) return;
+    SDL_Event ev{};
+    ev.type = SDL_EVENT_KEY_DOWN;
+    ev.key.scancode = s.key;
+    ev.key.key = SDL_GetKeyFromScancode(s.key, SDL_KMOD_NONE, false);
+    ev.key.down = true;
+    ev.key.windowID = SDL_GetWindowID(aurora_get_window());
+    SDL_PushEvent(&ev);
+    ev.type = SDL_EVENT_KEY_UP;
+    ev.key.down = false;
+    SDL_PushEvent(&ev);
+}
+
 void InjectFuzzKeys() {
     struct Fuzz {
         bool enabled = false;
@@ -2611,6 +2669,7 @@ void Draw() noexcept {
     }
     s_lastFrame = frame;
     InjectFuzzKeys();
+    if (TrailerBot::TagEnabled()) RunTrailerMenuScript();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
     PollGamepadMenuChord();
@@ -2627,7 +2686,7 @@ void Draw() noexcept {
     game_ui::Frame& in = game_ui::PollInput();
     UpdateMenuState(in.dt);
     UpdateGameCursor();
-    if (!StartupScreenVisible()) {
+    if (!StartupScreenVisible() && !TrailerBot::TagEnabled()) {
         DrawShaderCompilationStatus();
     }
     DrawFpsOverlay();
@@ -2638,6 +2697,18 @@ void Draw() noexcept {
     ApplyInputBlockState();
     AimInput::UpdateWindowState(InputBindings::InputBlocked());
     DrawStartupScreen();
+    if (TrailerBot::TagEnabled()) {
+        // Capture alignment tag: 16 bits of the bot frame index as 8x8 black/white blocks in the
+        // bottom-left corner, MSB first, framed by a white start block. Removed in post.
+        ImDrawList* tag = ImGui::GetForegroundDrawList();
+        const float h = ImGui::GetIO().DisplaySize.y;
+        const unsigned v = TrailerBot::FrameTag();
+        tag->AddRectFilled(ImVec2(0, h - 8), ImVec2(8 * 18, h), IM_COL32(0, 0, 0, 255));
+        tag->AddRectFilled(ImVec2(0, h - 8), ImVec2(8, h), IM_COL32(255, 255, 255, 255));
+        for (int b = 0; b < 16; ++b)
+            if (v & (0x8000u >> b))
+                tag->AddRectFilled(ImVec2(8.f * (b + 2), h - 8), ImVec2(8.f * (b + 3), h), IM_COL32(255, 255, 255, 255));
+    }
 }
 
 bool StartupScreenVisible() noexcept {

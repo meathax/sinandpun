@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -32,6 +33,10 @@
 #include <mutex>
 #include <random>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 bool SinCoopLastActors(uint32_t& lead, uint32_t& partner);  // hle/sin_coop.cpp
 
@@ -93,7 +98,10 @@ struct Seat {
 };
 
 std::mutex g_mutex;
-Clock::time_point g_start;
+std::atomic<uint64_t> g_frame{0};       // guest frames produced
+std::atomic<int64_t> g_startFrame{-1};  // g_frame when gameplay first became controllable
+uint64_t g_lastFrame[2]{~0ull, ~0ull};
+Output g_cached[2];
 std::array<Seat, 2> g_seats;
 std::vector<Target> g_targets;
 float g_scanAt = -1.f;
@@ -387,24 +395,59 @@ bool Enabled() {
 bool Sample(int port, Output& out) {
     if (!Enabled() || port < 0 || port > 1) return false;
     std::lock_guard lock(g_mutex);
-    if (g_start == Clock::time_point{}) g_start = Clock::now();
-    const float t = std::chrono::duration<float>(Clock::now() - g_start).count();
-    float dt = t - g_lastT[port];
+    const uint64_t frame = g_frame.load(std::memory_order_acquire);
+    if (frame == g_lastFrame[port]) { out = g_cached[port]; return true; }  // one decision per guest frame
+    const uint64_t prevFrame = g_lastFrame[port];
+    g_lastFrame[port] = frame;
+    const int64_t start = g_startFrame.load(std::memory_order_acquire);
+    const float t = start >= 0 ? static_cast<float>(static_cast<int64_t>(frame) - start) / 60.f
+                               : static_cast<float>(frame) / 60.f;
+    float dt = prevFrame == ~0ull ? 1.f / 60.f : static_cast<float>(frame - prevFrame) / 60.f;
     g_lastT[port] = t;
-    dt = std::clamp(dt, 0.0005f, 0.05f);
+    dt = std::clamp(dt, 1.f / 60.f, 0.05f);
     Scan(t);
+    if (g_playerHit[0] && start < 0) {
+        int64_t expected = -1;
+        g_startFrame.compare_exchange_strong(expected, static_cast<int64_t>(frame));
+    }
     if (!g_playerHit[0]) {
         // Boot, strap screens and menus: P1 taps A so autostage can take over; nobody aims.
         out = Output{};
         out.u = 0.795f;  // File Select: "Do Not Save" (keeps the player's save files untouched)
         out.v = 0.70f;
-        out.a = port == 0 && std::fmod(t, 1.8f) < 0.12f;
+        out.a = port == 0 && (frame % 108) < 7;
+        g_cached[port] = out;
         return true;
     }
     Seat& s = g_seats[port];
     Think(port, s, t, dt);
     Act(port, s, t, out);
+    g_cached[port] = out;
+    static FILE* trace = [] {
+        const char* path = std::getenv("SIN_TRAILER_BOT_TRACE");
+        return path && *path ? std::fopen(path, "w") : nullptr;
+    }();
+    if (trace) {
+        std::fprintf(trace, "f=%llu s=%lld p=%d tid=%lu u=%.4f v=%.4f a=%d b=%d c=%d z=%d lx=%.3f ly=%.3f n=%zu act=%.3f,%.3f\n",
+                     static_cast<unsigned long long>(frame), static_cast<long long>(start), port,
+                     static_cast<unsigned long>(GetCurrentThreadId()), out.u, out.v, out.a, out.b, out.c, out.z, out.lx,
+                     out.ly, g_targets.size(), g_actorPos[port][0], g_actorPos[port][1]);
+        if ((frame & 63) == 0) std::fflush(trace);
+    }
     return true;
+}
+
+void OnFramePresented() { g_frame.fetch_add(1, std::memory_order_acq_rel); }
+
+unsigned FrameTag() {
+    const int64_t start = g_startFrame.load(std::memory_order_acquire);
+    if (start < 0) return 0;
+    return static_cast<unsigned>((static_cast<int64_t>(g_frame.load(std::memory_order_acquire)) - start + 1) & 0xFFFF);
+}
+
+bool TagEnabled() {
+    static const bool on = EnvInt("SIN_TRAILER_TAG", 0) != 0;
+    return on;
 }
 
 } // namespace TrailerBot
