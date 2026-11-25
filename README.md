@@ -4,7 +4,7 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 
 **Windows x64 · Native PowerPC recompilation · In testing · [GPL-3.0](LICENSE)**
 
-[Getting started](#getting-started) · [Features](#features) · [Enhanced local co-op](#enhanced-local-co-op) · [Controls](#controls) · [Project status](#project-status) · [Building from source](#building-from-source)
+[Getting started](#getting-started) · [Features](#features) · [HD textures](#hd-world-textures) · [Enhanced local co-op](#enhanced-local-co-op) · [Controls](#controls) · [Project status](#project-status) · [Building from source](#building-from-source)
 
 <p align="center">
   <img src="docs/screenshots/gameplay.png" alt="Gameplay in Sin &amp; Punishment: Star Successor Recompiled" width="900">
@@ -20,6 +20,7 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 - **High-resolution rendering.** Render at window size or choose an internal resolution multiplier. The Windows release includes AMD temporal FSR, FSR 1 spatial upscaling, NVIDIA DLSS and DLAA on RTX systems, and 4× MSAA. See the [FSR notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/FSR-NOTES.md) and [DLSS notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/DLSS-NOTES.md).
 - **Readable HUD.** Eligible Wii HUD and text draws are rendered over the upscaled scene at output resolution using the original textures and blending. Integer presentation can keep display pixels evenly sized when the source fits the selected aspect ratio.
 - **4K HUD and text.** A rebuilt high-resolution HUD pack ships with the game: reticles, score and health digits, labels, subtitles, menus, the title logo and 4× button prompts. Toggle it in **Options → Graphics → HD HUD and text** (on by default).
+- **HD world and character textures.** 292 remastered environment, object and character textures (up to 4× the original resolution) ship with the game. Toggle them in **Options → Graphics → HD world and character textures** (on by default). See [HD world textures](#hd-world-textures).
 - **Flexible frame pacing.** Choose original 60 Hz, match-display, or interpolated presentation. Variable refresh rate is available on compatible displays.
 - **In-game settings.** Open the game's **Options** from the title or pause menu. Display changes offer a Keep/Revert prompt.
 
@@ -40,6 +41,30 @@ Every 2D HUD and menu texture the game draws has been rebuilt at high resolution
 | --- |
 | ![HUD comparison](docs/screenshots/hd-hud-ingame.png) |
 | ![Menu comparison](docs/screenshots/hd-hud-menus.png) |
+
+## HD world textures
+
+The game's 3D surfaces were authored for a 480p Wii display, mostly as 128×128 and 256×256 textures that turn into blurry smears at 1440p and 4K. The release includes 292 of them rebuilt at 2× or 4× resolution: stone, concrete, rock, metal, roads, signage, ship interiors, characters' clothing and bosses. Each was upscaled with an AI model trained for game textures, then colour-locked to the original so the tone and art direction stay exactly as Treasure painted them. Effects, glows and the sky are left untouched.
+
+The pack is on by default. Turn it off in **Options → Graphics → HD world and character textures** to compare. The change applies immediately, with no restart. A user `texture_replacements/` pack still takes priority. The pack adds about 350 MB on disk and about the same in video memory when every texture is loaded.
+
+**In-game at 4K, 1:1 crops (same frame, original textures on top, HD textures below):**
+
+| Stage 1: concrete slab and paving |
+| --- |
+| ![Stage 1 slab comparison](docs/screenshots/hd-world-slab.jpg) |
+
+| Opening: character clothing |
+| --- |
+| ![Character texture comparison](docs/screenshots/hd-world-characters.jpg) |
+
+| Stage 5: highway surface |
+| --- |
+| ![Highway texture comparison](docs/screenshots/hd-world-highway.jpg) |
+
+**Texture close-ups (left half original, right half HD, same region):**
+
+![Texture close-up comparisons](docs/screenshots/hd-world-closeups.jpg)
 
 ## Getting started
 
