@@ -5,6 +5,7 @@
 #include "aurora_events.h"
 #include "disc_import.h"
 #include "game_ui.h"
+#include "guest_abi/guest_region.h"
 #include "runtime_config.h"
 
 #include <SDL3/SDL_video.h>
@@ -18,6 +19,7 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -34,7 +36,11 @@ namespace fs = std::filesystem;
 
 namespace first_run_launcher {
 
-fs::path ManagedGameDirectory() { return RuntimeConfigFile::ApplicationDataDirectory() / "Game"; }
+bool JapanBuild() { return std::string_view(GuestRegion::CurrentFacts().gameId) == "R2VJ01"; }
+
+const char* ManagedGameDirectoryName() { return JapanBuild() ? "Game-R2VJ01" : "Game"; }
+
+fs::path ManagedGameDirectory() { return RuntimeConfigFile::ApplicationDataDirectory() / ManagedGameDirectoryName(); }
 
 namespace {
 
@@ -44,14 +50,15 @@ bool LooksLikeGameRoot(const fs::path& root) {
         !fs::is_regular_file(root / "sys" / "main.dol", ec)) {
         return false;
     }
-    // Another game's extracted data (e.g. left by a different WiiCompiled port) is not usable:
-    // treat it as missing so the player is asked for this game's disc instead of booting it.
+    // Another region or game's extracted data is not usable by this regional
+    // executable; treat it as missing so the player is asked for the matching disc.
+    if (RuntimeConfigFile::DiscGameId(root) != GuestRegion::CurrentFacts().gameId) return false;
     return !fs::is_regular_file(root / "sys" / "boot.bin", ec) || RuntimeConfigFile::IsThisGamesDiscRoot(root);
 }
 
 void PointConfigAtManagedGame() {
-    RuntimeConfigFile::Mutable().dvdRoot = "Game";
-    RuntimeConfigFile::WriteSetting("paths", "dvd_root", RuntimeConfigFile::FormatString("Game"));
+    RuntimeConfigFile::Mutable().dvdRoot = ManagedGameDirectoryName();
+    RuntimeConfigFile::WriteSetting("paths", "dvd_root", RuntimeConfigFile::FormatString(ManagedGameDirectoryName()));
 }
 
 }  // namespace
@@ -232,7 +239,8 @@ std::vector<FoundGame> FindGames() {
             if (++probed > 48) break;
             DiscImport::DiscInfo info;
             std::string error;
-            if (DiscImport::ProbeDisc(path, info, error) && info.supported)
+            if (DiscImport::ProbeDisc(path, info, error) && info.supported &&
+                info.gameId == GuestRegion::CurrentFacts().gameId)
                 games.push_back({path, path.filename().string(), info.format, false});
         }
     }
@@ -248,6 +256,20 @@ std::vector<FoundGame> FindGames() {
 
 void StartImport(Launcher& l, const fs::path& image, const fs::path& keys) {
     JoinFinished(l.importThread);
+    std::string selectedId;
+    std::error_code selectedEc;
+    if (fs::is_directory(image, selectedEc)) {
+        selectedId = RuntimeConfigFile::DiscGameId(image);
+    } else {
+        DiscImport::DiscInfo selectedInfo;
+        std::string selectedError;
+        if (DiscImport::ProbeDisc(image, selectedInfo, selectedError)) selectedId = selectedInfo.gameId;
+    }
+    if (!selectedId.empty() && selectedId != GuestRegion::CurrentFacts().gameId) {
+        l.error = "This is " + selectedId + "; use the matching regional executable.";
+        l.phase = Phase::Failed;
+        return;
+    }
     l.progress.cancel = false;
     l.progress.done = 0;
     l.progress.total = 1;

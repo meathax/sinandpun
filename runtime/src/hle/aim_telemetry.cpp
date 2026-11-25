@@ -25,6 +25,7 @@
 //         cam=(x,y) cls=(x,y) q.r=(a,b) q.l=(a,b) nunq=(a,b) btn=<hex> cl4=<hex> cl5=<hex> n=<reports>
 
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 #include "runtime_log.h"
 #include "virtual_remote.h"
 
@@ -38,8 +39,8 @@
 
 namespace {
 
-constexpr uint32_t kGmPtrAddr = 0x804B19A0u;
-constexpr uint32_t kLoadedStageAddr = 0x804B1968u;
+const uint32_t kGmPtrAddr = MKW_GADDR(804B19A0);
+const uint32_t kLoadedStageAddr = MKW_GADDR(804B1968);
 constexpr uint32_t kStatusBase = 0x490u;   // input + this = KPADStatus copy, channel 0
 constexpr uint32_t kPointerBase = 0x48u;   // input + this = pointer x,y floats, channel 0
 // GunSight (the reticle object; Ng names from projects/r2ve01/MAP.txt): GunSight1P vtable 0x802F9270 (ctor 0x8006934C).

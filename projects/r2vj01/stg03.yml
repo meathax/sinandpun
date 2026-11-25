@@ -1,0 +1,32 @@
+schema_version: 1
+workspace_root: ../..
+
+project:
+  id: snp2-r2vj01-stg03
+  display_name: Tsumi to Batsu - Sora no Koukeisha (Japan) + stg03 module
+  game_id: R2VJ01
+  region: J
+
+memory:
+  base: 0x80000000
+  size: 0x18000000
+  sda_base: 0x80468320
+  sda2_base: 0x8046B4E0
+
+inputs:
+  dol:
+    path: orig/R2VJ01/sys/main.dol
+    sha256: 5984bd01d8520c7946e721e690ef002659602fab885b33c12a0e9d86fa3f6154
+  module:
+    path: build/r2vj01/modules/stg03.bin
+    load_address: 0x97DC0000
+
+translation:
+  entry_points:
+    - 0x800062F0
+  function_map:
+    path: build/r2vj01/modules/stg03.map
+  allow_unsupported_instructions: false
+
+output:
+  root: build/r2vj01/generated-stg03

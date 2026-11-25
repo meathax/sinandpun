@@ -8,17 +8,19 @@ param(
     [string]$Out = "build/screenshots",
     [string]$Prefix = "ui",
     [string]$Script = "open wait 40 shot display",
+    [string]$BuildDirectory = "build/native",
+    [int]$Region = 0,
     [switch]$Keep
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 Set-Location $root
-$scratch = "build/uitest"
+$scratch = "build/uitest-r$Region"
 New-Item -ItemType Directory -Force $scratch | Out-Null
-$sdl = "build/native/_deps/sdl3_prebuilt-src/x86_64-w64-mingw32"
-$imgui = "build/native/_deps/imgui-src"
-$inc = @("runtime/include", "aurora-main/include", $imgui, "$sdl/include", "runtime/third_party/toml11", "runtime/third_party") | ForEach-Object { "-I$_" }
-$flags = @("-std=c++20", "-O1", "-w", "-DNOMINMAX", "-DTARGET_PC", "-DSDL_MAIN_HANDLED", "-c")
+$sdl = "$BuildDirectory/_deps/sdl3_prebuilt-src/x86_64-w64-mingw32"
+$imgui = "$BuildDirectory/_deps/imgui-src"
+$inc = @("runtime/include", "runtime/src", "aurora-main/include", $imgui, "$sdl/include", "runtime/third_party/toml11", "runtime/third_party") | ForEach-Object { "-I$_" }
+$flags = @("-std=c++20", "-O1", "-w", "-DNOMINMAX", "-DTARGET_PC", "-DSDL_MAIN_HANDLED", "-DMKW_TRANSLATED_GUEST_REGION=$Region", "-c")
 $srcs = @("tools/ui_preview/ui_preview.cpp", "tools/ui_preview/stubs.cpp", "runtime/src/settings_overlay.cpp", "runtime/src/game_ui.cpp",
     "runtime/src/controls_menu.cpp", "runtime/src/controller_mapping_wizard.cpp", "runtime/src/ui_font_data.cpp",
     "$imgui/imgui.cpp", "$imgui/imgui_draw.cpp", "$imgui/imgui_tables.cpp", "$imgui/imgui_widgets.cpp")

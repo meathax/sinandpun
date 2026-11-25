@@ -12,11 +12,32 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace DiscImport {
 
 inline constexpr const char* kGameId = "R2VE01";
+inline constexpr const char* kGameIdJapan = "R2VJ01";
+
+struct GameVersionInfo {
+    const char* gameId;
+    const char* displayName;
+    const char* moduleExportFile;
+};
+
+inline constexpr GameVersionInfo kGameVersions[] = {
+    {"R2VE01", "Sin & Punishment: Star Successor (USA)", "gs2.sel"},
+    {"R2VJ01", "Tsumi to Batsu: Sora no Koukeisha (Japan)", "AppWiiRelRso.sel"},
+};
+
+inline constexpr const GameVersionInfo* FindGameVersion(std::string_view gameId) {
+    for (const GameVersionInfo& version : kGameVersions) {
+        if (gameId == version.gameId) return &version;
+    }
+    return nullptr;
+}
+
 inline constexpr uint32_t kModuleBase = 0x97DC0000u;  // reserved MEM2 window the stage modules are linked at
 inline constexpr uint32_t kModuleWindowSize = 0x200000u;
 inline constexpr int kModuleCount = 8;
@@ -62,6 +83,9 @@ bool IsGameDirectoryComplete(const std::filesystem::path& gameDir);
 // Port of tools/rso_link.py: links stgNN.rso against gs2.sel at `base` into a flat image. Returns false and sets
 // `error` for malformed input; `unresolved` (optional) receives the count of imports the SEL could not resolve.
 bool BuildModuleImage(const std::vector<uint8_t>& rso, const std::vector<uint8_t>& sel, uint32_t base,
+                      std::vector<uint8_t>& image, std::string& error, int* unresolved = nullptr);
+bool BuildModuleImage(const std::vector<uint8_t>& rso, const std::vector<uint8_t>& sel,
+                      const std::vector<uint8_t>& mainDol, uint32_t base,
                       std::vector<uint8_t>& image, std::string& error, int* unresolved = nullptr);
 
 // Locations a disc picker may return: .cue is resolved to its .bin by the importer.

@@ -21,6 +21,7 @@
 
 #include "abi_bridge.h"
 #include "guest_function_imports.h"
+#include "guest_abi/guest_region.h"
 #include "hle_stubs.h"
 #include "memory.h"
 #include "runtime_log.h"
@@ -191,33 +192,29 @@ void GuestEntryHook(uint32_t address, CpuContext* ctx) {
     // then returns completion to the task owner. The owner still releases the
     // strap archive and runs controller/save initialization before the title.
     // Only redirect a newly constructed StrapMsg, never other task classes.
-    if (address == 0x8008F408u && ctx != nullptr) {
+    if (address == MKW_GADDR(8008F408) && ctx != nullptr) {
         const uint32_t task = ctx->gpr[3];
-        if (task != 0 && Memory::Contains(task, 0x54) &&
-            Memory::Read32(task) == 0x802FB018u && Memory::Read8(task + 0x36) == 0) {
+        // The hooked entry point is already the class-specific StrapMsg update
+        // in both regions. Do not compare the vtable word itself: those bytes
+        // contain region-relocated code/data addresses.
+        if (task != 0 && Memory::Contains(task, 0x54) && Memory::Read8(task + 0x36) == 0) {
             Memory::Write8(task + 0x36, 10);
             RT_LOGF(RT_TAG_HLE, "startup: skipping StrapMsg control notices\n");
         }
         return;
     }
-    if (address == 0x8003B950u && ctx != nullptr) {
+    if (address == MKW_GADDR(8003B950) && ctx != nullptr) {
         SinSoundSlotGuard(ctx);  // hle/sound_slot_guard.cpp
         return;
     }
     if (!g_enabled || ctx == nullptr) {
         return;
     }
-    switch (address) {
-    case 0x8010BC48u:
+    if (address == MKW_GADDR(8010BC48)) {
         TitleOptionsPage(ctx);
-        break;
-    case 0x8010C1E4u:
+    } else if (address == MKW_GADDR(8010C1E4)) {
         PauseOptionsPage(ctx);
-        break;
-    case 0x8010C6C8u:
+    } else if (address == MKW_GADDR(8010C6C8)) {
         TitleRoot(ctx);
-        break;
-    default:
-        break;
     }
 }

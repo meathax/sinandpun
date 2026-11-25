@@ -26,6 +26,7 @@ build/
 translator/src/Translator.Core/Build/*
 !translator/src/Translator.Core/Build/*.cs
 generated/
+generated-jp/
 build_translate.log
 decomp/build/
 translator/**/bin/

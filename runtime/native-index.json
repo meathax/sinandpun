@@ -2,7 +2,7 @@
   "format": "wiicompiled-runtime-native-index",
   "formatVersion": 2,
   "extractorVersion": 2,
-  "sourceDigest": "826c223874c094b6b660764cd5aeb02a9757f390bd5c545f0df4c6cdaee33ced",
+  "sourceDigest": "cde9a9b8fbbfd1a213ad832939d912120197bb92b0a5a7f56be8091c6dc12a02",
   "registrations": [
     {
       "address": "0x8012E630",

@@ -20,6 +20,7 @@
 #include "trailer_bot.h"
 
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 
 #include <algorithm>
 #include <array>
@@ -160,7 +161,7 @@ void Scan(float t) {
     static const bool log = EnvInt("SIN_TRAILER_BOT_LOG", 0) != 0;
     static float nextLog = 0;
     uint32_t gm, a, m, h;
-    if (!R32(0x804B19A0u, gm) || !Valid(gm)) return;
+    if (!R32(MKW_GADDR(804B19A0), gm) || !Valid(gm)) return;
     ResolvePlayerHits(gm);
     KeepTeamAlive(gm);
     if (!R32(gm + 0x60, a) || !Valid(a) || !R32(a + 0x44, m) || !Valid(m) || !R32(m + 0x14, h) || !Valid(h)) return;

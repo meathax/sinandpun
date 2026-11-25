@@ -651,6 +651,11 @@ uint16_t MemoryInline::Read16Slow(uint32_t addr) {
 
 uint32_t MemoryInline::Read32Slow(uint32_t addr) {
     if (IsMmioAddress(addr)) {
+        // Processor-interface reset code. A normal disc boot is a cold boot;
+        // the recomp has no system-menu reset pipeline to expose here.
+        if (addr == 0xCC003024u) {
+            return 0;
+        }
         if (uint32_t value = 0; HollywoodGpio_Read32(addr, value)) {
             return value;
         }

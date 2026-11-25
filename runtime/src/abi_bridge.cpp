@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
@@ -717,6 +718,64 @@ static std::vector<uint32_t>& WatchedTargets() {
 }
 
 bool g_argsEnabled = !WatchedTargets().empty();
+
+// SIN_CALLRING=1: keep a small ring of recent bridged guest calls and print a
+// compressed view every five seconds. Unlike the first-seen calltrace this
+// shows the loop a stalled boot is actually repeating.
+bool g_ringEnabled = [] {
+    const char* v = std::getenv("SIN_CALLRING");
+    return v && *v && *v != '0';
+}();
+
+void RecordRing(uint32_t target, const CpuContext* ctx) {
+    struct Entry { uint32_t target; uint32_t lr; };
+    constexpr size_t kSize = 4096;
+    static Entry entries[kSize];
+    static std::atomic<uint32_t> cursor{0};
+    static std::atomic<bool> printerStarted{false};
+    const uint32_t index = cursor.fetch_add(1, std::memory_order_relaxed);
+    entries[index % kSize] = {target, ctx ? ctx->lr : 0};
+    if (!printerStarted.exchange(true)) {
+        std::thread([] {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                const uint32_t end = cursor.load(std::memory_order_relaxed);
+                const uint32_t count = std::min<uint32_t>(end, kSize);
+                std::map<uint32_t, uint32_t> counts;
+                for (uint32_t i = 0; i < count; ++i) {
+                    ++counts[entries[(end - count + i) % kSize].target];
+                }
+                std::vector<std::pair<uint32_t, uint32_t>> rows;
+                for (const auto& [target, n] : counts) rows.emplace_back(n, target);
+                std::sort(rows.rbegin(), rows.rend());
+                std::fprintf(stderr, "[ring] calls=%u distinct=%zu hot:", end, rows.size());
+                for (size_t i = 0; i < rows.size() && i < 18; ++i) {
+                    std::fprintf(stderr, " %08Xx%u", rows[i].second, rows[i].first);
+                }
+                std::fprintf(stderr, "\n[ring] tail:");
+                uint32_t previous = 0, repeat = 0;
+                auto flush = [&] {
+                    if (repeat) std::fprintf(stderr, " %08Xx%u", previous, repeat);
+                    repeat = 0;
+                };
+                const uint32_t tail = std::min<uint32_t>(count, 96);
+                for (uint32_t i = 0; i < tail; ++i) {
+                    const uint32_t target = entries[(end - tail + i) % kSize].target;
+                    if (target == previous) {
+                        ++repeat;
+                    } else {
+                        flush();
+                        previous = target;
+                        repeat = 1;
+                    }
+                }
+                flush();
+                std::fprintf(stderr, "\n");
+                std::fflush(stderr);
+            }
+        }).detach();
+    }
+}
 
 extern "C" void SinDebugSnapshot(const char* why);
 

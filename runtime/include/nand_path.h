@@ -5,6 +5,7 @@
 #include "nand_settings.h"
 #include "runtime_log.h"
 #include "system_bridge.h"
+#include "sysconf_image.h"
 
 #include <cstdlib>
 #include <cstdio>
@@ -55,6 +56,12 @@ inline std::filesystem::path ResolveConfiguredPath(const std::string& value) {
 }
 
 inline std::filesystem::path ManagedNandRootPath() {
+    // System settings are region-locked (language, area, product code and video
+    // mode). Keep the legacy USA directory unchanged, but do not expose a
+    // Japanese DOL to a USA console identity or vice versa.
+    if (::GuestRegion::Current() == ::GuestRegion::Id::NtscJ) {
+        return RuntimeConfigFile::ApplicationDataDirectory() / "NAND-R2VJ01";
+    }
     return RuntimeConfigFile::ApplicationDataDirectory() / "NAND";
 }
 
@@ -141,7 +148,7 @@ inline std::filesystem::path CreateManagedNandRoot() {
         FailNandRoot("Unable to create managed NAND root", root);
     }
 
-    if (!SeedMissingBootstrapFiles(root)) {
+    if (!SeedMissingBootstrapFiles(root) || !RuntimeSysConf::Ensure(root)) {
         FailNandRoot("Unable to initialize managed NAND", root);
     }
 
@@ -170,8 +177,8 @@ inline std::filesystem::path ResolveNandRootPath() {
         const auto path = ResolveConfiguredPath(configPath);
         if (auto existing = ExistingDirectory(path)) {
             // Seed only a new configured NAND so existing frontend data stays unchanged.
-            if (!SeedMissingBootstrapFiles(*existing)) {
-                RT_LOG(RT_TAG_NAND) << "first-run WC24 seeding failed for the configured NAND root" << std::endl;
+            if (!SeedMissingBootstrapFiles(*existing) || !RuntimeSysConf::Ensure(*existing)) {
+                RT_LOG(RT_TAG_NAND) << "first-run system-file seeding failed for the configured NAND root" << std::endl;
             }
             return *existing;
         }

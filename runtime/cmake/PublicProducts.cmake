@@ -7,15 +7,16 @@
 # Per-game data the runtime reads but does not own. Kept out of the runtime
 # library so that library stays game-independent (and can be precompiled).
 set(MKW_GAME_DATA_SOURCES "")
-set(DATA_INIT_FILE "${MKW_RUNTIME_SOURCE_DIR}/../generated/data_sections_init.cpp")
-set(DATA_INIT_BLOB_ASM "${MKW_RUNTIME_SOURCE_DIR}/../generated/data_sections_init_blobs.S")
+set(MKW_GENERATED_DIR "${MKW_RUNTIME_SOURCE_DIR}/../generated" CACHE PATH "Translator-generated game data directory")
+set(DATA_INIT_FILE "${MKW_GENERATED_DIR}/data_sections_init.cpp")
+set(DATA_INIT_BLOB_ASM "${MKW_GENERATED_DIR}/data_sections_init_blobs.S")
 if(EXISTS "${DATA_INIT_FILE}")
     list(APPEND MKW_GAME_DATA_SOURCES "${DATA_INIT_FILE}")
 endif()
 # Crash-report symbolization table emitted by generate-data-init. The stub
 # (deliberately outside the globbed src/ tree so it is never picked up twice)
 # keeps link succeeding when the generated table has not been produced yet.
-set(GUEST_SYMBOL_TABLE_FILE "${MKW_RUNTIME_SOURCE_DIR}/../generated/guest_symbol_table.cpp")
+set(GUEST_SYMBOL_TABLE_FILE "${MKW_GENERATED_DIR}/guest_symbol_table.cpp")
 if(EXISTS "${GUEST_SYMBOL_TABLE_FILE}")
     list(APPEND MKW_GAME_DATA_SOURCES "${GUEST_SYMBOL_TABLE_FILE}")
 else()
@@ -26,7 +27,13 @@ if(EXISTS "${DATA_INIT_BLOB_ASM}")
     set_source_files_properties("${DATA_INIT_BLOB_ASM}" PROPERTIES LANGUAGE ASM SKIP_UNITY_BUILD_INCLUSION ON)
     list(APPEND MKW_GAME_DATA_SOURCES "${DATA_INIT_BLOB_ASM}")
 endif()
-# Runtime glue that depends on generated/ headers (e.g. RuntimeConfig.h).
+# Runtime glue that depends on generated/ headers (e.g. RuntimeConfig.h). The
+# configured copy keeps quoted generated/RuntimeConfig.h includes region-selectable.
+if(EXISTS "${MKW_GENERATED_DIR}/RuntimeConfig.h")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated-include/generated")
+    configure_file("${MKW_GENERATED_DIR}/RuntimeConfig.h" "${CMAKE_BINARY_DIR}/generated-include/generated/RuntimeConfig.h" COPYONLY)
+    include_directories("${CMAKE_BINARY_DIR}/generated-include")
+endif()
 file(GLOB MKW_GAME_GLUE_SOURCES CONFIGURE_DEPENDS "${MKW_RUNTIME_SOURCE_DIR}/game/*.cpp")
 list(APPEND MKW_GAME_DATA_SOURCES ${MKW_GAME_GLUE_SOURCES})
 
@@ -163,7 +170,8 @@ mkw_configure_translated_target(mkw_base_registration)
 target_precompile_headers(mkw_base_registration REUSE_FROM mkw_base_shared)
 
 # Stage-module code sets (tools/module_shards.py): one table per stg module, activated at run time.
-include("${CMAKE_CURRENT_LIST_DIR}/../../generated/module_shards/module_shards.cmake" OPTIONAL)
+set(MKW_MODULE_SHARDS_MANIFEST "${MKW_GENERATED_DIR}/module_shards/module_shards.cmake" CACHE FILEPATH "Generated stage-module shard manifest")
+include("${MKW_MODULE_SHARDS_MANIFEST}" OPTIONAL)
 if(MKW_MODULE_SHARDS)
     add_library(mkw_stage_modules OBJECT ${MKW_MODULE_SHARDS})
     mkw_configure_translated_target(mkw_stage_modules)

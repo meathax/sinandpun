@@ -5,11 +5,12 @@
   "repo": "meathax/sinandpun",
   "game": {
     "kind": "iso_or_folder",
-    "label": "NTSC-U R2VE01 disc image (ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ, CUE/BIN, split) or extracted game folder. A key next to an encrypted image is found automatically; otherwise set SIN_WII_KEY_FILE.",
+    "label": "USA (R2VE01) or Japan (R2VJ01) disc image (ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ, CUE/BIN, split) or extracted game folder. A key next to an encrypted image is found automatically; otherwise set SIN_WII_KEY_FILE.",
     "check": {
       "file": "sys/main.dol",
       "ids": [
-        "R2VE01"
+        "R2VE01",
+        "R2VJ01"
       ]
     },
     "dumps": [
@@ -38,19 +39,11 @@
       "--data={data}",
       "--game={game}"
     ],
-    "label": "Extracting R2VE01 and preparing its stage modules",
+    "label": "Extracting the selected regional disc and preparing its stage modules",
     "timeout": 1200,
     "version": "3",
     "done": [
-      "{data}/prepared.txt",
-      "{data}/Game/modules/stg00.bin",
-      "{data}/Game/modules/stg01.bin",
-      "{data}/Game/modules/stg02.bin",
-      "{data}/Game/modules/stg03.bin",
-      "{data}/Game/modules/stg04.bin",
-      "{data}/Game/modules/stg05.bin",
-      "{data}/Game/modules/stg06.bin",
-      "{data}/Game/modules/stg07.bin"
+      "{data}/prepared.txt"
     ]
   },
   "config": [
@@ -370,12 +363,16 @@
   ],
   "saves": [
     "{data}/NAND",
+    "{data}/NAND-R2VJ01",
     "{data}/Config.toml"
   ],
   "folders": {
     "saves": [
       {
         "path": "{data}/NAND"
+      },
+      {
+        "path": "{data}/NAND-R2VJ01"
       }
     ],
     "settings": [
@@ -396,6 +393,9 @@
     "game": [
       {
         "path": "{data}/Game"
+      },
+      {
+        "path": "{data}/Game-R2VJ01"
       }
     ]
   },

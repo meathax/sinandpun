@@ -3,6 +3,7 @@
 #include "guest_abi/cpu_context.h"
 #include "guest_abi/exec_guard.h"
 #include "guest_abi/guest_region.h"
+#include "guest_abi/memory.h"
 #include "isa/ppc_isa_config.h"
 #include "isa/ppc_isa_cr.h"
 
@@ -29,6 +30,8 @@ extern bool g_enabled;  // SIN_CALLTRACE=1: log every first-seen call target in 
 void Record(uint32_t target);
 // SIN_TRACE_ARGS=0x801D0C00,0x80164494: log r3..r6 on every entry to these targets (first 200 hits each).
 extern bool g_argsEnabled;
+extern bool g_ringEnabled;
+void RecordRing(uint32_t target, const CpuContext* ctx);
 void RecordArgs(uint32_t target, const CpuContext* ctx);
 } // namespace CallTrace
 
@@ -67,6 +70,9 @@ void GuestEntryHook(uint32_t address, CpuContext* ctx);
 
 inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
     PeriodicAlarmService::MaybeServicePeriodicAlarms(ctx);
+    if (__builtin_expect(CallTrace::g_ringEnabled, 0)) {
+        CallTrace::RecordRing(target, ctx);
+    }
     if (__builtin_expect(CallTrace::g_enabled, 0)) {
         CallTrace::Record(target);
     }
@@ -690,6 +696,14 @@ MKW_PPC_NO_INLINE inline void InvokeIndirectCpuSlow(uint32_t target, CpuContext*
         return;
     }
     if (ModuleOverlay::TryInvoke(target, cpu)) {
+        return;
+    }
+    // Some linkers emit a one-instruction null callback thunk (a bare blr) and
+    // store its address in small-data function pointers. It is too small for
+    // recursive function discovery to materialize as a translation unit, but
+    // architecturally it is still executable code with no effect.
+    uint32_t instruction = 0;
+    if (Memory::TryRead32(target, instruction) && instruction == 0x4E800020u) {
         return;
     }
     ReportMissingCpuTarget(target, cpu);

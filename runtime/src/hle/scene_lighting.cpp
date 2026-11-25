@@ -1,6 +1,7 @@
 #include "hle/scene_lighting.h"
 #include "guest_abi/cpu_context.h"
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 #include <aurora/gfx.h>
 #include <algorithm>
 #include <array>
@@ -81,7 +82,7 @@ uint32_t activeCamera() {
     auto pointerAt = [](uint32_t base, unsigned offset) -> uint32_t {
         return base && Memory::Contains(base, offset + 4) ? Memory::Read32(base + offset) : 0;
     };
-    return pointerAt(pointerAt(Memory::Read32(0x804B7700u-23904),88),448);
+    return pointerAt(pointerAt(Memory::Read32(MKW_GADDR(804B19A0)),88),448);
 }
 
 // The ray tracer asks for the camera while GX commands are recorded, which
@@ -103,7 +104,7 @@ void snapshotRtCamera() {
             valid &= std::isfinite(view[i]) && std::abs(view[i]) <= 1.e7f;
         }
     }
-    const uint32_t scene = Memory::Read8(0x804B1968u);
+    const uint32_t scene = Memory::Read8(MKW_GADDR(804B1968));
     std::lock_guard lock(rtCameraMutex);
     rtCameraView = view;
     rtCameraScene = scene;

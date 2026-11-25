@@ -26,6 +26,8 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -43,6 +45,7 @@
 #include <tlhelp32.h>
 #include <mmsystem.h>
 #include <dbghelp.h>
+#include <process.h>
 #else
 #include <fcntl.h>
 #include <signal.h>
@@ -889,10 +892,10 @@ void RuntimeAuroraLogCallback(AuroraLogLevel level, const char* module,
 }
 
 const TranslatedFunctionInfo* ResolveEntry() {
-    const auto* entry = TranslatedFunctionRegistry::FindByAddressPtr(kDefaultEntryAddress);
+    const auto* entry = TranslatedFunctionRegistry::FindByAddressPtr(DefaultEntryAddress());
     if (!entry) {
         std::ostringstream oss;
-        oss << "No translated function registered at address 0x" << std::hex << kDefaultEntryAddress;
+        oss << "No translated function registered at address 0x" << std::hex << DefaultEntryAddress();
         throw std::runtime_error(oss.str());
     }
     return entry;
@@ -1348,29 +1351,179 @@ namespace {
 constexpr const char* kPreparedMarkerFile = "prepared.txt";
 
 std::filesystem::path ManagedGameDirectory() {
+    // Region-specific backends share the launcher data directory. Keep the
+    // historical USA folder name for existing installs and give Japan its own
+    // sibling so installing one version never overwrites the other.
+    if (std::string_view(GuestRegion::CurrentFacts().gameId) == DiscImport::kGameIdJapan) {
+        return RuntimeConfigFile::ApplicationDataDirectory() / "Game-R2VJ01";
+    }
     return RuntimeConfigFile::ApplicationDataDirectory() / "Game";
 }
 
 bool ValidateExtractedGameFolder(const std::filesystem::path& root, std::string& error) {
     if (!DiscImport::IsGameDirectoryComplete(root)) {
-        error = "The selected folder is not an extracted R2VE01 game: expected files/ and "
+        error = "The selected folder is not an extracted game: expected files/ and "
                 "sys/{boot.bin,fst.bin,main.dol}.";
         return false;
     }
-    std::array<char, 6> gameId{};
-    if (std::ifstream boot(root / "sys" / "boot.bin", std::ios::binary);
-        !boot.read(gameId.data(), static_cast<std::streamsize>(gameId.size())) ||
-        std::string(gameId.data(), gameId.size()) != DiscImport::kGameId) {
-        error = "The selected extracted folder is not Sin & Punishment: Star Successor, "
-                "NTSC-U (R2VE01).";
+    const std::string gameId = RuntimeConfigFile::DiscGameId(root);
+    if (!DiscImport::FindGameVersion(gameId)) {
+        error = "The selected extracted folder is not a supported Sin & Punishment release "
+                "(R2VE01 or R2VJ01).";
+        return false;
+    }
+    if (gameId != GuestRegion::CurrentFacts().gameId) {
+        error = "The selected extracted folder is " + gameId + ", but this executable was built for " +
+                GuestRegion::CurrentFacts().gameId + ".";
         return false;
     }
     if (!RuntimeConfigFile::IsThisGamesDiscRoot(root)) {
         error = "The selected folder is the disc's UPDATE partition, not the game (DATA) partition: "
-                "files/gs2.sel is missing. Select the DATA folder of the extracted disc.";
+                "the stage-module export list is missing. Select the DATA folder of the extracted disc.";
         return false;
     }
     return true;
+}
+
+std::string GameIdAtPath(const std::filesystem::path& gamePath) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(gamePath, ec)) {
+        for (const auto& root : {gamePath, gamePath / "DATA"}) {
+            if (DiscImport::IsGameDirectoryComplete(root)) {
+                return RuntimeConfigFile::DiscGameId(root);
+            }
+        }
+        return {};
+    }
+    if (!std::filesystem::is_regular_file(gamePath, ec)) {
+        return {};
+    }
+    DiscImport::DiscInfo info;
+    std::string error;
+    if (!DiscImport::ProbeDisc(gamePath, info, error)) {
+        return {};
+    }
+    return info.gameId;
+}
+
+#if defined(_WIN32)
+std::wstring QuoteWindowsSpawnArgument(std::wstring argument) {
+    if (!argument.empty() && argument.find_first_of(L" \t\n\v\"") == std::wstring::npos) {
+        return argument;
+    }
+    std::wstring quoted;
+    quoted.push_back(L'"');
+    size_t backslashes = 0;
+    for (const wchar_t ch : argument) {
+        if (ch == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (ch == L'"') {
+            quoted.append(backslashes * 2 + 1, L'\\');
+            quoted.push_back(L'"');
+        } else {
+            quoted.append(backslashes, L'\\');
+            quoted.push_back(ch);
+        }
+        backslashes = 0;
+    }
+    quoted.append(backslashes * 2, L'\\');
+    quoted.push_back(L'"');
+    return quoted;
+}
+int SpawnRegionalExecutableAndWait(const std::filesystem::path& target, int, char**) {
+    int wideArgc = 0;
+    LPWSTR* wideArgv = ::CommandLineToArgvW(::GetCommandLineW(), &wideArgc);
+    if (!wideArgv || wideArgc < 1) {
+        return -1;
+    }
+    std::vector<std::wstring> arguments;
+    arguments.reserve(static_cast<size_t>(wideArgc));
+    // _wspawnv concatenates argv with spaces; it does not protect arguments
+    // containing spaces. This matters for normal ROM paths such as
+    // "Tsumi to Batsu - ... .rvz": without explicit CommandLineToArgvW-style
+    // quoting the child receives one argument per word and rejects the launch.
+    arguments.push_back(QuoteWindowsSpawnArgument(target.wstring()));
+    for (int index = 1; index < wideArgc; ++index) {
+        arguments.emplace_back(QuoteWindowsSpawnArgument(wideArgv[index]));
+    }
+    ::LocalFree(wideArgv);
+    std::vector<const wchar_t*> pointers;
+    pointers.reserve(arguments.size() + 1);
+    for (const std::wstring& argument : arguments) {
+        pointers.push_back(argument.c_str());
+    }
+    pointers.push_back(nullptr);
+    _putenv("SIN_REGION_DISPATCHED=1");
+    return static_cast<int>(::_wspawnv(_P_WAIT, target.wstring().c_str(), pointers.data()));
+}
+#else
+int SpawnRegionalExecutableAndWait(const std::filesystem::path& target, int argc, char** argv) {
+    const std::string targetUtf8 = RuntimeConfigFile::PathToUtf8(target);
+    std::vector<std::string> arguments;
+    arguments.reserve(static_cast<size_t>(argc));
+    arguments.push_back(targetUtf8);
+    for (int index = 1; index < argc; ++index) arguments.emplace_back(argv[index]);
+    std::vector<char*> pointers;
+    pointers.reserve(arguments.size() + 1);
+    for (std::string& argument : arguments) pointers.push_back(argument.data());
+    pointers.push_back(nullptr);
+    setenv("SIN_REGION_DISPATCHED", "1", 1);
+    const pid_t child = fork();
+    if (child == 0) {
+        execv(targetUtf8.c_str(), pointers.data());
+        _exit(127);
+    }
+    if (child < 0) return -1;
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return 128 + WTERMSIG(status);
+}
+#endif
+
+// The launcher carries one game input which may legally be either supported
+// disc. Region-specific translation makes a single-codebase dispatch binary
+// impractical, so the USA executable acts as the standard entry point and
+// hands Japanese input to the sibling Japan executable (and vice versa). The
+// handoff is before all runtime initialization, so the child sees the same
+// stdout/stderr pipes, data directory, arguments and exit status as a direct launch.
+std::optional<int> TryRegionalExecutableDispatch(const RecompLauncher::Arguments& args,
+                                                  int argc, char** argv) {
+    if (!args.gamePath || std::getenv("SIN_REGION_DISPATCHED")) {
+        return std::nullopt;
+    }
+    const std::string gameId = GameIdAtPath(*args.gamePath);
+    const auto* version = DiscImport::FindGameVersion(gameId);
+    if (!version || gameId == GuestRegion::CurrentFacts().gameId) {
+        return std::nullopt;
+    }
+    const auto directory = RuntimeConfigFile::ExecutableDirectory();
+    if (!directory) {
+        return std::nullopt;
+    }
+#if defined(_WIN32)
+    const char* targetName = gameId == DiscImport::kGameIdJapan ? "sinandpun-jp.exe" : "sinandpun.exe";
+#else
+    const char* targetName = gameId == DiscImport::kGameIdJapan ? "sinandpun-jp" : "sinandpun";
+#endif
+    const auto target = *directory / targetName;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(target, ec)) {
+        std::cerr << "[runtime] This is " << gameId << ", but the matching executable "
+                  << RuntimeConfigFile::PathToUtf8(target) << " is missing.\n";
+        return EXIT_FAILURE;
+    }
+    std::cerr << "[runtime] Dispatching " << gameId << " to " << targetName << '\n';
+    const int result = SpawnRegionalExecutableAndWait(target, argc, argv);
+    if (result < 0) {
+        std::cerr << "[runtime] Could not start " << RuntimeConfigFile::PathToUtf8(target) << '\n';
+        return EXIT_FAILURE;
+    }
+    return result;
 }
 
 bool WritePreparedConfiguration(const std::filesystem::path& dvdRoot, std::string& error) {
@@ -1385,7 +1538,8 @@ bool WritePreparedConfiguration(const std::filesystem::path& dvdRoot, std::strin
 
     const auto marker = RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile;
     std::ofstream output(marker, std::ios::trunc);
-    output << "R2VE01\n" << RuntimeConfigFile::PathToUtf8(dvdRoot) << '\n';
+    output << RuntimeConfigFile::DiscGameId(dvdRoot) << '\n'
+           << RuntimeConfigFile::PathToUtf8(dvdRoot) << '\n';
     output.close();
     if (!output) {
         error = "Could not write the setup marker " + RuntimeConfigFile::PathToUtf8(marker);
@@ -1432,14 +1586,18 @@ bool PrepareExtractedFolder(const std::filesystem::path& absoluteGamePath, std::
     // cannot provide prelinked images from somebody else's copy of the game.
     const auto modules = ManagedGameDirectory() / "modules";
     try {
-        const auto sel = ReadModuleFile(absoluteGamePath / "files" / "gs2.sel");
+        const std::string gameId = RuntimeConfigFile::DiscGameId(absoluteGamePath);
+        const auto* version = DiscImport::FindGameVersion(gameId);
+        if (!version) throw std::runtime_error("unsupported extracted game id " + gameId);
+        const auto sel = ReadModuleFile(absoluteGamePath / "files" / version->moduleExportFile);
+        const auto mainDol = ReadModuleFile(absoluteGamePath / "sys" / "main.dol");
         std::array<std::vector<uint8_t>, DiscImport::kModuleCount> images;
         for (int index = 0; index < DiscImport::kModuleCount; ++index) {
             char name[16];
             std::snprintf(name, sizeof name, "stg%02d", index);
             if (!DiscImport::BuildModuleImage(
                     ReadModuleFile(absoluteGamePath / "files" / (std::string(name) + ".rso")),
-                    sel, DiscImport::kModuleBase, images[index], error)) {
+                    sel, mainDol, DiscImport::kModuleBase, images[index], error)) {
                 throw std::runtime_error(std::string(name) + ": " + error);
             }
             std::cout << "progress " << (0.8 + 0.02 * index) << " Preparing " << name << std::endl;
@@ -1492,8 +1650,17 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
 
     if (!std::filesystem::is_regular_file(absoluteGamePath, ec) ||
         !DiscImport::IsSupportedDiscExtension(absoluteGamePath)) {
-        std::cerr << "[prepare] Select a supported R2VE01 .iso, .wbfs, .rvz, .wia, .chd, .ciso, .gcz, .gcm, .bin or .cue disc, "
+        std::cerr << "[prepare] Select a supported R2VE01/R2VJ01 .iso, .wbfs, .rvz, .wia, .chd, .ciso, .gcz, .gcm, .bin or .cue disc, "
                      "or an extracted folder containing sys/ and files/.\n";
+        return EXIT_FAILURE;
+    }
+
+    DiscImport::DiscInfo discInfo;
+    std::string probeError;
+    if (DiscImport::ProbeDisc(absoluteGamePath, discInfo, probeError) && discInfo.supported &&
+        discInfo.gameId != GuestRegion::CurrentFacts().gameId) {
+        std::cerr << "[prepare] This is " << discInfo.gameId << ", but this executable was built for "
+                  << GuestRegion::CurrentFacts().gameId << ". Use the matching regional executable.\n";
         return EXIT_FAILURE;
     }
 
@@ -1535,7 +1702,7 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
         std::cerr << "[prepare] " << error << '\n';
         return EXIT_FAILURE;
     }
-    std::cout << "progress 1 Prepared R2VE01 (" << summary.files << " files, "
+    std::cout << "progress 1 Prepared " << summary.gameId << " (" << summary.files << " files, "
               << summary.modules << " stage modules)\n";
     return EXIT_SUCCESS;
 }
@@ -1568,6 +1735,9 @@ int RuntimeMain(int argc, char** argv) {
     if (!argumentsValid) {
         std::cerr << "[runtime] " << argumentError << '\n' << RecompLauncher::Usage();
         return EXIT_FAILURE;
+    }
+    if (const auto dispatched = TryRegionalExecutableDispatch(launcherArgs, argc, argv)) {
+        return *dispatched;
     }
     if (launcherArgs.prepare) {
         return PrepareForRecompLauncher(launcherArgs);
