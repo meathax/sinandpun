@@ -312,5 +312,14 @@ int main() {
                      "UPDATE partition was accepted as game data")) return 1;
         fs::remove_all(base, ec);
     }
+    {
+        std::istringstream jp("[audio]\nvoice_language = \"japanese\"\n");
+        std::istringstream en("[audio]\nvoice_language = \"English\"\n");
+        std::istringstream bad("[audio]\nvoice_language = \"french\"\n");
+        if (!Require(RuntimeConfigFile::ParseConfig(jp, "jp.toml").audioVoiceLanguage == std::optional<int32_t>{0} &&
+                         RuntimeConfigFile::ParseConfig(en, "en.toml").audioVoiceLanguage == std::optional<int32_t>{1} &&
+                         !RuntimeConfigFile::ParseConfig(bad, "bad.toml").audioVoiceLanguage.has_value(),
+                     "voice_language config parsing mismatch")) return 1;
+    }
     return 0;
 }

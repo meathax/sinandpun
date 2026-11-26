@@ -100,6 +100,7 @@ struct RuntimeUserConfig {
     std::optional<float> audioVoicesVolume;
     std::optional<bool> audioMuted;
     std::optional<bool> audioMixWorker;
+    std::optional<int32_t> audioVoiceLanguage;
     std::optional<bool> attenuateMusicWhenMediaPlays;
     // Real Wii Remotes passed through to the game's own Bluetooth stack. Off hands
     // Nintendo controllers (e.g. the Wii U Pro Controller) to SDL as plain gamepads.
@@ -657,6 +658,7 @@ inline void EnsureConfigFile() {
               "[audio]\n"
               "volume = 1.0\n"
               "muted = false\n"
+              "voice_language = \"english\"\n"
               "# Runs the AX/DSP voice mix on its own thread, joined before the\n"
               "# guest can observe it. Set to false to mix inline on the guest\n"
               "# thread exactly as the runtime did before.\n"
@@ -932,6 +934,12 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.audioVoicesVolume = readVolume("voices_volume");
     config.audioMuted = FindConfigValue<bool>(document, "audio", "muted");
     config.audioMixWorker = FindConfigValue<bool>(document, "audio", "mix_worker");
+    if (const auto lang = FindConfigValue<std::string>(document, "audio", "voice_language")) {
+        std::string lower = *lang;
+        for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (lower == "japanese" || lower == "jp") config.audioVoiceLanguage = 0;
+        else if (lower == "english" || lower == "en") config.audioVoiceLanguage = 1;
+    }
     config.attenuateMusicWhenMediaPlays =
         FindConfigValue<bool>(document, "audio", "attenuate_music_when_media_plays");
     config.wiiRemotes = FindConfigValue<bool>(document, "controller", "wii_remotes");
@@ -1438,6 +1446,12 @@ inline bool SetAudioMixWorker(bool value) {
     return WriteSetting("audio", "mix_worker", value ? "true" : "false");
 }
 
+inline bool SetVoiceLanguage(int32_t value) {
+    value = value == 0 ? 0 : 1;
+    Mutable().audioVoiceLanguage = value;
+    return WriteSetting("audio", "voice_language", FormatString(value == 0 ? "japanese" : "english"));
+}
+
 inline bool SetAttenuateMusicWhenMediaPlays(bool value) {
     Mutable().attenuateMusicWhenMediaPlays = value;
     return WriteSetting("audio", "attenuate_music_when_media_plays", value ? "true" : "false");
@@ -1549,6 +1563,11 @@ inline bool AudioMuted(bool fallback = false) {
 // Off-thread AX/DSP mix. Default on; false restores the fully synchronous mix.
 inline bool AudioMixWorkerEnabled(bool fallback = true) {
     return Get().audioMixWorker.value_or(fallback);
+}
+
+// In-game voice language: 0 = Japanese, 1 = English (matches g_pSysGlobals + 0x104).
+inline int32_t VoiceLanguage(int32_t fallback = 1) {
+    return Get().audioVoiceLanguage.value_or(fallback) == 0 ? 0 : 1;
 }
 
 inline bool GxWorkerEnabled(bool fallback = true) {

@@ -55,6 +55,8 @@
 #include <dolphin/pad.h>
 
 extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled);
+extern "C" bool SinAudio_SupportsVoiceLanguage() noexcept;
+extern "C" void SinAudio_SyncVoiceLanguage(uint8_t language) noexcept;
 #include <dolphin/vi.h>
 #include <aurora/aurora.h>
 #include <aurora/texture.hpp>
@@ -100,6 +102,7 @@ int g_audioVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::Audio
 bool g_audioMuted = RuntimeConfigFile::AudioMuted(false);
 int32_t g_muteHotkey = RuntimeConfigFile::MuteHotkey(SDL_SCANCODE_BACKSLASH);
 bool g_audioMixWorker = RuntimeConfigFile::AudioMixWorkerEnabled(true);
+int g_voiceLanguage = RuntimeConfigFile::VoiceLanguage(1);
 // Presentation rate choices. The game itself always runs at 60 Hz; these only change how many frames
 // are shown per game frame (see aurora_set_frame_rate).
 struct FrameRateItem {
@@ -1162,6 +1165,11 @@ void ResetAudioPage() {
     RuntimeConfigFile::SetAudioVolume(1.0f);
     RuntimeConfigFile::SetAudioMuted(false);
     RuntimeConfigFile::SetAudioMixWorker(true);
+    if (SinAudio_SupportsVoiceLanguage()) {
+        g_voiceLanguage = 1;
+        SinAudio_SyncVoiceLanguage(1);
+        RuntimeConfigFile::SetVoiceLanguage(1);
+    }
     RuntimeConfigFile::SetMuteHotkey(g_muteHotkey);
 }
 
@@ -1746,6 +1754,15 @@ void BuildAudioPage(ListView& v) {
         g_muteCapture = true;
         g_muteDeadline = Clock::now() + std::chrono::seconds(8);
         g_muteModal = game_ui::ModalState{};
+    }
+    if (SinAudio_SupportsVoiceLanguage()) {
+        v.Section("Voice");
+        const char* voiceLanguages[] = {"Japanese", "English"};
+        if (v.Choice("Language", &g_voiceLanguage, voiceLanguages, 2, 1,
+                     "Select a language for in-game voice. Stage voices switch the next time a stage loads.") & kChanged) {
+            SinAudio_SyncVoiceLanguage(static_cast<uint8_t>(g_voiceLanguage));
+            RuntimeConfigFile::SetVoiceLanguage(g_voiceLanguage);
+        }
     }
     v.Section("Advanced");
     if (v.Toggle("Mix audio on a worker thread", &g_audioMixWorker, true,
@@ -2712,6 +2729,7 @@ void Draw() noexcept {
     io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
     PollGamepadMenuChord();
     ApplyConfiguredMappings();
+    SinAudio_SyncVoiceLanguage(static_cast<uint8_t>(g_voiceLanguage));
     PersistDisplayModeIfChanged();
     // DLSS-G confirms asynchronously; hand presentation back to the built-in interpolation if it never starts
     // or stops, and take it away once generated frames are confirmed.

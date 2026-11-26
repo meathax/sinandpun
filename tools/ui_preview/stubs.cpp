@@ -25,6 +25,8 @@ extern "C" const uint8_t kMkwGuestRegion = 0;
 #endif
 
 extern "C" void PAD_HLE_SetRumbleEnabled(bool) {}
+extern "C" bool SinAudio_SupportsVoiceLanguage() noexcept { return true; }
+extern "C" void SinAudio_SyncVoiceLanguage(uint8_t) noexcept {}
 namespace AxDspHle { void SetMixWorkerEnabled(bool) {} }
 void SetForceAspect(bool) {}
 
