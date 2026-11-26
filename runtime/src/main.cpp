@@ -1545,6 +1545,13 @@ std::optional<int> TryRegionalExecutableDispatch(const RecompLauncher::Arguments
     if (!args.gamePath && args.prepare) {
         return std::nullopt;
     }
+    // A plain launch of sinandpun-jp.exe always runs Japan (its first-run screen imports the Japanese disc), and
+    // a plain launch of sinandpun.exe runs USA whenever USA is installed. Only a USA entry executable without its
+    // own game follows a Japanese dvd_root to the Japan executable.
+    if (!args.gamePath && (GuestRegion::Current() == GuestRegion::Id::NtscJ ||
+                           DiscImport::IsGameDirectoryComplete(ManagedGameDirectory()))) {
+        return std::nullopt;
+    }
     const std::string gameId = args.gamePath ? GameIdAtPath(*args.gamePath) : ConfiguredGameId();
     const auto* version = DiscImport::FindGameVersion(gameId);
     if (!version || gameId == GuestRegion::CurrentFacts().gameId) {
