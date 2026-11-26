@@ -1,12 +1,14 @@
 #include "aim_input.h"
 
 #include "aim_settings.h"
+#include "generic_joystick.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
 #include "virtual_mouse.h"
 #include "virtual_remote.h"
 
 #include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_init.h>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
@@ -151,6 +153,9 @@ void Install() {
 }
 
 void HandleSdlEvent(const SDL_Event& event) {
+    if (event.type == SDL_EVENT_JOYSTICK_ADDED || event.type == SDL_EVENT_JOYSTICK_REMOVED) {
+        GenericJoystick::HandleSdlEvent(event);
+    }
     State& g = G();
     std::lock_guard<std::mutex> lock(g.mutex);
     switch (event.type) {
@@ -282,6 +287,9 @@ InputMap::RawSample Sample(unsigned port) {
             for (int i = 0; i < 6; ++i) raw.padAxes[i] = AxisValue(pad, i);
             InputMap::ConditionPad(raw, Conditioning());
         }
+        if (port == 0) {
+            GenericJoystick::SampleAll(raw.joys);
+        }
     }
     return raw;
 }
@@ -392,7 +400,7 @@ void TickScheme() {
         g.pulseWheel = false;
         g.motionPx = 0.f;
         if (!g.seeded) {
-            const bool pad = PADGetSDLGamepadForPort(0) != nullptr;
+            const bool pad = PADGetSDLGamepadForPort(0) != nullptr || GenericJoystick::HasGenericDevice();
             InputMap::SeedScheme(g.arbiter, mode, pad ? InputMap::ActiveDevice::Gamepad : InputMap::ActiveDevice::None);
             g.seeded = true;
             g.prevPolled = polled;
@@ -439,6 +447,11 @@ SchemeNotice LatestSwitch() {
 
 void UpdateWindowState(bool inputBlocked) {
     VirtualMouse::Tick();
+    static bool s_joysRefreshed = false;
+    if (!s_joysRefreshed && SDL_WasInit(SDL_INIT_JOYSTICK)) {
+        GenericJoystick::RefreshDevices();
+        s_joysRefreshed = true;
+    }
     State& g = G();
     const auto settings = AimSettings::Get();
     const AimSettings::MouseConfig mouse = settings.mouse;
@@ -492,6 +505,9 @@ void UpdateWindowState(bool inputBlocked) {
 }
 
 void BeginCapture(InputMap::Profile profile) {
+    if (profile == InputMap::Profile::Gamepad) {
+        GenericJoystick::BeginCapture();
+    }
     State& g = G();
     std::lock_guard<std::mutex> lock(g.mutex);
     for (auto& seat : g.gyros) seat.gyro.Clear();
@@ -512,40 +528,65 @@ void BeginCapture(InputMap::Profile profile) {
 }
 
 CaptureResult PollCapture(bool pointerOverUi) {
-    State& g = G();
-    std::lock_guard<std::mutex> lock(g.mutex);
-    if (!g.capturing) return {};
-    if (g.captureResult.state == CaptureState::Pending) {
-        if (g.captureProfile == InputMap::Profile::KeyboardMouse) {
-            if (g.pendingMouse.Valid()) {
-                if (!pointerOverUi) g.captureResult = {CaptureState::Done, g.pendingMouse};
-                g.pendingMouse = {};
-            }
-        } else if (SDL_Gamepad* pad = PADGetSDLGamepadForPort(0)) {
-            for (int i = 0; i < 21 && g.captureResult.state == CaptureState::Pending; ++i) {
-                const bool down = SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(i));
-                if (down && !g.padBaseline[i]) g.captureResult = {CaptureState::Done, InputMap::PadButton(i)};
-                g.padBaseline[i] = down;
-            }
-            for (int i = 0; i < 6 && g.captureResult.state == CaptureState::Pending; ++i) {
-                const float v = AxisValue(pad, i);
-                if (std::fabs(v) < 0.25f) g.axisReady[i] = true;
-                if (g.axisReady[i] && std::fabs(v) >= 0.6f) {
-                    const int dir = (i >= 4 || v > 0.f) ? 1 : -1;
-                    g.captureResult = {CaptureState::Done, InputMap::PadAxis(i, dir)};
+    bool checkGenericJoy = false;
+    CaptureResult result;
+    {
+        State& g = G();
+        std::lock_guard<std::mutex> lock(g.mutex);
+        if (!g.capturing) return {};
+        if (g.captureResult.state == CaptureState::Pending) {
+            if (g.captureProfile == InputMap::Profile::KeyboardMouse) {
+                if (g.pendingMouse.Valid()) {
+                    if (!pointerOverUi) g.captureResult = {CaptureState::Done, g.pendingMouse};
+                    g.pendingMouse = {};
+                }
+            } else {
+                if (SDL_Gamepad* pad = PADGetSDLGamepadForPort(0)) {
+                    for (int i = 0; i < 21 && g.captureResult.state == CaptureState::Pending; ++i) {
+                        const bool down = SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(i));
+                        if (down && !g.padBaseline[i]) g.captureResult = {CaptureState::Done, InputMap::PadButton(i)};
+                        g.padBaseline[i] = down;
+                    }
+                    for (int i = 0; i < 6 && g.captureResult.state == CaptureState::Pending; ++i) {
+                        const float v = AxisValue(pad, i);
+                        if (std::fabs(v) < 0.25f) g.axisReady[i] = true;
+                        if (g.axisReady[i] && std::fabs(v) >= 0.6f) {
+                            const int dir = (i >= 4 || v > 0.f) ? 1 : -1;
+                            g.captureResult = {CaptureState::Done, InputMap::PadAxis(i, dir)};
+                        }
+                    }
+                }
+                if (g.captureResult.state == CaptureState::Pending) {
+                    checkGenericJoy = true;
                 }
             }
         }
+        result = g.captureResult;
+        if (result.state != CaptureState::Pending) {
+            g.capturing = false;
+            g.captureResult = {};
+        }
     }
-    const CaptureResult result = g.captureResult;
+    if (checkGenericJoy) {
+        InputMap::Binding joyBinding;
+        if (GenericJoystick::PollCapture(joyBinding)) {
+            State& g = G();
+            std::lock_guard<std::mutex> lock(g.mutex);
+            if (g.capturing) {
+                g.capturing = false;
+                g.captureResult = {};
+                result = {CaptureState::Done, joyBinding};
+            }
+        }
+    }
     if (result.state != CaptureState::Pending) {
-        g.capturing = false;
-        g.captureResult = {};
+        GenericJoystick::CancelCapture();
     }
     return result;
 }
 
 void CancelCapture() {
+    GenericJoystick::CancelCapture();
     State& g = G();
     std::lock_guard<std::mutex> lock(g.mutex);
     g.capturing = false;

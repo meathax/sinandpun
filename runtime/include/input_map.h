@@ -17,7 +17,7 @@
 
 namespace InputMap {
 
-enum class Device : uint8_t { None, Pad, Key, Mouse };
+enum class Device : uint8_t { None, Pad, Key, Mouse, Joy };
 enum class Profile : uint8_t { Gamepad, KeyboardMouse };
 
 inline constexpr int32_t kPadAxisBase = 1000;   // Pad code >= base: axis (code - base) with direction
@@ -25,10 +25,19 @@ inline constexpr int32_t kMouseWheelUp = 100;
 inline constexpr int32_t kMouseWheelDown = 101;
 inline constexpr size_t kSlots = 3;             // primary, secondary, extra per action and profile
 
+// Generic DirectInput / XInput / HIDAPI joystick constants (supports multi-device setups like HOTAS).
+inline constexpr size_t kMaxJoysticks = 4;
+inline constexpr size_t kMaxJoyButtons = 64;
+inline constexpr size_t kMaxJoyAxes = 16;
+inline constexpr size_t kMaxJoyHats = 4;
+inline constexpr int32_t kJoyDeviceStride = 1000;
+inline constexpr int32_t kJoyAxisOffset = 200;
+inline constexpr int32_t kJoyHatOffset = 300;   // kJoyHatOffset + hat * 4 + dirIdx (0=up,1=right,2=down,3=left)
+
 struct Binding {
     Device device = Device::None;
     int32_t code = 0;
-    int8_t dir = 0;  // pad axes: -1 / +1
+    int8_t dir = 0;  // pad/joy axes: -1 / +1
 
     bool Valid() const { return device != Device::None; }
     bool operator==(const Binding& o) const { return device == o.device && code == o.code && dir == o.dir; }
@@ -39,9 +48,19 @@ inline Binding PadButton(int code) { return {Device::Pad, code, 0}; }
 inline Binding PadAxis(int axis, int dir) { return {Device::Pad, kPadAxisBase + axis, static_cast<int8_t>(dir)}; }
 inline Binding Key(int scancode) { return {Device::Key, scancode, 0}; }
 inline Binding MouseButton(int button) { return {Device::Mouse, button, 0}; }
+inline Binding JoyButton(int dev, int button) { return {Device::Joy, dev * kJoyDeviceStride + button, 0}; }
+inline Binding JoyAxis(int dev, int axis, int dir) {
+    return {Device::Joy, dev * kJoyDeviceStride + kJoyAxisOffset + axis, static_cast<int8_t>(dir)};
+}
+inline Binding JoyHat(int dev, int hat, int dirIdx) {
+    return {Device::Joy, dev * kJoyDeviceStride + kJoyHatOffset + hat * 4 + dirIdx, 0};
+}
+inline int JoyDevice(const Binding& b) { return b.code >= 0 ? (b.code / kJoyDeviceStride) : -1; }
+inline int JoyLocalCode(const Binding& b) { return b.code >= 0 ? (b.code % kJoyDeviceStride) : -1; }
 
 inline bool AllowedInProfile(Profile p, Device d) {
-    return p == Profile::Gamepad ? d == Device::Pad : (d == Device::Key || d == Device::Mouse);
+    return p == Profile::Gamepad ? (d == Device::Pad || d == Device::Joy)
+                                 : (d == Device::Key || d == Device::Mouse);
 }
 
 // ---- Names -------------------------------------------------------------------------------------
@@ -129,6 +148,25 @@ inline std::string Format(const Binding& b) {
         if (name.empty()) name = "#" + std::to_string(b.code);
         return "key:" + name;
     }
+    case Device::Joy: {
+        const int dev = JoyDevice(b);
+        const int local = JoyLocalCode(b);
+        if (dev < 0 || dev >= static_cast<int>(kMaxJoysticks)) return "";
+        const std::string prefix = "joy" + std::to_string(dev) + ":";
+        if (local >= 0 && local < static_cast<int>(kMaxJoyButtons)) {
+            return prefix + "btn" + std::to_string(local);
+        }
+        if (local >= kJoyAxisOffset && local < kJoyAxisOffset + static_cast<int>(kMaxJoyAxes) && b.dir != 0) {
+            return prefix + "axis" + std::to_string(local - kJoyAxisOffset) + (b.dir > 0 ? "+" : "-");
+        }
+        if (local >= kJoyHatOffset && local < kJoyHatOffset + static_cast<int>(kMaxJoyHats * 4)) {
+            static constexpr std::array<const char*, 4> kHatDirs = {"up", "right", "down", "left"};
+            const int h = (local - kJoyHatOffset) / 4;
+            const int d = (local - kJoyHatOffset) % 4;
+            return prefix + "hat" + std::to_string(h) + "_" + kHatDirs[static_cast<size_t>(d)];
+        }
+        return "";
+    }
     case Device::None:
         break;
     }
@@ -156,6 +194,39 @@ inline Binding Parse(std::string_view text) {
         int code = BuiltinKeyCode(name);
         if (code == 0 && h.code) code = h.code(name);
         if (code > 0 && code < 512) return {Device::Key, code, 0};
+    } else if (kind.rfind("joy", 0) == 0) {
+        int dev = 0;
+        if (kind.size() > 3) {
+            if (kind.size() != 4 || kind[3] < '0' || kind[3] > '9') return {};
+            dev = kind[3] - '0';
+        }
+        if (dev < 0 || dev >= static_cast<int>(kMaxJoysticks)) return {};
+        if (name.rfind("btn", 0) == 0 && name.size() > 3) {
+            const int btn = std::atoi(name.c_str() + 3);
+            if (btn >= 0 && btn < static_cast<int>(kMaxJoyButtons)) return JoyButton(dev, btn);
+        } else if (name.rfind("axis", 0) == 0 && name.size() > 5) {
+            const char sign = name.back();
+            if (sign == '+' || sign == '-') {
+                const int axis = std::atoi(name.substr(4, name.size() - 5).c_str());
+                if (axis >= 0 && axis < static_cast<int>(kMaxJoyAxes)) {
+                    return JoyAxis(dev, axis, sign == '+' ? 1 : -1);
+                }
+            }
+        } else if (name.rfind("hat", 0) == 0) {
+            const size_t us = name.find('_');
+            if (us != std::string::npos && us > 3) {
+                const int hat = std::atoi(name.substr(3, us - 3).c_str());
+                const std::string dir = name.substr(us + 1);
+                int dirIdx = -1;
+                if (dir == "up") dirIdx = 0;
+                else if (dir == "right") dirIdx = 1;
+                else if (dir == "down") dirIdx = 2;
+                else if (dir == "left") dirIdx = 3;
+                if (hat >= 0 && hat < static_cast<int>(kMaxJoyHats) && dirIdx >= 0) {
+                    return JoyHat(dev, hat, dirIdx);
+                }
+            }
+        }
     }
     return {};
 }
@@ -194,6 +265,13 @@ inline std::string FormatList(const Slots& slots) {
 
 // ---- Resolution --------------------------------------------------------------------------------
 
+struct RawJoy {
+    bool connected = false;
+    std::bitset<kMaxJoyButtons> buttons;
+    std::array<float, kMaxJoyAxes> axes{};
+    std::array<uint8_t, kMaxJoyHats> hats{};  // bit0=up, bit1=right, bit2=down, bit3=left
+};
+
 struct RawSample {
     std::bitset<32> padButtons;
     std::array<float, 8> padAxes{};
@@ -201,9 +279,10 @@ struct RawSample {
     uint8_t mouseButtons = 0;  // bit (n - 1) = mouse button n
     bool wheelUp = false;
     bool wheelDown = false;
+    std::array<RawJoy, kMaxJoysticks> joys{};
 };
 
-// 0..1. Pad axes resolve analog (the part of the axis in the bound direction); everything else is 0 or 1.
+// 0..1. Pad/joy axes resolve analog (the part of the axis in the bound direction); everything else is 0 or 1.
 inline float Value(const Binding& b, const RawSample& raw) {
     switch (b.device) {
     case Device::Pad:
@@ -219,6 +298,26 @@ inline float Value(const Binding& b, const RawSample& raw) {
         if (b.code == kMouseWheelUp) return raw.wheelUp ? 1.f : 0.f;
         if (b.code == kMouseWheelDown) return raw.wheelDown ? 1.f : 0.f;
         return (b.code >= 1 && b.code <= 5 && (raw.mouseButtons & (1u << (b.code - 1)))) ? 1.f : 0.f;
+    case Device::Joy: {
+        const int dev = JoyDevice(b);
+        const int local = JoyLocalCode(b);
+        if (dev < 0 || dev >= static_cast<int>(kMaxJoysticks)) return 0.f;
+        const RawJoy& j = raw.joys[static_cast<size_t>(dev)];
+        if (!j.connected) return 0.f;
+        if (local >= 0 && local < static_cast<int>(kMaxJoyButtons)) {
+            return j.buttons[static_cast<size_t>(local)] ? 1.f : 0.f;
+        }
+        if (local >= kJoyAxisOffset && local < kJoyAxisOffset + static_cast<int>(kMaxJoyAxes) && b.dir != 0) {
+            const int axis = local - kJoyAxisOffset;
+            return std::clamp(j.axes[static_cast<size_t>(axis)] * static_cast<float>(b.dir), 0.f, 1.f);
+        }
+        if (local >= kJoyHatOffset && local < kJoyHatOffset + static_cast<int>(kMaxJoyHats * 4)) {
+            const int hat = (local - kJoyHatOffset) / 4;
+            const int dirIdx = (local - kJoyHatOffset) % 4;
+            return (j.hats[static_cast<size_t>(hat)] & (1u << dirIdx)) ? 1.f : 0.f;
+        }
+        return 0.f;
+    }
     case Device::None:
         break;
     }
@@ -316,14 +415,15 @@ inline AimSource Arbitrate(Arbiter& s, bool stickMoving, bool mouseMoving) {
 // (mouse pointer + keyboard). SchemeMode is the user's setting; Auto follows the device used last.
 
 enum class Scheme : uint8_t { Classic, Pointer };
-enum class SchemeMode : uint8_t { Auto, Classic, Pointer };
+enum class SchemeMode : uint8_t { Auto, Classic, Pointer, KeyboardMouse };
 enum class ActiveDevice : uint8_t { None, Gamepad, KeyboardMouse };
 
 inline constexpr int kSchemeSchemaVersion = 2;
-inline constexpr std::array<const char*, 3> kSchemeModeKeys = {"auto", "classic", "pointer"};
-inline constexpr std::array<const char*, 3> kSchemeModeLabels = {"Automatic (recommended)",
+inline constexpr std::array<const char*, 4> kSchemeModeKeys = {"auto", "classic", "pointer", "kbm"};
+inline constexpr std::array<const char*, 4> kSchemeModeLabels = {"Automatic (recommended)",
                                                                   "Legacy Classic Controller",
-                                                                  "Always Wii Remote pointer"};
+                                                                  "Always Wii Remote pointer",
+                                                                  "M+KB (Mouse & Keyboard)"};
 
 inline std::string SchemeModeKey(SchemeMode m) { return kSchemeModeKeys[static_cast<size_t>(m)]; }
 
@@ -335,6 +435,7 @@ inline SchemeMode ParseSchemeMode(std::string_view text, int schemaVersion, Sche
     for (char& c : t) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     if (t == "auto") return SchemeMode::Auto;
     if (t == "classic") return SchemeMode::Classic;
+    if (t == "kbm" || t == "m+kb" || t == "mkb" || t == "keyboard_mouse") return SchemeMode::KeyboardMouse;
     if (t == "pointer") return schemaVersion < kSchemeSchemaVersion ? SchemeMode::Auto : SchemeMode::Pointer;
     return fallback;
 }
@@ -394,6 +495,21 @@ inline DeviceSense Sense(const RawSample& prev, const RawSample& cur, float mous
     const bool stick = radial(0, 1) >= cfg.stick || radial(2, 3) >= cfg.stick;
     const bool trig = cur.padAxes[4] >= cfg.trigger || cur.padAxes[5] >= cfg.trigger;
     if (stick || trig) s.padHeld = s.padInput = true;
+    for (size_t d = 0; d < kMaxJoysticks; ++d) {
+        if (!cur.joys[d].connected) continue;
+        if (cur.joys[d].buttons.any()) s.padHeld = true;
+        if ((cur.joys[d].buttons & ~prev.joys[d].buttons).any()) s.padInput = true;
+        for (size_t h = 0; h < kMaxJoyHats; ++h) {
+            if (cur.joys[d].hats[h] != 0) s.padHeld = true;
+            if ((cur.joys[d].hats[h] & ~prev.joys[d].hats[h]) != 0) s.padInput = true;
+        }
+        for (size_t a = 0; a < kMaxJoyAxes; ++a) {
+            if (std::fabs(cur.joys[d].axes[a] - prev.joys[d].axes[a]) >= 0.15f &&
+                std::fabs(cur.joys[d].axes[a]) >= cfg.stick) {
+                s.padHeld = s.padInput = true;
+            }
+        }
+    }
 
     const std::bitset<512> keysDown = cur.keys & boundKeys;
     const std::bitset<512> keyEdge = keysDown & ~(prev.keys & boundKeys);
@@ -422,7 +538,7 @@ inline Scheme EffectiveScheme(SchemeMode mode, const SchemeArbiter&) {
 
 // Seeds the device without a switch (startup, mode change): no dwell consumed, no event.
 inline void SeedScheme(SchemeArbiter& a, SchemeMode mode, ActiveDevice device) {
-    a.device = device;
+    a.device = mode == SchemeMode::KeyboardMouse ? ActiveDevice::KeyboardMouse : device;
     a.scheme = EffectiveScheme(mode, a);
 }
 
@@ -431,21 +547,29 @@ inline void SeedScheme(SchemeArbiter& a, SchemeMode mode, ActiveDevice device) {
 //  * a device that is still holding a button/key/stick keeps control;
 //  * after a switch the other device must wait kSchemeDwellMs before it can take over again;
 //  * the very first input ever (device None) is accepted at once.
-// A mode other than Auto pins the scheme but the active device is still tracked for the UI.
+// A mode other than Auto pins the scheme; KeyboardMouse pins the active device to KeyboardMouse.
 inline SchemeUpdate UpdateScheme(SchemeArbiter& a, SchemeMode mode, const DeviceSense& s, int64_t nowMs,
                                  int64_t dwellMs = kSchemeDwellMs) {
     SchemeUpdate out;
-    ActiveDevice candidate = ActiveDevice::None;
-    if (s.padInput && !s.kbmInput) candidate = ActiveDevice::Gamepad;
-    else if (s.kbmInput && !s.padInput) candidate = ActiveDevice::KeyboardMouse;
-    if (candidate != ActiveDevice::None && candidate != a.device) {
-        const bool currentHeld = a.device == ActiveDevice::Gamepad ? s.padHeld
-                               : a.device == ActiveDevice::KeyboardMouse ? s.kbmHeld : false;
-        const bool first = a.device == ActiveDevice::None;
-        if (first || (!currentHeld && nowMs - a.lastSwitchMs >= dwellMs)) {
-            a.device = candidate;
+    if (mode == SchemeMode::KeyboardMouse) {
+        if (a.device != ActiveDevice::KeyboardMouse) {
+            a.device = ActiveDevice::KeyboardMouse;
             a.lastSwitchMs = nowMs;
             out.deviceChanged = true;
+        }
+    } else {
+        ActiveDevice candidate = ActiveDevice::None;
+        if (s.padInput && !s.kbmInput) candidate = ActiveDevice::Gamepad;
+        else if (s.kbmInput && !s.padInput) candidate = ActiveDevice::KeyboardMouse;
+        if (candidate != ActiveDevice::None && candidate != a.device) {
+            const bool currentHeld = a.device == ActiveDevice::Gamepad ? s.padHeld
+                                   : a.device == ActiveDevice::KeyboardMouse ? s.kbmHeld : false;
+            const bool first = a.device == ActiveDevice::None;
+            if (first || (!currentHeld && nowMs - a.lastSwitchMs >= dwellMs)) {
+                a.device = candidate;
+                a.lastSwitchMs = nowMs;
+                out.deviceChanged = true;
+            }
         }
     }
     const Scheme next = EffectiveScheme(mode, a);

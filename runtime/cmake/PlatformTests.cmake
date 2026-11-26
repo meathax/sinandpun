@@ -48,7 +48,8 @@ if(AURORA_SDL3_TARGET)
     if(TARGET "${AURORA_SDL3_TARGET}")
         add_executable(mkw_aim_input_focus_tests
             "${MKW_TEST_RUNTIME_DIR}/tests/aim_input_focus_tests.cpp"
-            "${MKW_TEST_RUNTIME_DIR}/src/wiimote/aim_input.cpp")
+            "${MKW_TEST_RUNTIME_DIR}/src/wiimote/aim_input.cpp"
+            "${MKW_TEST_RUNTIME_DIR}/src/wiimote/generic_joystick.cpp")
         target_include_directories(mkw_aim_input_focus_tests PRIVATE
             "${MKW_TEST_RUNTIME_DIR}/include"
             "${MKW_TEST_RUNTIME_DIR}/src"

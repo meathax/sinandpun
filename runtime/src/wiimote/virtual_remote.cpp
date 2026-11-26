@@ -687,7 +687,9 @@ private:
         }
         RefreshSettings();
         const InputMap::RawSample raw = AimInput::Sample(m_port);
-        if (g_menuNavigation.load(std::memory_order_relaxed) &&
+        const bool menuNav = g_menuNavigation.load(std::memory_order_relaxed);
+        if (menuNav &&
+            m_settings.schemeMode != InputMap::SchemeMode::KeyboardMouse &&
             AimInput::LastDevice() == InputMap::ActiveDevice::Gamepad) {
             in.padMenu = true;
             const auto button = [&](SDL_GamepadButton b) { return raw.padButtons[b]; };
@@ -718,7 +720,7 @@ private:
                 y /= m;
             }
         };
-        const auto buttons = RemoteActions::Resolve(m_settings,raw,m_scheme,ClassicCoreMirror());
+        const auto buttons = RemoteActions::Resolve(m_settings,raw,m_scheme,ClassicCoreMirror(),menuNav);
         float mx = 0, my = 0;
         vec(Action::MoveLeft, Action::MoveRight, Action::MoveUp, Action::MoveDown, mx, my);
         DualAnalog::ApplyDeadzone(mx, my, m_config.leftDeadzone);
@@ -813,11 +815,22 @@ private:
             return;
         }
         const AimSettings::MouseConfig& mouse = m_settings.mouse;
-        const bool mouseOn = OwnsMouse() && mouse.enabled && !in.scripted;
+        const bool kbmMode = m_settings.schemeMode == InputMap::SchemeMode::KeyboardMouse;
+        const bool mouseOn = OwnsMouse() && (mouse.enabled || kbmMode) && !in.scripted;
+        const bool mousePinned = kbmMode && mouseOn;
         const bool mouseMoving = mouseOn && (std::fabs(mdx) + std::fabs(mdy)) > 0.f;
-        const bool stickMoving = DualAnalog::StickActive(m_config, in.rx, in.ry);
-        const InputMap::AimSource source = in.scripted ? InputMap::AimSource::Stick
-                                                       : InputMap::Arbitrate(m_arbiter, stickMoving, mouseMoving);
+        const bool stickMoving = !mousePinned && DualAnalog::StickActive(m_config, in.rx, in.ry);
+        InputMap::AimSource source = InputMap::AimSource::Stick;
+        if (!in.scripted) {
+            if (mousePinned) {
+                m_arbiter.active = InputMap::AimSource::Mouse;
+                m_arbiter.prevStick = false;
+                m_arbiter.prevMouse = mouseMoving;
+                source = InputMap::AimSource::Mouse;
+            } else {
+                source = InputMap::Arbitrate(m_arbiter, stickMoving, mouseMoving);
+            }
+        }
         const bool byMouse = mouseOn && source == InputMap::AimSource::Mouse;
         if (m_scheme == AimSettings::Scheme::Classic) {
             float sx = in.rx, sy = in.ry;

@@ -121,17 +121,40 @@ struct MouseConfig {
     float stickSpeed = 1500.0f;    // Classic scheme: mouse counts/s that equal full stick deflection
 };
 
+enum class ButtonPromptStyle : uint8_t {
+    Xbox = 0,
+    PlayStation = 1,
+    Keyboard = 2,
+    Wii = 3,
+};
+
+inline constexpr std::array<const char*, 4> kButtonPromptKeys = {"xbox_one", "playstation", "keyboard", "wii"};
+inline constexpr std::array<const char*, 4> kButtonPromptLabels = {"Xbox", "PlayStation", "Keyboard", "Original Wii"};
+
+inline ButtonPromptStyle ParseButtonPromptStyle(std::string_view text) {
+    std::string t = InputMap::Trim(text);
+    for (char& c : t) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    if (t == "playstation" || t == "ps") return ButtonPromptStyle::PlayStation;
+    if (t == "keyboard" || t == "kbm" || t == "m+kb") return ButtonPromptStyle::Keyboard;
+    if (t == "wii" || t == "original_wii" || t == "original") return ButtonPromptStyle::Wii;
+    return ButtonPromptStyle::Xbox;
+}
+
 struct Settings {
     SchemeMode schemeMode = SchemeMode::Auto;
     // The input service keeps the initial extension equal to the scheme in effect so a remote created late
     // starts right; live changes go through VirtualRemote::SetScheme.
     Scheme scheme = Scheme::Pointer;
     bool switchToast = true;          // brief on-screen note when the scheme switches automatically
-    bool playStationPrompts = false;  // Xbox One by default; independent of the input scheme
+    ButtonPromptStyle buttonPromptStyle = ButtonPromptStyle::Xbox;
     DualAnalog::Config aim = DualAnalog::ModernAim();
     MouseConfig mouse;
     GyroAim::Config gyro;
     InputMap::Table<kActionCount> bindings;
+
+    bool IsPlayStationPrompts() const { return buttonPromptStyle == ButtonPromptStyle::PlayStation; }
+    bool IsKeyboardPrompts() const { return buttonPromptStyle == ButtonPromptStyle::Keyboard; }
+    bool IsWiiPrompts() const { return buttonPromptStyle == ButtonPromptStyle::Wii; }
 };
 
 inline Settings DefaultBindings(Settings s = {}) {
@@ -171,8 +194,12 @@ inline bool KeyBound(const Settings& s, int code) {
 
 inline void Sanitize(Settings& s) {
     if (s.schemeMode == SchemeMode::Classic) s.scheme = Scheme::Classic;
-    else if (s.schemeMode == SchemeMode::Pointer) s.scheme = Scheme::Pointer;
+    else if (s.schemeMode == SchemeMode::Pointer || s.schemeMode == SchemeMode::KeyboardMouse) s.scheme = Scheme::Pointer;
+    if (s.schemeMode == SchemeMode::KeyboardMouse) s.mouse.enabled = true;
     if (s.gyro.enabled) s.scheme = Scheme::Pointer;
+    if (static_cast<uint8_t>(s.buttonPromptStyle) >= kButtonPromptKeys.size()) {
+        s.buttonPromptStyle = ButtonPromptStyle::Xbox;
+    }
     s.gyro.activation = std::clamp(s.gyro.activation, 0, 2);
     s.gyro.space = std::clamp(s.gyro.space, 0, 2);
     for (float* value : {&s.gyro.sensitivityX, &s.gyro.sensitivityY})
@@ -312,7 +339,7 @@ inline void LoadFromConfig(Settings& s) {
     }
     flag("input", "switch_toast", s.switchToast);
     if (const auto v = FindValue<std::string>(d, "input", "button_prompts")) {
-        s.playStationPrompts = *v == "playstation";
+        s.buttonPromptStyle = ParseButtonPromptStyle(*v);
     }
     LoadAim(d, schemaVersion, s.aim);
     ApplyTestOverrides(s);
@@ -444,7 +471,7 @@ inline bool Save() {
     put("input", "version", std::to_string(kSchemaVersion));
     put("input", "scheme", str(InputMap::kSchemeModeKeys[static_cast<size_t>(s.schemeMode)]));
     put("input", "switch_toast", boolean(s.switchToast));
-    put("input", "button_prompts", str(s.playStationPrompts ? "playstation" : "xbox_one"));
+    put("input", "button_prompts", str(kButtonPromptKeys[static_cast<size_t>(s.buttonPromptStyle)]));
     put("aim", "right_deadzone", Float(c.radialDeadzone));
     put("aim", "right_saturation", Float(c.outerSaturation));
     put("aim", "curve_exponent", Float(c.curveExponent));

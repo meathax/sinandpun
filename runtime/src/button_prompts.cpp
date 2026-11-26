@@ -23,11 +23,23 @@ bool Update() {
     const bool combat = combatPrompts.load(std::memory_order_relaxed);
     if (next==generation && previousCombat==combat) return false;
     previousCombat = combat;
-    auto candidate=std::make_unique<Atlas>();
-    BuildAtlas(AimSettings::Get(), *candidate, combat);
+    const auto settings = AimSettings::Get();
     static const bool trace = std::getenv("SIN_PROMPT_TRACE") != nullptr;
-    if (trace) std::fprintf(stderr, "[prompts] context=%s generation=%u\n", combat ? "combat" : "menu", next);
+    if (trace) std::fprintf(stderr, "[prompts] context=%s generation=%u style=%u\n",
+                            combat ? "combat" : "menu", next, static_cast<unsigned>(settings.buttonPromptStyle));
     generation=next;
+    if (settings.buttonPromptStyle == AimSettings::ButtonPromptStyle::Wii) {
+        if (registration.id != 0) {
+            aurora::texture::unregister_replacement(registration);
+            registration = {};
+            pixels.reset();
+            hdPixels.clear();
+            return true;
+        }
+        return false;
+    }
+    auto candidate=std::make_unique<Atlas>();
+    BuildAtlas(settings, *candidate, combat);
     if (pixels && *pixels==*candidate) return false;
     // Exact R2VE01 texture.arc/BTN/TEX0 base-level identity. No pointer or
     // dimensions-only matching: unrelated 256x256 textures remain untouched.
@@ -36,7 +48,7 @@ bool Update() {
     };
     // 4x atlas (1024x1024 + mips) so prompts stay sharp at high output resolutions; same frames and UVs.
     std::vector<uint8_t> hd;
-    BuildAtlasHD(AimSettings::Get(), hd, combat);
+    BuildAtlasHD(settings, hd, combat);
     const auto fresh=aurora::texture::register_replacement(key,
         {.bytes=hd,.width=kHdAtlasSize,.height=kHdAtlasSize,.mipCount=kHdAtlasMips,.gxFormat=GX_TF_RGBA8_PC,
          .label="Sin modern button prompts (4x)"},

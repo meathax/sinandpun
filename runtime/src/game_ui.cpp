@@ -447,13 +447,13 @@ float DrawBadge(ImDrawList* dl, ImVec2 pos, const char* text, Badge kind, float 
 
 float GlyphWidth(const char* text, bool round) {
     if (round) return Px(34.0f);
-    if (LastDevice() == Device::Gamepad && AimSettings::Get().playStationPrompts && std::strcmp(text,"LB/RB")==0)
+    if (LastDevice() == Device::Gamepad && AimSettings::Get().IsPlayStationPrompts() && std::strcmp(text,"LB/RB")==0)
         text = "L1/R1";
     return std::max(Px(40.0f), TextSize(20.0f, text).x + Px(22.0f));
 }
 
 float DrawGlyph(ImDrawList* dl, ImVec2 lc, const char* text, float alpha, bool round) {
-    const bool ps = LastDevice() == Device::Gamepad && AimSettings::Get().playStationPrompts;
+    const bool ps = LastDevice() == Device::Gamepad && AimSettings::Get().IsPlayStationPrompts();
     if (ps && !round) {
         if (std::strcmp(text,"LB")==0) text="L1";
         else if (std::strcmp(text,"RB")==0) text="R1";

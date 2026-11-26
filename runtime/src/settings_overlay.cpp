@@ -2196,7 +2196,7 @@ void DrawRevertPrompt(game_ui::Frame& in) {
     game_ui::ModalSpec spec;
     spec.title = "Keep display settings?";
     spec.lines = {"The previous settings return in " + std::to_string(static_cast<int>(std::ceil(remaining))) +
-                  " seconds unless you keep these.", AimSettings::Get().playStationPrompts
+                  " seconds unless you keep these.", AimSettings::Get().IsPlayStationPrompts()
                       ? "Press Square to confirm and keep these settings."
                       : "Press X to confirm and keep these settings."};
     spec.buttons = {"Keep", "Revert"};

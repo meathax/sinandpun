@@ -308,6 +308,50 @@ static void TestBindings() {
     CHECK(!Parse("garbage").Valid());
     CHECK(!Parse("key:#9999").Valid());
 
+    // Generic joystick / HOTAS bindings: parse, format, profile filtering, and resolution.
+    {
+        const Binding jb = Parse("joy0:btn3");
+        CHECK(jb == JoyButton(0, 3) && JoyDevice(jb) == 0 && JoyLocalCode(jb) == 3);
+        CHECK(Format(jb) == "joy0:btn3");
+        const Binding jaPos = Parse("joy1:axis2+");
+        const Binding jaNeg = Parse("joy1:axis2-");
+        CHECK(jaPos == JoyAxis(1, 2, 1) && Format(jaPos) == "joy1:axis2+");
+        CHECK(jaNeg == JoyAxis(1, 2, -1) && Format(jaNeg) == "joy1:axis2-");
+        const Binding jhUp = Parse("joy2:hat0_up");
+        const Binding jhRight = Parse("joy2:hat0_right");
+        const Binding jhDown = Parse("joy2:hat0_down");
+        const Binding jhLeft = Parse("joy2:hat0_left");
+        CHECK(jhUp == JoyHat(2, 0, 0) && Format(jhUp) == "joy2:hat0_up");
+        CHECK(jhRight == JoyHat(2, 0, 1) && Format(jhRight) == "joy2:hat0_right");
+        CHECK(jhDown == JoyHat(2, 0, 2) && Format(jhDown) == "joy2:hat0_down");
+        CHECK(jhLeft == JoyHat(2, 0, 3) && Format(jhLeft) == "joy2:hat0_left");
+        CHECK(!Parse("joy9:btn0").Valid());
+        CHECK(!Parse("joy0:axis99+").Valid());
+        CHECK(!Parse("joy0:hat0_bogus").Valid());
+        const Slots padJoy = ParseList("joy0:btn3 | joy1:axis2+ | joy2:hat0_up", Profile::Gamepad);
+        CHECK(padJoy[0] == jb && padJoy[1] == jaPos && padJoy[2] == jhUp);
+        const Slots kbmJoy = ParseList("joy0:btn3 | key:A", Profile::KeyboardMouse);
+        CHECK(kbmJoy[0] == Key(4) && !kbmJoy[1].Valid());
+
+        RawSample jraw;
+        CHECK(Value(jb, jraw) == 0.f);  // disconnected returns 0
+        jraw.joys[0].connected = true;
+        jraw.joys[0].buttons[3] = true;
+        jraw.joys[1].connected = true;
+        jraw.joys[1].axes[2] = 0.75f;
+        jraw.joys[2].connected = true;
+        jraw.joys[2].hats[0] = (1u << 0) | (1u << 1);  // up + right
+        CHECK(Value(jb, jraw) == 1.f);
+        CHECK(Value(JoyButton(0, 4), jraw) == 0.f);
+        CHECK(Near(Value(jaPos, jraw), 0.75f));
+        CHECK(Value(jaNeg, jraw) == 0.f);
+        jraw.joys[1].axes[2] = -0.4f;
+        CHECK(Value(jaPos, jraw) == 0.f);
+        CHECK(Near(Value(jaNeg, jraw), 0.4f));
+        CHECK(Value(jhUp, jraw) == 1.f && Value(jhRight, jraw) == 1.f);
+        CHECK(Value(jhDown, jraw) == 0.f && Value(jhLeft, jraw) == 0.f);
+    }
+
     // Lists: profile filtering, duplicates, slot limit, tolerance.
     const Slots pad = ParseList("pad:south | key:A | pad:south | pad:east | pad:west | pad:north", Profile::Gamepad);
     CHECK(pad[0] == PadButton(0) && pad[1] == PadButton(1) && pad[2] == PadButton(2));
@@ -399,6 +443,10 @@ static void TestSchemeModeParsing() {
     CHECK(ParseSchemeMode("auto", 2, SchemeMode::Pointer) == SchemeMode::Auto);
     CHECK(ParseSchemeMode(" Classic ", 2, SchemeMode::Auto) == SchemeMode::Classic);
     CHECK(ParseSchemeMode("pointer", 2, SchemeMode::Auto) == SchemeMode::Pointer);
+    CHECK(ParseSchemeMode("kbm", 2, SchemeMode::Auto) == SchemeMode::KeyboardMouse);
+    CHECK(ParseSchemeMode(" M+KB ", 2, SchemeMode::Auto) == SchemeMode::KeyboardMouse);
+    CHECK(ParseSchemeMode("mkb", 2, SchemeMode::Auto) == SchemeMode::KeyboardMouse);
+    CHECK(ParseSchemeMode("keyboard_mouse", 2, SchemeMode::Auto) == SchemeMode::KeyboardMouse);
     CHECK(ParseSchemeMode("pointer", 1, SchemeMode::Classic) == SchemeMode::Auto);  // old default migrates
     CHECK(ParseSchemeMode("classic", 1, SchemeMode::Auto) == SchemeMode::Classic);  // deliberate opt-in kept
     CHECK(ParseSchemeMode("bogus", 2, SchemeMode::Classic) == SchemeMode::Classic);
@@ -412,6 +460,7 @@ static void TestSchemeModeParsing() {
     a.device = ActiveDevice::Gamepad;
     CHECK(EffectiveScheme(SchemeMode::Auto, a) == Scheme::Pointer);
     CHECK(EffectiveScheme(SchemeMode::Pointer, a) == Scheme::Pointer);
+    CHECK(EffectiveScheme(SchemeMode::KeyboardMouse, a) == Scheme::Pointer);
 }
 
 static void TestSense() {
@@ -511,6 +560,16 @@ static void TestSchemeArbitration() {
     // Change of the setting from pinned classic to pinned pointer with the pad as last device.
     u = UpdateScheme(d, SchemeMode::Pointer, DeviceSense{}, 30);
     CHECK(!u.schemeChanged && d.scheme == Scheme::Pointer);
+    // KeyboardMouse pins ActiveDevice::KeyboardMouse and ignores gamepad takeovers.
+    SchemeArbiter e;
+    SeedScheme(e, SchemeMode::KeyboardMouse, ActiveDevice::Gamepad);
+    CHECK(e.device == ActiveDevice::KeyboardMouse && e.scheme == Scheme::Pointer);
+    u = UpdateScheme(e, SchemeMode::KeyboardMouse, Pad(true, true), 1000);
+    CHECK(!u.deviceChanged && !u.schemeChanged && e.device == ActiveDevice::KeyboardMouse && e.scheme == Scheme::Pointer);
+    // Switching an existing Gamepad arbiter to KeyboardMouse pins KeyboardMouse immediately.
+    SeedScheme(e, SchemeMode::Auto, ActiveDevice::Gamepad);
+    u = UpdateScheme(e, SchemeMode::KeyboardMouse, Pad(true, true), 2000);
+    CHECK(u.deviceChanged && !u.schemeChanged && e.device == ActiveDevice::KeyboardMouse && e.scheme == Scheme::Pointer);
 }
 
 static void TestPadConditioning() {

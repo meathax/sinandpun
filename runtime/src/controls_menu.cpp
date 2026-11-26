@@ -3,6 +3,7 @@
 #include "aim_input.h"
 #include "aim_settings.h"
 #include "dual_analog.h"
+#include "generic_joystick.h"
 #include "input_map.h"
 #include "runtime_config.h"
 
@@ -254,6 +255,28 @@ void DrawPreview(ListView& v, const AimSettings::Settings& s) {
 // Position-based pad names: the Classic Controller's A / B sit in the east / south positions, which are the
 // Xbox B / A buttons, so letters would mislead.
 std::string FriendlyName(const InputMap::Binding& b) {
+    if (b.device == InputMap::Device::Joy) {
+        const int dev = InputMap::JoyDevice(b);
+        const int local = InputMap::JoyLocalCode(b);
+        if (dev < 0 || dev >= static_cast<int>(InputMap::kMaxJoysticks)) return "-";
+        const std::string prefix = "Joy " + std::to_string(dev + 1) + " ";
+        if (local >= 0 && local < static_cast<int>(InputMap::kMaxJoyButtons)) {
+            return prefix + "Btn " + std::to_string(local + 1);
+        }
+        if (local >= InputMap::kJoyAxisOffset &&
+            local < InputMap::kJoyAxisOffset + static_cast<int>(InputMap::kMaxJoyAxes) && b.dir != 0) {
+            return prefix + "Axis " + std::to_string(local - InputMap::kJoyAxisOffset + 1) +
+                   (b.dir > 0 ? " +" : " -");
+        }
+        if (local >= InputMap::kJoyHatOffset &&
+            local < InputMap::kJoyHatOffset + static_cast<int>(InputMap::kMaxJoyHats * 4)) {
+            static constexpr std::array<const char*, 4> kHatDirs = {"Up", "Right", "Down", "Left"};
+            const int hat = (local - InputMap::kJoyHatOffset) / 4;
+            const int dirIdx = (local - InputMap::kJoyHatOffset) % 4;
+            return prefix + "Hat " + std::to_string(hat + 1) + " " + kHatDirs[static_cast<size_t>(dirIdx)];
+        }
+        return "-";
+    }
     const std::string name = InputMap::Format(b);
     if (name.empty()) return "-";
     const size_t colon = name.find(':');
@@ -272,6 +295,15 @@ std::string FriendlyName(const InputMap::Binding& b) {
         for (const auto& entry : kPadNames) {
             if (rest == entry.first) return entry.second;
         }
+    } else if (kind == "mouse") {
+        static const std::pair<const char*, const char*> kMouseLabels[] = {
+            {"left", "Left Click"}, {"right", "Right Click"}, {"middle", "Middle Click"},
+            {"x1", "Mouse 4"}, {"x2", "Mouse 5"},
+            {"wheel_up", "Wheel Up"}, {"wheel_down", "Wheel Down"},
+        };
+        for (const auto& entry : kMouseLabels) {
+            if (rest == entry.first) return entry.second;
+        }
     }
     std::replace(rest.begin(), rest.end(), '_', ' ');
     if (!rest.empty()) rest[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(rest[0])));
@@ -288,6 +320,8 @@ struct CaptureUi {
 
 std::string g_status;
 int g_profileIndex = 0;
+bool g_profileManual = false;
+bool g_showKbmBindings = false;
 
 void ApplyCapture(const InputMap::Binding& binding) {
     AimSettings::Settings s = AimSettings::Get();
@@ -300,7 +334,7 @@ void ApplyCapture(const InputMap::Binding& binding) {
 
 void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Profile profile) {
     const bool pad = profile == InputMap::Profile::Gamepad;
-    v.Section(pad ? "Gamepad buttons" : "Keyboard and mouse bindings");
+    v.Section(pad ? "Gamepad / Joystick bindings" : "Keyboard and mouse bindings");
     v.Note("Up to three bindings per action. Confirm or click rebinds the selected slot. Click the left stick, press Delete or right-click to clear. Conflicting bindings are swapped. X applies the page.");
     auto& table = s.bindings.For(profile);
     if (const size_t conflicts = InputMap::CountConflicts(table)) {
@@ -335,7 +369,7 @@ void BuildBindings(ListView& v, AimSettings::Settings& s, Edit& e, InputMap::Pro
         }
     }
     v.Section("Reset");
-    if (v.Action(pad ? "Reset gamepad bindings" : "Reset keyboard and mouse bindings", "Reset...",
+    if (v.Action(pad ? "Reset gamepad / joystick bindings" : "Reset keyboard and mouse bindings", "Reset...",
                  "Restores every binding of this device to its default.")) {
         game_ui::RequestConfirm("Reset bindings", "Restore the default bindings for this device?", "Reset", [profile] {
             AimSettings::Settings cur = AimSettings::Get();
@@ -357,19 +391,47 @@ void AdvancedToggle(ListView& v) {
     v.Toggle("Show advanced tuning", &g_showAdvanced, false, "Reveals fine-tuning options. Most players never need them.");
 }
 
+void ControlSchemeChoice(ListView& v, AimSettings::Settings& s, Edit& e) {
+    int style = s.schemeMode == InputMap::SchemeMode::KeyboardMouse ? 1
+              : s.schemeMode == InputMap::SchemeMode::Classic ? 2 : 0;
+    static const char* const kStyles[] = {"Automatic (Wii pointer)", "M+KB", "Classic Controller"};
+    if (auto r = v.Choice("Control scheme", &style, kStyles, 3, 0,
+                          "Automatic (Wii pointer): the right stick and mouse move the reticle freely (recommended). "
+                          "M+KB: locks controls to mouse and keyboard. "
+                          "Classic Controller: the game's original stick aiming.")) {
+        if (style == 1) {
+            s.schemeMode = InputMap::SchemeMode::KeyboardMouse;
+            s.mouse.enabled = true;
+            if (s.buttonPromptStyle == AimSettings::ButtonPromptStyle::Xbox ||
+                s.buttonPromptStyle == AimSettings::ButtonPromptStyle::PlayStation) {
+                s.buttonPromptStyle = AimSettings::ButtonPromptStyle::Keyboard;
+            }
+        } else if (style == 2) {
+            s.schemeMode = InputMap::SchemeMode::Classic;
+        } else {
+            s.schemeMode = InputMap::SchemeMode::Auto;
+        }
+        e.Take(r);
+    }
+}
+
+void ButtonPromptChoice(ListView& v, AimSettings::Settings& s, Edit& e) {
+    int prompts = static_cast<int>(s.buttonPromptStyle);
+    if (auto r = v.Choice("Button icons", &prompts, AimSettings::kButtonPromptLabels.data(),
+                          static_cast<int>(AimSettings::kButtonPromptLabels.size()), 0,
+                          "Icons used in game prompts and menu hints. Keyboard reflects your remapped keys; "
+                          "Original Wii keeps the game's original Wii button prompts.")) {
+        s.buttonPromptStyle = static_cast<AimSettings::ButtonPromptStyle>(prompts);
+        e.Take(r);
+    }
+}
+
 void BuildGamepadPage(ListView& v, AimSettings::Settings& s, Edit& e) {
     DualAnalog::Config& c = s.aim;
     const DualAnalog::Config d;
     UpdatePreview(s);
     v.Section("Aiming");
-    int style = s.schemeMode == InputMap::SchemeMode::Classic ? 1 : 0;
-    static const char* const kStyles[] = {"Wii pointer", "Classic Controller"};
-    if (auto r = v.Choice("Aiming style", &style, kStyles, 2, 0,
-                          "Wii pointer: the right stick and mouse move the reticle freely (recommended). "
-                          "Classic Controller: the game's original stick aiming.")) {
-        s.schemeMode = style == 1 ? InputMap::SchemeMode::Classic : InputMap::SchemeMode::Auto;
-        e.Take(r);
-    }
+    ControlSchemeChoice(v, s, e);
     e.Take(v.Slider("Aim sensitivity", &c.sensitivity, 0.2f, 3.0f, 0.05f, "%.2fx", d.sensitivity,
                     "Reticle speed. At 1.00 full tilt crosses the screen in about a third of a second."));
     e.Take(v.Toggle("Invert vertical aim", &c.invertY, d.invertY, "Push up to aim down."));
@@ -392,12 +454,7 @@ void BuildGamepadPage(ListView& v, AimSettings::Settings& s, Edit& e) {
     }
 
     v.Section("Gamepad");
-    int prompts = s.playStationPrompts ? 1 : 0;
-    static const char* const kPrompts[] = {"Xbox", "PlayStation"};
-    if (auto r = v.Choice("Button icons", &prompts, kPrompts, 2, 0, "Icons used in game prompts and menu hints.")) {
-        s.playStationPrompts = prompts == 1;
-        e.Take(r);
-    }
+    ButtonPromptChoice(v, s, e);
     if (v.Action("Recommended layout", "Restore",
                  "RT shoot, LT lock on, RB jump, LB evade, left stick move, right stick aim. Keyboard and mouse keep theirs.")) {
         game_ui::RequestConfirm("Recommended layout", "Replace your gamepad buttons with the recommended layout?", "Restore", [] {
@@ -445,10 +502,36 @@ void BuildGyroPage(ListView& v, AimSettings::Settings& s, Edit& e) {
 }
 
 void BuildButtonsPage(ListView& v, AimSettings::Settings& s, Edit& e) {
-    static const char* const kDevices[] = {"Gamepad", "Keyboard & mouse"};
-    v.Choice("Device", &g_profileIndex, kDevices, 2, 0, "Which device's buttons to change.");
+    if (!g_profileManual) {
+        g_profileIndex = s.schemeMode == InputMap::SchemeMode::KeyboardMouse ? 1 : 0;
+    }
+    static const char* const kDevices[] = {"Gamepad / Joystick (HOTAS)", "Keyboard & mouse"};
+    if (v.Choice("Device", &g_profileIndex, kDevices, 2, 0, "Which device's buttons to change.")) {
+        g_profileManual = true;
+    }
     v.Section("Live input");
     DrawDeviceMonitor(v);
+    const auto joyDevices = GenericJoystick::ConnectedDevices();
+    if (!joyDevices.empty()) {
+        const InputMap::RawSample raw = AimInput::Sample();
+        v.Section("Connected joysticks / HOTAS");
+        for (const auto& dev : joyDevices) {
+            bool active = false;
+            if (dev.slot >= 0 && dev.slot < static_cast<int>(InputMap::kMaxJoysticks)) {
+                const auto& rj = raw.joys[static_cast<size_t>(dev.slot)];
+                if (rj.connected) {
+                    active = rj.buttons.any();
+                    for (uint8_t h : rj.hats) if (h != 0) active = true;
+                    for (float a : rj.axes) if (std::fabs(a) >= 0.35f) active = true;
+                }
+            }
+            const std::string label = "Joy " + std::to_string(dev.slot + 1);
+            std::string info = dev.name + " (" + std::to_string(dev.numButtons) + " btn, " +
+                               std::to_string(dev.numAxes) + " axis, " + std::to_string(dev.numHats) + " hat)";
+            if (active) info += "  [ACTIVE]";
+            v.Info(label.c_str(), info, active ? game_ui::kGood : game_ui::kTextNormal);
+        }
+    }
     BuildBindings(v, s, e, g_profileIndex == 1 ? InputMap::Profile::KeyboardMouse : InputMap::Profile::Gamepad);
 }
 
@@ -456,6 +539,9 @@ void BuildMousePage(ListView& v, AimSettings::Settings& s, Edit& e) {
     AimSettings::MouseConfig& m = s.mouse;
     const AimSettings::MouseConfig d{};
     UpdatePreview(s);
+    v.Section("Mouse & keyboard");
+    ControlSchemeChoice(v, s, e);
+    ButtonPromptChoice(v, s, e);
     e.Take(v.Toggle("Mouse aiming", &m.enabled, d.enabled, "The mouse moves the reticle. Whichever device moved last wins."));
     int mode = m.raw ? 1 : 0;
     static const char* const kModes[] = {"Follow cursor", "Captured"};
@@ -483,8 +569,14 @@ void BuildMousePage(ListView& v, AimSettings::Settings& s, Edit& e) {
         e.Take(v.Slider("Mouse speed (Classic style)", &m.stickSpeed, 300.0f, 6000.0f, 100.0f, "%.0f", d.stickSpeed,
                         "With the Classic Controller aiming style the mouse acts as the right stick: mouse speed that equals full tilt.", in));
     }
-    v.Note("WASD moves, left click shoots, right click locks on, Space jumps, Shift evades, R recenters. "
-           "Esc goes back, Alt+Enter toggles fullscreen, F10 opens this menu.");
+    v.Note("Menus: left click selects, Esc or Backspace goes back. Combat: WASD moves, left click shoots, "
+           "right click locks on, Space jumps, Shift evades, R recenters. Alt+Enter toggles fullscreen, F10 opens this menu.");
+    v.Section("Remapping");
+    v.Toggle("Show keyboard & mouse bindings", &g_showKbmBindings, false,
+             "Remap every keyboard key and mouse button directly here (also available on the Buttons page).");
+    if (g_showKbmBindings) {
+        BuildBindings(v, s, e, InputMap::Profile::KeyboardMouse);
+    }
 }
 
 } // namespace
@@ -542,7 +634,7 @@ void DrawModals(game_ui::Frame& input) {
     const float remaining = std::chrono::duration<float>(g_capture.deadline - Clock::now()).count();
     game_ui::ModalSpec spec;
     spec.title = std::string("Bind: ") + info.label;
-    spec.lines = {pad ? "Press a gamepad button, pull a trigger or push a stick." : "Press a key, click a mouse button or scroll the wheel.",
+    spec.lines = {pad ? "Press a gamepad/joystick button, pull a trigger, move an axis or press a POV hat." : "Press a key, click a mouse button or scroll the wheel.",
                   pad ? "Release everything first. Use the dialog buttons to clear or cancel." : "Escape and Delete can be bound. F10 is reserved. Use Clear / Cancel below or wait for the timeout."};
     spec.buttons = {"Clear binding", "Cancel"};
     spec.progress = std::clamp(remaining / 8.0f, 0.0f, 1.0f);
@@ -584,7 +676,7 @@ void ResetPage(int page) {
     case 0:
         s.aim = DualAnalog::ModernAim();
         s.schemeMode = InputMap::SchemeMode::Auto;
-        s.playStationPrompts = false;
+        s.buttonPromptStyle = AimSettings::ButtonPromptStyle::Xbox;
         break;
     case 1:
         // While gyro stays enabled, Sanitize also keeps the aiming style on the Wii pointer.

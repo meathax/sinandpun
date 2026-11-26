@@ -44,7 +44,8 @@ static void TestDefaults() {
     CHECK(stick.maxSpeedX == DualAnalog::kFullTiltSpeed);
     CHECK(s.aim.triggerThreshold == 0.35f);
     CHECK(!s.gyro.enabled && s.gyro.sensitivityX == GyroAim::kDefaultSensitivity);
-    CHECK(!s.playStationPrompts);
+    CHECK(s.buttonPromptStyle == ButtonPromptStyle::Xbox && !s.IsPlayStationPrompts() &&
+          !s.IsKeyboardPrompts() && !s.IsWiiPrompts());
     for (size_t i = 0; i < kActionCount; ++i) {
         // Every action has a gamepad default; keyboard defaults may be empty only for the d-pad actions.
         CHECK(s.bindings.pad[i][0].Valid());
@@ -74,7 +75,7 @@ static void TestRoundTrip() {
     Settings s = DefaultBindings();
     s.schemeMode = SchemeMode::Auto;
     s.switchToast = false;
-    s.playStationPrompts = true;
+    s.buttonPromptStyle = ButtonPromptStyle::PlayStation;
     s.aim.leftDeadzone = 0.2f;
     s.aim.leftSaturation = 0.8f;
     s.aim.invertMoveY = true;
@@ -92,7 +93,7 @@ static void TestRoundTrip() {
     const Settings r = Load();
     CHECK(r.schemeMode == SchemeMode::Auto);
     CHECK(!r.switchToast);
-    CHECK(r.playStationPrompts);
+    CHECK(r.buttonPromptStyle == ButtonPromptStyle::PlayStation && r.IsPlayStationPrompts());
     CHECK(std::fabs(r.aim.leftDeadzone - 0.2f) < 1e-3f && std::fabs(r.aim.leftSaturation - 0.8f) < 1e-3f);
     CHECK(r.aim.invertMoveY && std::fabs(r.aim.triggerThreshold - 0.3f) < 1e-3f);
     CHECK(r.mouse.raw && std::fabs(r.mouse.sensitivity - 1.25f) < 1e-3f);
@@ -101,13 +102,28 @@ static void TestRoundTrip() {
     CHECK(r.aim.invertY);
     CHECK(r.bindings.kbm[static_cast<size_t>(Action::Jump)][0] == InputMap::Key(30));
     // Every mode survives a save.
-    for (SchemeMode m : {SchemeMode::Classic, SchemeMode::Pointer, SchemeMode::Auto}) {
+    for (SchemeMode m : {SchemeMode::Classic, SchemeMode::Pointer, SchemeMode::Auto, SchemeMode::KeyboardMouse}) {
         Settings x = Get();
         x.schemeMode = m;
         Set(x);
         CHECK(Save());
-        CHECK(Load().schemeMode == m);
-        CHECK(Get().scheme == (m == SchemeMode::Classic ? Scheme::Classic : m == SchemeMode::Pointer ? Scheme::Pointer : Get().scheme));
+        const Settings loaded = Load();
+        CHECK(loaded.schemeMode == m);
+        CHECK(Get().scheme == (m == SchemeMode::Classic ? Scheme::Classic : Scheme::Pointer));
+        if (m == SchemeMode::KeyboardMouse) CHECK(loaded.mouse.enabled);
+    }
+    // Every button prompt style survives a save.
+    for (ButtonPromptStyle style : {ButtonPromptStyle::Xbox, ButtonPromptStyle::PlayStation,
+                                    ButtonPromptStyle::Keyboard, ButtonPromptStyle::Wii}) {
+        Settings x = Get();
+        x.buttonPromptStyle = style;
+        Set(x);
+        CHECK(Save());
+        const Settings loaded = Load();
+        CHECK(loaded.buttonPromptStyle == style);
+        CHECK(loaded.IsPlayStationPrompts() == (style == ButtonPromptStyle::PlayStation));
+        CHECK(loaded.IsKeyboardPrompts() == (style == ButtonPromptStyle::Keyboard));
+        CHECK(loaded.IsWiiPrompts() == (style == ButtonPromptStyle::Wii));
     }
 }
 
@@ -121,10 +137,23 @@ static void TestLegacyAndTolerance() {
     CHECK(Load().schemeMode == SchemeMode::Pointer);
     WriteConfig("[input]\nversion = 2\nscheme = \"auto\"\n");
     CHECK(Load().schemeMode == SchemeMode::Auto);
+    WriteConfig("[input]\nversion = 6\nscheme = \"kbm\"\n[mouse]\nenabled = false\n");
+    {
+        const Settings kbm = Load();
+        CHECK(kbm.schemeMode == SchemeMode::KeyboardMouse);
+        CHECK(kbm.scheme == Scheme::Pointer);
+        CHECK(kbm.mouse.enabled);
+    }
     WriteConfig("[input]\nbutton_prompts = \"unknown\"\n");
-    CHECK(!Load().playStationPrompts);
+    CHECK(Load().buttonPromptStyle == ButtonPromptStyle::Xbox);
     WriteConfig("[input]\nbutton_prompts = \"xbox_one\"\n");
-    CHECK(!Load().playStationPrompts);
+    CHECK(Load().buttonPromptStyle == ButtonPromptStyle::Xbox);
+    WriteConfig("[input]\nbutton_prompts = \"playstation\"\n");
+    CHECK(Load().buttonPromptStyle == ButtonPromptStyle::PlayStation && Load().IsPlayStationPrompts());
+    WriteConfig("[input]\nbutton_prompts = \"keyboard\"\n");
+    CHECK(Load().buttonPromptStyle == ButtonPromptStyle::Keyboard && Load().IsKeyboardPrompts());
+    WriteConfig("[input]\nbutton_prompts = \"wii\"\n");
+    CHECK(Load().buttonPromptStyle == ButtonPromptStyle::Wii && Load().IsWiiPrompts());
     WriteConfig("[input]\nscheme = 7\n[aim]\nleft_saturation = 40\ntrigger_threshold = -2\n");
     const Settings s = Load();
     CHECK(s.schemeMode == SchemeMode::Auto);

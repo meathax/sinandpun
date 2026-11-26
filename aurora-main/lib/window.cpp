@@ -413,6 +413,10 @@ void process_event(SDL_Event& event) {
   case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
   case SDL_EVENT_GAMEPAD_BUTTON_UP:
   case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+  case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
+  case SDL_EVENT_JOYSTICK_BUTTON_UP:
+  case SDL_EVENT_JOYSTICK_AXIS_MOTION:
+  case SDL_EVENT_JOYSTICK_HAT_MOTION:
 	video::notify_input();
 	break;
   default:
@@ -709,6 +713,16 @@ bool initialize() {
       SDL_HINT_SCREENSAVER_INHIBIT_ACTIVITY_NAME, SDL_GetError());
   TRY(SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE_RUMBLE_BRAKE, "1"), "Error setting {}: {}",
       SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE_RUMBLE_BRAKE, SDL_GetError());
+#if defined(_WIN32)
+  // Explicitly enable DirectInput, XInput, and RawInput joystick backends so
+  // flight sticks, HOTAS throttles, pedals, and XInput sticks are always enumerated.
+  TRY_WARN(SDL_SetHint(SDL_HINT_JOYSTICK_DIRECTINPUT, "1"), "Error setting {}: {}", SDL_HINT_JOYSTICK_DIRECTINPUT,
+           SDL_GetError());
+  TRY_WARN(SDL_SetHint(SDL_HINT_XINPUT_ENABLED, "1"), "Error setting {}: {}", SDL_HINT_XINPUT_ENABLED,
+           SDL_GetError());
+  TRY_WARN(SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1"), "Error setting {}: {}", SDL_HINT_JOYSTICK_RAWINPUT,
+           SDL_GetError());
+#endif
   // Treat touch and mouse as separate input sources
   TRY(SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0"), "Error setting {}: {}", SDL_HINT_TOUCH_MOUSE_EVENTS,
       SDL_GetError());
