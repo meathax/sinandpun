@@ -30,10 +30,14 @@ bool validPoint(const ScenePoint& point) {
 } // namespace
 
 bool ObserveSceneAnchor(uint32_t address, CpuContext* ctx) {
-    if (address == 0x80258A60u) {
-        if (!(ctx->lr == 0x8009C2B4u || ctx->lr == 0x8009C3E8u ||
-              ctx->lr == 0x8009D7F0u || ctx->lr == 0x8009D924u ||
-              ctx->lr == 0x8009F018u || ctx->lr == 0x8009F14Cu) || !(aurora_scene_effect_mask() & 4)) return true;
+    // Hook addresses and caller return sites are canonical R2VE01 identities;
+    // MKW_GADDR resolves the matching R2VJ01 address in the Japanese build.
+    if (address == MKW_GADDR(80258A60)) {  // nw4r::g3d::ScnObj::SetMtx
+        // Return sites of the SetMtx calls in NWSM_Shadow::put and the two putShadow pairs.
+        const uint32_t lr = ctx->lr;
+        if (!(lr == MKW_GADDR(8009C2B4) || lr == MKW_GADDR(8009C3E8) ||
+              lr == MKW_GADDR(8009D7F0) || lr == MKW_GADDR(8009D924) ||
+              lr == MKW_GADDR(8009F018) || lr == MKW_GADDR(8009F14C)) || !(aurora_scene_effect_mask() & 4)) return true;
         const uint32_t m = ctx->gpr[5];
         if (!Memory::Contains(m, 48)) return true;
         ScenePoint pos{}, up{}, x{};
@@ -52,21 +56,17 @@ bool ObserveSceneAnchor(uint32_t address, CpuContext* ctx) {
         return true;
     }
     unsigned positionArg = 3, lifetime = 12;
-    switch (address) {
-    case 0x8006D35Cu: // PlShot::cbHitBg
+    if (address == MKW_GADDR(8006D35C)) {  // PlShot::cbHitBg (R2VJ01: PlShotCore::cbHitBg)
         lifetime = 5;
         positionArg = 4;
-        break;
-    case 0x8006DA00u: // PlChargeShot::cbHitBg
-    case 0x8006E4D4u: // PlCounterAttack2::cbHitBg
-    case 0x80123220u: // setMBomb
+    } else if (address == MKW_GADDR(8006DA00) ||  // PlChargeShot::cbHitBg
+               address == MKW_GADDR(8006E4D4) ||  // PlCounterAttack2::cbHitBg
+               address == MKW_GADDR(80123220)) {  // setMBomb
         positionArg = 4;
-        break;
-    case 0x8013C148u: // BombMSet
-    case 0x8013C358u: // BombMAlphaSet
-    case 0x8013C5FCu: // MechaBombMSet
-        break;
-    default:
+    } else if (address == MKW_GADDR(8013C148) ||  // BombMSet
+               address == MKW_GADDR(8013C358) ||  // BombMAlphaSet
+               address == MKW_GADDR(8013C5FC)) {  // MechaBombMSet
+    } else {
         return false;
     }
     const uint32_t p = ctx->gpr[positionArg];

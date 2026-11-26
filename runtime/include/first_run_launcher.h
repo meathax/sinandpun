@@ -19,4 +19,12 @@ bool GameDataAvailable();
 using PrepareFolder = bool (*)(const std::filesystem::path&, std::string&);
 bool Run(PrepareFolder prepareFolder);
 
+// A disc image to import as soon as Run starts (the launcher's --game for a disc whose region was never prepared).
+void SetInitialImage(const std::filesystem::path& image);
+
+// Starts the other regional executable for a disc or extracted folder of that region, waits for it and exits this
+// process with its status. Returns false (with error) only when the other executable cannot be started.
+using RegionHandOff = bool (*)(const std::string& gameId, const std::filesystem::path& game, std::string& error);
+void SetRegionHandOff(RegionHandOff handOff);
+
 }  // namespace first_run_launcher
