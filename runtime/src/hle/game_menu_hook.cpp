@@ -221,3 +221,31 @@ void GuestEntryHook(uint32_t address, CpuContext* ctx) {
         break;
     }
 }
+
+// Writes the configured voice language (0 = Japanese, 1 = English) into the game's
+// g_pSysGlobals + 0x104 (read by getDemoVoiceLanguage__Fv at 0x80091FB8 and compared
+// against the loaded stage voice bank at +0xD5C by fn_800C2704 on stage load).
+extern "C" void SinAudio_SyncVoiceLanguage(uint8_t language) noexcept {
+    constexpr uint32_t kSysGlobalsPtrAddr = 0x804B19A0u;
+    constexpr uint32_t kDemoVoiceLanguageOffset = 0x104u;
+    const uint8_t desired = language == 0 ? 0u : 1u;
+    if (!Memory::Contains(kSysGlobalsPtrAddr, 4)) {
+        return;
+    }
+    uint32_t sysGlobals = 0;
+    if (!Memory::TryRead32(kSysGlobalsPtrAddr, sysGlobals)) {
+        return;
+    }
+    if (sysGlobals < 0x80000000u || sysGlobals >= 0x81800000u) {
+        return;
+    }
+    const uint32_t langAddr = sysGlobals + kDemoVoiceLanguageOffset;
+    if (!Memory::Contains(langAddr, 1)) {
+        return;
+    }
+    if (Memory::Read8(langAddr) != desired) {
+        Memory::Write8(langAddr, desired);
+        RT_LOGF(RT_TAG_HLE, "audio: voice language -> %s (%u) at 0x%08X\n",
+                desired == 0 ? "Japanese" : "English", static_cast<unsigned>(desired), langAddr);
+    }
+}
