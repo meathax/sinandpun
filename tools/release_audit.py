@@ -27,8 +27,9 @@ def same_file(left, right):
     return left.stat().st_size == right.stat().st_size and sha256(left) == sha256(right)
 
 
-def audit(source, package, modules, require_launcher_clean=False):
+def audit(source, package, modules, japan_source=None, require_launcher_clean=False):
     source, package, modules = Path(source), Path(package), Path(modules)
+    japan_source = Path(japan_source) if japan_source else None
     errors = []
     warnings = []
     checks = {}
@@ -38,6 +39,11 @@ def audit(source, package, modules, require_launcher_clean=False):
     checks["exe_matches_build"] = same_file(source_exe, package_exe)
     if not checks["exe_matches_build"]:
         errors.append(f"Executable {package_exe.name} is missing, stale, or differs from the build source")
+    package_japan_exe = package / "sinandpun-jp.exe"
+    if japan_source is not None:
+        checks["japan_exe_matches_build"] = same_file(japan_source / "sinandpun.exe", package_japan_exe)
+        if not checks["japan_exe_matches_build"]:
+            errors.append("Executable sinandpun-jp.exe is missing, stale, or differs from the Japan build source")
 
     for asset in ("dsp_coef.bin", "initial_pipeline_cache.db"):
         checks[asset] = same_file(source / asset, package / asset)
@@ -113,8 +119,8 @@ def audit(source, package, modules, require_launcher_clean=False):
             errors.append(f"recomplauncher.json is invalid JSON: {error}")
 
     if require_launcher_clean:
-        if sorted(p.relative_to(package).as_posix() for p in package.rglob("*.exe")) != ["sinandpun.exe"]:
-            errors.append("release must contain exactly one executable at the root: sinandpun.exe")
+        if sorted(p.relative_to(package).as_posix() for p in package.rglob("*.exe")) != ["sinandpun-jp.exe", "sinandpun.exe"]:
+            errors.append("release must contain exactly two executables at the root: sinandpun.exe and sinandpun-jp.exe")
         if package_exe.is_file():
             # These diagnostics are emitted only by the native SDK dispatch code.
             if package_exe.stat().st_size:
@@ -178,12 +184,13 @@ def main():
     parser.add_argument("--source", default="build/native")
     parser.add_argument("--package", default="ready")
     parser.add_argument("--modules", default="build/modules")
+    parser.add_argument("--japan-source", default="build/native-r2vj01")
     parser.add_argument("--json-out")
     parser.add_argument("--require-launcher-clean", action="store_true")
     args = parser.parse_args()
 
     report = audit(ROOT / args.source, ROOT / args.package, ROOT / args.modules,
-                   args.require_launcher_clean)
+                   args.japan_source, args.require_launcher_clean)
     if args.json_out:
         output = ROOT / args.json_out
         output.parent.mkdir(parents=True, exist_ok=True)

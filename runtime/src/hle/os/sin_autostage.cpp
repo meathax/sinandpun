@@ -28,6 +28,7 @@
 //   SIN_AUTOSTAGE_FIXED_ADDR=0xADDR  skip the heap scan, use this address for F
 
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 #include "runtime_log.h"
 
 #include <aurora/aurora.h>
@@ -44,10 +45,10 @@
 
 namespace {
 
-constexpr uint32_t kGmPtrAddr = 0x804B19A0u;
-constexpr uint32_t kLoadedStageAddr = 0x804B1968u;
-constexpr uint32_t kFlowVptr0 = 0x802FD608u;
-constexpr uint32_t kFlowVptr30 = 0x802FD620u;
+const uint32_t kGmPtrAddr = MKW_GADDR(804B19A0);
+const uint32_t kLoadedStageAddr = MKW_GADDR(804B1968);
+const uint32_t kFlowVptr0 = MKW_GADDR(802FD608);
+const uint32_t kFlowVptr30 = MKW_GADDR(802FD620);
 constexpr uint32_t kScanLo = 0x80400000u;
 constexpr uint32_t kScanHi = 0x81800000u;
 
@@ -126,7 +127,7 @@ void TraceSoundSlot(uint32_t gm, double now) {
         Rd32(scene + 4, l0);
         Rd32(scene + 8, l1);
     }
-    Rd32(0x804B1CD0u, slot);
+    Rd32(MKW_GADDR(804B1CD0), slot);
     Rd32(gm + 92, mgr);
     Rd32(gm + 100, flags);
     uint32_t st = 0, h = 0, ph = 0, d48 = 0;

@@ -755,7 +755,7 @@ bool ProbeDisc(const fs::path& image, DiscInfo& info, std::string& error) {
         info.format = !std::memcmp(magic, "RVZ\1", 4) ? "RVZ" : !std::memcmp(magic, "WIA\1", 4) ? "WIA" :
                       !std::memcmp(magic, "MComprHD", 8) ? "CHD" : !std::memcmp(magic, "CISO", 4) ? "CISO" :
                       !std::memcmp(magic, "WBFS", 4) ? "WBFS" : ext == ".gcz" ? "GCZ" : ext == ".cue" || ext == ".bin" ? "BIN" : "ISO";
-        info.supported = info.wii && info.gameId == kGameId;
+        info.supported = info.wii && FindGameVersion(info.gameId) != nullptr;
         return true;
     } catch (const std::exception& e) {
         error = e.what();
@@ -796,14 +796,15 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
             if (gcMagic == kGcMagic) throw ImportError("This is a GameCube disc (" + id + "). Sin & Punishment: Star Successor is a Wii game.");
             throw ImportError("This does not look like a Wii disc image.");
         }
-        if (id != kGameId) {
+        const GameVersionInfo* version = FindGameVersion(id);
+        if (!version) {
             if (id.compare(0, 3, "R2V") == 0 && id.size() == 6) {
                 const char region = id[3];
-                const char* name = region == 'P' ? "European (PAL)" : region == 'J' ? "Japanese" : region == 'K' ? "Korean" : "another region's";
+                const char* name = region == 'P' ? "European (PAL)" : region == 'K' ? "Korean" : "another region's";
                 throw ImportError(std::string("This is the ") + name + " version of Sin & Punishment: Star Successor (" + id +
-                                  "). Only the North American version (" + kGameId + ") is supported.");
+                                  "). The North American (R2VE01) and Japanese (R2VJ01) versions are supported.");
             }
-            throw ImportError("This disc image is \"" + id + "\", not Sin & Punishment: Star Successor (" + kGameId + ").");
+            throw ImportError("This disc image is \"" + id + "\", not a supported Sin & Punishment: Star Successor release (R2VE01 or R2VJ01).");
         }
         summary.gameId = id;
 
@@ -828,12 +829,12 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
 
         Sha1 sha;
         WiiPartition part(*raw, partitionOffset, sha, progress, image, requestedKeyFile,
-                          reinterpret_cast<const uint8_t*>(kGameId), summary.keySource);
+                          reinterpret_cast<const uint8_t*>(id.data()), summary.keySource);
         progress.SetStage("Reading disc image");
 
         uint8_t bootBin[0x440];
         part.Read(0, bootBin, sizeof bootBin);
-        if (std::memcmp(bootBin, kGameId, 6) != 0) throw ImportError("The disc's game partition belongs to a different game (damaged image).");
+        if (std::memcmp(bootBin, id.data(), 6) != 0) throw ImportError("The disc's game partition belongs to a different game (damaged image).");
         std::vector<uint8_t> bi2(0x2000);
         part.Read(0x440, bi2.data(), bi2.size());
         uint8_t loaderHeader[0x20];
@@ -916,7 +917,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
 
         // Everything derived from the disc: prelinked stage module images.
         progress.SetStage("Preparing stage modules");
-        const std::vector<uint8_t> sel = ReadModuleFile(staging / "files" / "gs2.sel");
+        const std::vector<uint8_t> sel = ReadModuleFile(staging / "files" / version->moduleExportFile);
         for (int i = 0; i < kModuleCount; ++i) {
             if (progress.cancel.load(std::memory_order_relaxed)) throw ImportCancelled{};
             char name[32];
@@ -924,7 +925,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
             progress.SetStage("Preparing stage modules", name);
             std::vector<uint8_t> image;
             std::string moduleError;
-            if (!BuildModuleImage(ReadModuleFile(staging / "files" / (std::string(name) + ".rso")), sel, kModuleBase, image, moduleError)) {
+            if (!BuildModuleImage(ReadModuleFile(staging / "files" / (std::string(name) + ".rso")), sel, dol, kModuleBase, image, moduleError)) {
                 throw ImportError(std::string("Could not link stage module ") + name + ": " + moduleError);
             }
             WriteFile(staging / "modules" / (std::string(name) + ".bin"), image.data(), image.size(), progress);
@@ -990,19 +991,38 @@ namespace {
 
 constexpr uint32_t kEti = 241, kAbs = 65521;
 constexpr uint32_t R_NONE = 0, R_ADDR32 = 1, R_ADDR16_LO = 4, R_ADDR16_HI = 5, R_ADDR16_HA = 6, R_REL24 = 10, R_REL14 = 11, R_UADDR32 = 24;
-constexpr uint32_t kEtiBase = 0x800174A0u;
 constexpr uint32_t kPoison = 0xDEAD0000u;
 
-// DOL section names by SEL section id; null = unused ids.
+// DOL section names by SEL section id; null = unused ids. The numeric DOL
+// section-table indices backing these logical names are fixed for this game's
+// CodeWarrior layout, but their addresses differ between R2VE01 and R2VJ01.
 constexpr const char* kDolSectionNames[14] = {nullptr, ".init", ".text", ".ctors", ".dtors", ".rodata", ".data",
                                               ".bss", ".sdata", ".sdata2", nullptr, ".sbss", ".sbss2", nullptr};
-struct DolBase {
-    const char* name;
-    uint32_t base;
+
+struct DolLayout {
+    std::map<std::string, uint32_t> bases;
+    uint32_t etiBase = 0;
 };
-constexpr DolBase kDolBases[] = {{".init", 0x80004000}, {".text", 0x8001F240}, {".ctors", 0x802D5100}, {".dtors", 0x802D5240},
-                                 {".rodata", 0x802D5280}, {".data", 0x802F5260}, {".bss", 0x80334680}, {".sdata", 0x804AF700},
-                                 {".sdata2", 0x804B2920}, {".sbss", 0x804B1960}, {".sbss2", 0x804B67E0}};
+
+DolLayout ParseDolLayout(const std::vector<uint8_t>& dol) {
+    if (dol.size() < 0x100) throw std::runtime_error("main.dol is too small");
+    DolLayout layout;
+    const auto sectionAddr = [&](int index) { return Be32(&dol[0x48 + 4 * index]); };
+    const auto sectionSize = [&](int index) { return Be32(&dol[0x90 + 4 * index]); };
+    layout.bases[".init"] = sectionAddr(0);
+    layout.bases[".text"] = sectionAddr(1);
+    layout.bases[".ctors"] = sectionAddr(9);
+    layout.bases[".dtors"] = sectionAddr(10);
+    layout.bases[".rodata"] = sectionAddr(11);
+    layout.bases[".data"] = sectionAddr(12);
+    layout.bases[".bss"] = Be32(&dol[0xD8]);
+    layout.bases[".sdata"] = sectionAddr(13);
+    layout.bases[".sdata2"] = sectionAddr(14);
+    layout.bases[".sbss"] = sectionAddr(13) + sectionSize(13);
+    layout.bases[".sbss2"] = sectionAddr(14) + sectionSize(14);
+    layout.etiBase = sectionAddr(8);
+    return layout;
+}
 
 struct RsoSection {
     uint32_t off = 0;
@@ -1073,8 +1093,9 @@ Rso ParseRso(const std::vector<uint8_t>& d) {
 
 }  // namespace
 
-bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<uint8_t>& selBytes, uint32_t base,
-                      std::vector<uint8_t>& img, std::string& error, int* unresolvedOut) {
+bool BuildModuleImageWithLayout(const std::vector<uint8_t>& rsoBytes, const std::vector<uint8_t>& selBytes,
+                                const DolLayout& layout, uint32_t base,
+                                std::vector<uint8_t>& img, std::string& error, int* unresolvedOut) {
     try {
         Rso m = ParseRso(rsoBytes);
         const Rso sel = ParseRso(selBytes);
@@ -1084,18 +1105,12 @@ bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<ui
             if (e.section == kAbs) {
                 a = e.offset;
             } else if (e.section == kEti) {
-                a = kEtiBase + e.offset;
+                a = layout.etiBase + e.offset;
             } else {
                 if (e.section >= 14 || !kDolSectionNames[e.section]) continue;
-                const char* sn = kDolSectionNames[e.section];
-                bool found = false;
-                for (const DolBase& b : kDolBases) {
-                    if (std::strcmp(b.name, sn) == 0) {
-                        a = b.base + e.offset;
-                        found = true;
-                    }
-                }
-                if (!found) continue;
+                const auto baseIt = layout.bases.find(kDolSectionNames[e.section]);
+                if (baseIt == layout.bases.end()) continue;
+                a = baseIt->second + e.offset;
             }
             selSyms[e.name] = a;
         }
@@ -1214,6 +1229,29 @@ bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<ui
     }
 }
 
+bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<uint8_t>& selBytes,
+                      const std::vector<uint8_t>& mainDol, uint32_t base,
+                      std::vector<uint8_t>& img, std::string& error, int* unresolvedOut) {
+    try {
+        return BuildModuleImageWithLayout(rsoBytes, selBytes, ParseDolLayout(mainDol), base, img, error, unresolvedOut);
+    } catch (const std::exception& e) {
+        error = e.what();
+        return false;
+    }
+}
+
+bool BuildModuleImage(const std::vector<uint8_t>& rsoBytes, const std::vector<uint8_t>& selBytes, uint32_t base,
+                      std::vector<uint8_t>& img, std::string& error, int* unresolvedOut) {
+    // Compatibility path for existing callers/tests, which historically meant R2VE01.
+    DolLayout usaLayout;
+    usaLayout.bases = {{".init", 0x80004000u}, {".text", 0x8001F240u}, {".ctors", 0x802D5100u},
+                       {".dtors", 0x802D5240u}, {".rodata", 0x802D5280u}, {".data", 0x802F5260u},
+                       {".bss", 0x80334680u}, {".sdata", 0x804AF700u}, {".sdata2", 0x804B2920u},
+                       {".sbss", 0x804B1960u}, {".sbss2", 0x804B67E0u}};
+    usaLayout.etiBase = 0x800174A0u;
+    return BuildModuleImageWithLayout(rsoBytes, selBytes, usaLayout, base, img, error, unresolvedOut);
+}
+
 }  // namespace DiscImport
 
 #else  // !_WIN32: the importer relies on Windows CNG; other platforms keep the manual dvd_root workflow.
@@ -1228,6 +1266,11 @@ Result ImportDisc(const std::filesystem::path&, const std::filesystem::path&, Pr
 }
 bool IsGameDirectoryComplete(const std::filesystem::path&) { return false; }
 bool BuildModuleImage(const std::vector<uint8_t>&, const std::vector<uint8_t>&, uint32_t, std::vector<uint8_t>&, std::string& error, int*) {
+    error = "unsupported platform";
+    return false;
+}
+bool BuildModuleImage(const std::vector<uint8_t>&, const std::vector<uint8_t>&, const std::vector<uint8_t>&, uint32_t,
+                      std::vector<uint8_t>&, std::string& error, int*) {
     error = "unsupported platform";
     return false;
 }

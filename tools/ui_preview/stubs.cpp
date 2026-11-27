@@ -6,16 +6,26 @@
 #include "input_bindings.h"
 #include "steam_input_layout.h"
 #include "wiimote_host.h"
+#include "wiimote/trailer_bot.h"
 
 #include <aurora/aurora.h>
 #include <aurora/gfx.h>
+#include <dolphin/gx.h>
+#include <aurora/texture.hpp>
 #include <dolphin/pad.h>
 #include <dolphin/vi.h>
 
 #include <cstdint>
 #include <cstdio>
 
+#if defined(MKW_TRANSLATED_GUEST_REGION)
+extern "C" const uint8_t kMkwGuestRegion = MKW_TRANSLATED_GUEST_REGION;
+#else
+extern "C" const uint8_t kMkwGuestRegion = 0;
+#endif
+
 extern "C" void PAD_HLE_SetRumbleEnabled(bool) {}
+extern "C" bool SinAudio_SupportsVoiceLanguage() noexcept { return true; }
 extern "C" void SinAudio_SyncVoiceLanguage(uint8_t) noexcept {}
 namespace AxDspHle { void SetMixWorkerEnabled(bool) {} }
 void SetForceAspect(bool) {}
@@ -23,11 +33,18 @@ void SetForceAspect(bool) {}
 namespace AimInput {
 void Install() {}
 void HandleSdlEvent(const SDL_Event&) {}
+bool Focused() { return true; }
 InputMap::RawSample Sample() { return {}; }
+InputMap::RawSample Sample(unsigned) { return {}; }
 MouseSample MouseNow() { return {}; }
+void ConsumeMouseDelta(float& dx, float& dy) { dx = dy = 0.0f; }
+void ConsumeGyroDelta(float& dx, float& dy, unsigned) { dx = dy = 0.0f; }
+void CalibrateGyro() {}
+const char* GyroStatus() { return "No gyro input in the offline preview"; }
 DualAnalog::Rect PictureRect(const MouseSample&) { return {}; }
 InputMap::ActiveDevice LastDevice() { return InputMap::ActiveDevice::None; }
 InputMap::Scheme EffectiveScheme() { return InputMap::Scheme::Pointer; }
+SchemeNotice LatestSwitch() { return {}; }
 void UpdateWindowState(bool) {}
 void BeginCapture(InputMap::Profile) {}
 CaptureResult PollCapture(bool) { return {}; }
@@ -90,6 +107,10 @@ void aurora_get_present_timing(AuroraPresentTiming* t) {
     t->effectiveFramesPerSecond = 59.8;
     t->sampleCount = 10;
 }
+void aurora_get_present_intervals(float* milliseconds, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) milliseconds[i] = 16.7f;
+}
+bool aurora_reflex_active() { return false; }
 void aurora_set_vrr(AuroraVrrMode, uint32_t, bool) {}
 void aurora_get_vrr_status(AuroraVrrStatus* s) {
     *s = AuroraVrrStatus{};
@@ -98,12 +119,29 @@ void aurora_get_vrr_status(AuroraVrrStatus* s) {
     s->presentMode = "Fifo";
 }
 void aurora_set_frame_interpolation_fps(uint32_t) {}
+bool aurora_frame_generation_requested() { return false; }
+bool aurora_frame_generation_active() { return false; }
+void aurora_set_frame_generation(bool) {}
+void aurora_set_reflex(bool) {}
 void aurora_set_frame_rate(AuroraFrameRateMode, uint32_t, uint32_t) {}
 void aurora_get_frame_rate(AuroraFrameRateMode* mode, uint32_t* fixedFps, uint32_t* capFps) {
     if (mode) *mode = AURORA_FRAME_RATE_OFF;
     if (fixedFps) *fixedFps = 0;
     if (capFps) *capFps = 1000;
 }
+void aurora_set_ambient_occlusion(bool) {}
+void aurora_set_global_illumination(bool) {}
+void aurora_set_ray_traced_gi(bool) {}
+void aurora_set_retain_culled_gi(bool) {}
+void aurora_set_strong_bounce(bool) {}
+void aurora_set_projected_caustics(bool) {}
+void aurora_set_surface_highlights(bool) {}
+void aurora_set_probe_materials(bool) {}
+void aurora_set_combat_light(bool) {}
+void aurora_set_contact_shadow(bool) {}
+void aurora_set_stage_atmosphere(bool) {}
+void aurora_set_pixel_lighting(bool) {}
+void aurora_set_enhanced_bloom(bool) {}
 void aurora_set_upscaler(AuroraUpscaler, float, float) {}
 void aurora_get_upscale_info(AuroraUpscaleInfo* info) {
     *info = AuroraUpscaleInfo{};
@@ -125,6 +163,16 @@ uint32_t aurora_get_queued_pipeline_count() { return 0; }
 void aurora_set_disable_copy_filter(bool) {}
 void aurora_enable_vsync(bool) {}
 void VISetFrameBufferScale(float) {}
+
+namespace aurora::texture {
+void unregister_replacements(const ReplacementGroup&) {}
+ReplacementGroup load_replacement_directory(const std::filesystem::path&, ReplacementOptions) { return {}; }
+} // namespace aurora::texture
+
+namespace TrailerBot {
+unsigned FrameTag() { return 0; }
+bool TagEnabled() { return false; }
+} // namespace TrailerBot
 
 u32 PADCount() { return 0; }
 s32 PADGetIndexForPort(u32) { return -1; }

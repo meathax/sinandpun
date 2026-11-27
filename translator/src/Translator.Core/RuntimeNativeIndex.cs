@@ -60,17 +60,27 @@ public sealed record RuntimeNativeIndex(
     /// The index is keyed by the PAL addresses the runtime sources name; this is the same index
     /// keyed by <paramref name="region"/>'s addresses. Every address must have a counterpart in that region.
     /// </summary>
-    public RuntimeNativeIndex ForRegion(GuestAddressTable table, GuestRegion region) => new(
-        Registrations.Select(entry => entry with { Address = table.Map(entry.Address, region) }).ToArray(),
-        VoidStubAbis.Select(entry => entry with { Address = table.Map(entry.Address, region) }).ToArray(),
-        Effects.Select(entry => entry with
-        {
-            Address = table.Map(entry.Address, region),
-            Contract = entry.Contract with
+    public RuntimeNativeIndex ForRegion(GuestAddressTable table, GuestRegion region)
+    {
+        // A few R2VJ01 SDK routines were dead-stripped or folded by the older
+        // Japanese link even though their R2VE01 neighbours survive. Such
+        // neighbours can therefore map onto the same surviving function. Keep
+        // the first source-order registration (the surviving routine) rather
+        // than failing the whole regional shard emission.
+        static T[] Deduplicate<T>(IEnumerable<T> entries, Func<T, uint> address) =>
+            entries.GroupBy(address).Select(static group => group.First()).ToArray();
+        return new RuntimeNativeIndex(
+            Deduplicate(Registrations.Select(entry => entry with { Address = table.Map(entry.Address, region) }), static entry => entry.Address),
+            Deduplicate(VoidStubAbis.Select(entry => entry with { Address = table.Map(entry.Address, region) }), static entry => entry.Address),
+            Deduplicate(Effects.Select(entry => entry with
             {
-                DirectCallTargets = entry.Contract.DirectCallTargets.Select(target => table.Map(target, region)).ToArray()
-            }
-        }).ToArray());
+                Address = table.Map(entry.Address, region),
+                Contract = entry.Contract with
+                {
+                    DirectCallTargets = entry.Contract.DirectCallTargets.Select(target => table.Map(target, region)).ToArray()
+                }
+            }), static entry => entry.Address));
+    }
 }
 
 public static class RuntimeNativeIndexBuilder

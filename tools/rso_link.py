@@ -15,12 +15,37 @@ DOL_SECTION_NAMES = [None, '.init', '.text', '.ctors', '.dtors', '.rodata', '.da
 ETI, ABS = 241, 65521
 R_NONE, R_ADDR32, R_ADDR16_LO, R_ADDR16_HI, R_ADDR16_HA, R_REL24, R_REL14, R_UADDR32 = 0, 1, 4, 5, 6, 10, 11, 24
 
-# main.dol section bases (dtk dol info, R2VE01)
-DOL_BASES = {'.init': 0x80004000, '.text': 0x8001F240, '.ctors': 0x802D5100, '.dtors': 0x802D5240,
-             '.rodata': 0x802D5280, '.data': 0x802F5260, '.bss': 0x80334680, '.sdata': 0x804AF700,
-             '.sdata2': 0x804B2920, '.sbss': 0x804B1960, '.sbss2': 0x804B67E0}
-ETI_BASE = 0x800174A0
 POISON = 0xDEAD0000
+
+
+def parse_dol_layout(path):
+    """Return the SEL logical-section base addresses for a main.dol.
+
+    SEL indices use the linker section names rather than DOL section-table
+    indices.  The mapping is fixed for these CodeWarrior Wii DOLs; deriving it
+    here keeps the linker correct for both R2VE01 and the differently laid out
+    R2VJ01 image.
+    """
+    d = open(path, 'rb').read()
+    addrs = struct.unpack_from('>18I', d, 0x48)
+    sizes = struct.unpack_from('>18I', d, 0x90)
+    bss_addr, bss_size = struct.unpack_from('>2I', d, 0xD8)
+    bases = {
+        '.init': addrs[0],
+        '.text': addrs[1],
+        '.ctors': addrs[9],
+        '.dtors': addrs[10],
+        '.rodata': addrs[11],
+        '.data': addrs[12],
+        '.bss': bss_addr,
+        '.sdata': addrs[13],
+        '.sdata2': addrs[14],
+        # The zero-filled small-data sections begin immediately after their
+        # initialized counterparts in the link layout.
+        '.sbss': addrs[13] + sizes[13],
+        '.sbss2': addrs[14] + sizes[14],
+    }
+    return bases, addrs[8]
 
 
 def u32(d, o):
@@ -64,20 +89,21 @@ def parse(path):
 
 
 def main():
-    rso_p, _dol_p, sel_p, base_s, outp = sys.argv[1:6]
+    rso_p, dol_p, sel_p, base_s, outp = sys.argv[1:6]
     base = int(base_s, 16)
     m = parse(rso_p)
     sel = parse(sel_p)
+    dol_bases, eti_base = parse_dol_layout(dol_p)
     sel_syms = {}
     for name, si, off in sel['exports']:
         if si == ABS:
             a = off
         elif si == ETI:
-            a = ETI_BASE + off
+            a = eti_base + off
         else:
             sn = DOL_SECTION_NAMES[si]
             assert sn, (name, si)
-            a = DOL_BASES[sn] + off
+            a = dol_bases[sn] + off
         sel_syms[name] = a
     # layout: file-backed sections first, then bss; 32-byte aligned
     addr = base
@@ -181,6 +207,84 @@ def main():
     for tag, (si, off) in (('_prolog', m['prolog']), ('_epilog', m['epilog']), ('_unresolved', m['unres'])):
         if si:
             symmap[tag] = sec_addr[si] + off
+
+    # The linker map names exported symbols, but several indirect call targets are
+    # purely local to the module: static-constructor table entries, local vtable
+    # methods, and compiler-generated adjustor thunks. The translator consumes this
+    # map as a function-boundary oracle, so augment it with evidence-based entries
+    # using the same shapes as tools/gen_region_function_map.py. RSO section 3 is
+    # the text section in these modules (the executable flag bit is not reliable).
+    exec_indices = {m['prolog'][0]} if m['prolog'][0] in sec_addr else set()
+    exec_indices.update(i for i, sec in enumerate(m['secs']) if sec.get('exec') and i in sec_addr)
+    exec_ranges = [(sec_addr[i], m['secs'][i]['size']) for i in sorted(exec_indices)]
+
+    def img_word(address):
+        off = address - base
+        if 0 <= off and off + 4 <= len(img):
+            return u32(img, off)
+        raise KeyError(hex(address))
+
+    def in_text(address):
+        return any(lo <= address < lo + size for lo, size in exec_ranges)
+
+    def frame_prologue(word):
+        return (word & 0xFFFF0000) == 0x94210000 and (word & 0x8000) != 0
+
+    text_lo = min((lo for lo, _ in exec_ranges), default=base)
+
+    def looks_like_entry(address):
+        if not in_text(address):
+            return False
+        try:
+            if frame_prologue(img_word(address)):
+                return True
+            probe = address - 4
+            while probe >= text_lo and in_text(probe) and img_word(probe) == 0:
+                probe -= 4
+            terminator = img_word(probe)
+            return terminator in (0x4E800020, 0x4E800420)  # blr / bctr
+        except KeyError:
+            return False
+
+    inferred = set()
+    for lo, size in exec_ranges:
+        for address in range(lo, lo + size - 8, 4):
+            try:
+                word = img_word(address)
+                next_word = img_word(address + 4)
+            except KeyError:
+                continue
+            # Frame prologues are real entry points. They are needed even when no
+            # data word references them: several module factories keep method or
+            # constructor pointers in generated code rather than a simple vtable
+            # word. R2VJ01 stg00 0x97DF17CC is a verified example reached only
+            # indirectly from gameplay.
+            if frame_prologue(word):
+                inferred.add(address)
+            # addi r3,r3,-N ; b implementation: virtual-base adjusting thunk.
+            if ((word & 0xFFFF0000) == 0x38630000 and
+                    (next_word & 0xFC000003) == 0x48000000):
+                inferred.add(address)
+    for i, sec in enumerate(m['secs']):
+        if i in exec_indices or i not in sec_addr or not sec['size']:
+            continue
+        lo = sec_addr[i]
+        for address in range(lo, lo + sec['size'] - 4, 4):
+            try:
+                target = img_word(address)
+            except KeyError:
+                continue
+            if target % 4 == 0 and in_text(target) and looks_like_entry(target):
+                inferred.add(target)
+
+    mapped_addresses = set(symmap.values())
+    added_inferred = 0
+    for address in sorted(inferred):
+        if address not in mapped_addresses:
+            symmap[f'fn_{address:08X}'] = address
+            mapped_addresses.add(address)
+            added_inferred += 1
+
     open(outp + '.bin', 'wb').write(img)
     with open(outp + '.map', 'w', newline='\n') as f:
         for n, a in sorted(symmap.items(), key=lambda x: x[1]):
@@ -194,7 +298,8 @@ def main():
               open(outp + '.json', 'w'), indent=1)
     nm = m['name'].replace('\\', '/').split('/')[-1]
     print(f"{nm}: base {base:08X} end {end:08X} size {end - base:#x} exports {len(m['exports'])} "
-          f"relocs int={len(m['irel'])} ext={len(m['erel'])} unresolved={len(unresolved)} {sorted(unresolved)[:3]} missing_sec_relocs={len(missing)}")
+          f"relocs int={len(m['irel'])} ext={len(m['erel'])} unresolved={len(unresolved)} {sorted(unresolved)[:3]} missing_sec_relocs={len(missing)} "
+          f"inferred_functions={added_inferred}")
 
 
 main()

@@ -462,6 +462,8 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     entries.push_back({0x800000FCu, kCpuClockHz, "__OSClock"});
     entries.push_back({0x80003140u, kIos36Version, "IOS36 version"});
     entries.push_back({0x80003144u, kIos36Date, "IOS36 date"});
+    entries.push_back({MKW_GADDR(804B21D8), 1u, "__OSInIPL: disc boot", true});
+    entries.push_back({MKW_GADDR(804B21DC), 0u, "__OSInNandBoot", true});
 
     if (mem1Size != 0) {
         const uint32_t mem1End = Memory::kMem1CachedBase + mem1Size;

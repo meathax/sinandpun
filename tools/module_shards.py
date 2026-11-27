@@ -96,14 +96,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("modules", nargs="*")
     ap.add_argument("--shards", type=int, default=24)
+    ap.add_argument("--generated-root", default="build", help="directory containing generated-stgNN outputs")
+    ap.add_argument("--module-root", default="build/modules", help="directory containing linked stgNN.json files")
+    ap.add_argument("--out", default=None, help="output directory (default generated/module_shards)")
     a = ap.parse_args()
     modules = a.modules or [f"stg0{i}" for i in range(8)]
-    out_root = ROOT / "generated" / "module_shards"
+    out_root = Path(a.out) if a.out else ROOT / "generated" / "module_shards"
+    if not out_root.is_absolute(): out_root = ROOT / out_root
     out_root.mkdir(parents=True, exist_ok=True)
     all_sources = []
     for name in modules:
-        src_dir = ROOT / "build" / f"generated-{name}" / "functions"
-        meta = json.load(open(ROOT / "build" / f"generated-{name}" / "base_translation_output.json"))
+        generated_root = Path(a.generated_root)
+        if not generated_root.is_absolute(): generated_root = ROOT / generated_root
+        module_root = Path(a.module_root)
+        if not module_root.is_absolute(): module_root = ROOT / module_root
+        src_dir = generated_root / f"generated-{name}" / "functions"
+        meta = json.load(open(generated_root / f"generated-{name}" / "base_translation_output.json"))
         info = {}
         for fn in meta["functions"]:
             addr = fn["entryPoint"]
@@ -149,9 +157,9 @@ def main():
         reg.append("};\n")
         reg.append(f'extern "C" const ModuleCodeSet g_moduleCodeSet_{name} = {{"{name}", 0x{WINDOW_BASE:08X}u, '
                    f"0x{WINDOW_SIZE:08X}u, k_{name}_records, sizeof(k_{name}_records) / sizeof(k_{name}_records[0]), "
-                   f"0x{json.load(open(ROOT / 'build' / 'modules' / (name + '.json')))['prolog']:08X}u, "
-                   f"0x{json.load(open(ROOT / 'build' / 'modules' / (name + '.json')))['epilog']:08X}u, "
-                   f"0x{json.load(open(ROOT / 'build' / 'modules' / (name + '.json')))['unresolved_fn']:08X}u}};\n")
+                   f"0x{json.load(open(module_root / (name + '.json')))['prolog']:08X}u, "
+                   f"0x{json.load(open(module_root / (name + '.json')))['epilog']:08X}u, "
+                   f"0x{json.load(open(module_root / (name + '.json')))['unresolved_fn']:08X}u}};\n")
         p = mod_dir / "registration.cpp"
         p.write_text("".join(reg))
         all_sources.append(p)

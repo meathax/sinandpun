@@ -9,6 +9,7 @@
 #include <cstring>
 #include "memory.h"
 #include "guest_small_data.h"
+#include "guest_abi/guest_region.h"
 #include "runtime_config.h"
 #include "aurora_events.h"
 #include "runtime_log.h"
@@ -77,7 +78,7 @@ extern "C" uint32_t SCGetProductArea_HLE()
 {
     // R2VE01 SCGetProductArea (0x801B7060) walks the SDK area table at 0x8031F828 (5-byte rows:
     // code + "JPN"/"USA"/...; 0xFF terminates). The donor table address (0x8029CEB0) is Sin code.
-    return LookupProductRegion(0x8031F828u, 5, 16,
+    return LookupProductRegion(MKW_GADDR(8031F828), 5, 16,
                                RuntimeConsoleIdentity::Current().area);
 }
 
@@ -114,7 +115,7 @@ PPC_NATIVE_OVERRIDE(801B7130, SCGetProductSN_HLE, uint32_t, (uint32_t serialAddr
 extern "C" uint32_t SCGetProductGameRegion_HLE()
 {
     // R2VE01 game-region table at 0x8031F870 (4-byte rows: code + "JP"/"US"/"EU"/...).
-    return LookupProductRegion(0x8031F870u, 4, 8,
+    return LookupProductRegion(MKW_GADDR(8031F870), 4, 8,
                                RuntimeConsoleIdentity::Current().gameRegion);
 }
 

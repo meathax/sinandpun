@@ -90,6 +90,7 @@ function(mkw_add_runtime_library target type)
     mkw_configure_object_target(${target})
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_definitions(${target} PRIVATE
+        MKW_TRANSLATED_GUEST_REGION=${MKW_TRANSLATED_GUEST_REGION}
         SDL_MAIN_HANDLED
         _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
     mkw_runtime_link_dependencies(${target} PRIVATE)

@@ -10,6 +10,7 @@
 #include <csetjmp>
 
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 
 // Windows' SehLogger longjmps out of a vectored exception handler, where plain setjmp/longjmp is
 // the norm. A POSIX signal handler jumping back to here must use the sig-prefixed pair instead:
@@ -64,10 +65,12 @@ void WriteCrashArtifacts(std::string_view reason,
 // isa/ppc_isa_context.h - that is its standalone host seam, not a duplicate.)
 void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) noexcept;
 
-// Mario Kart Wii's translated entry point. The products always boot here, so
-// this is applied as the default while parsing the command line; there is no
+// The translated entry point differs between the supported R2V regional DOLs.
+// This is applied as the default while parsing the command line; there is no
 // flag to override it.
-inline constexpr uint32_t kDefaultEntryAddress = 0x80006310u;
+inline uint32_t DefaultEntryAddress() {
+    return GuestRegion::Current() == GuestRegion::Id::NtscJ ? 0x800062F0u : 0x80006310u;
+}
 
 class SystemBridge {
 public:

@@ -1,6 +1,7 @@
 #include "hle/scene_lighting.h"
 #include "guest_abi/cpu_context.h"
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 #include <aurora/gfx.h>
 #include <algorithm>
 #include <array>
@@ -29,10 +30,14 @@ bool validPoint(const ScenePoint& point) {
 } // namespace
 
 bool ObserveSceneAnchor(uint32_t address, CpuContext* ctx) {
-    if (address == 0x80258A60u) {
-        if (!(ctx->lr == 0x8009C2B4u || ctx->lr == 0x8009C3E8u ||
-              ctx->lr == 0x8009D7F0u || ctx->lr == 0x8009D924u ||
-              ctx->lr == 0x8009F018u || ctx->lr == 0x8009F14Cu) || !(aurora_scene_effect_mask() & 4)) return true;
+    // Hook addresses and caller return sites are canonical R2VE01 identities;
+    // MKW_GADDR resolves the matching R2VJ01 address in the Japanese build.
+    if (address == MKW_GADDR(80258A60)) {  // nw4r::g3d::ScnObj::SetMtx
+        // Return sites of the SetMtx calls in NWSM_Shadow::put and the two putShadow pairs.
+        const uint32_t lr = ctx->lr;
+        if (!(lr == MKW_GADDR(8009C2B4) || lr == MKW_GADDR(8009C3E8) ||
+              lr == MKW_GADDR(8009D7F0) || lr == MKW_GADDR(8009D924) ||
+              lr == MKW_GADDR(8009F018) || lr == MKW_GADDR(8009F14C)) || !(aurora_scene_effect_mask() & 4)) return true;
         const uint32_t m = ctx->gpr[5];
         if (!Memory::Contains(m, 48)) return true;
         ScenePoint pos{}, up{}, x{};
@@ -51,21 +56,17 @@ bool ObserveSceneAnchor(uint32_t address, CpuContext* ctx) {
         return true;
     }
     unsigned positionArg = 3, lifetime = 12;
-    switch (address) {
-    case 0x8006D35Cu: // PlShot::cbHitBg
+    if (address == MKW_GADDR(8006D35C)) {  // PlShot::cbHitBg (R2VJ01: PlShotCore::cbHitBg)
         lifetime = 5;
         positionArg = 4;
-        break;
-    case 0x8006DA00u: // PlChargeShot::cbHitBg
-    case 0x8006E4D4u: // PlCounterAttack2::cbHitBg
-    case 0x80123220u: // setMBomb
+    } else if (address == MKW_GADDR(8006DA00) ||  // PlChargeShot::cbHitBg
+               address == MKW_GADDR(8006E4D4) ||  // PlCounterAttack2::cbHitBg
+               address == MKW_GADDR(80123220)) {  // setMBomb
         positionArg = 4;
-        break;
-    case 0x8013C148u: // BombMSet
-    case 0x8013C358u: // BombMAlphaSet
-    case 0x8013C5FCu: // MechaBombMSet
-        break;
-    default:
+    } else if (address == MKW_GADDR(8013C148) ||  // BombMSet
+               address == MKW_GADDR(8013C358) ||  // BombMAlphaSet
+               address == MKW_GADDR(8013C5FC)) {  // MechaBombMSet
+    } else {
         return false;
     }
     const uint32_t p = ctx->gpr[positionArg];
@@ -81,7 +82,7 @@ uint32_t activeCamera() {
     auto pointerAt = [](uint32_t base, unsigned offset) -> uint32_t {
         return base && Memory::Contains(base, offset + 4) ? Memory::Read32(base + offset) : 0;
     };
-    return pointerAt(pointerAt(Memory::Read32(0x804B7700u-23904),88),448);
+    return pointerAt(pointerAt(Memory::Read32(MKW_GADDR(804B19A0)),88),448);
 }
 
 // The ray tracer asks for the camera while GX commands are recorded, which
@@ -103,7 +104,7 @@ void snapshotRtCamera() {
             valid &= std::isfinite(view[i]) && std::abs(view[i]) <= 1.e7f;
         }
     }
-    const uint32_t scene = Memory::Read8(0x804B1968u);
+    const uint32_t scene = Memory::Read8(MKW_GADDR(804B1968));
     std::lock_guard lock(rtCameraMutex);
     rtCameraView = view;
     rtCameraScene = scene;

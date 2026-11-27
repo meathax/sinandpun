@@ -144,6 +144,11 @@ PPC_NATIVE_OVERRIDE(801ADC90, OS____InitMemoryProtection_801a7dfc, uint32_t, (ui
 extern "C" uint32_t OS__GetConsoleType_8019f33c(uint32_t /*r4*/, uint32_t /*r5*/, uint32_t /*r6*/,
                                                 uint32_t /*r7*/, uint32_t /*r8*/, uint32_t /*r31*/)
 {
+    // This native runs inside OSInit after the guest crt has cleared .sbss and
+    // before the firmware-version gate, so it is a reliable post-zeroing point
+    // for the disc-boot flags in every supported region.
+    Memory::Write32(MKW_GADDR(804B21D8), 0x00000001u);  // __OSInIPL: disc boot
+    Memory::Write32(MKW_GADDR(804B21DC), 0x00000000u);  // __OSInNandBoot
     static std::atomic<bool> logged{false};
     if (!logged.exchange(true)) {
         RT_LOG(RT_TAG_OS) << "OSGetConsoleType: returning retail 0x1" << std::endl;
@@ -165,8 +170,8 @@ extern "C" uint32_t OSGetResetCode_801a8a50()
     // reliable place to plant them. Without this, OSInit takes the NAND-boot
     // diagnostics path and OSFatals ("Failed to register network shutdown
     // function") at OSInit source lines 1153/1171.
-    Memory::Write32(0x804B21D8u, 0x00000001u);  // __OSInIPL: disc boot
-    Memory::Write32(0x804B21DCu, 0x00000000u);  // __OSInNandBoot
+    Memory::Write32(MKW_GADDR(804B21D8), 0x00000001u);  // __OSInIPL: disc boot
+    Memory::Write32(MKW_GADDR(804B21DC), 0x00000000u);  // __OSInNandBoot
 
     // Log occasionally just to track boot flow
     static bool logged = false;

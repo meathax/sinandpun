@@ -7,6 +7,7 @@
 #include "button_prompts.h"
 #include "virtual_remote.h"
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 #include "perf_pacing.h"
 #include "abi_bridge.h"
 #include "guest_interrupt_context.h"
@@ -276,11 +277,11 @@ static std::atomic<bool> s_presentSequenceActive{false};
 
 void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool serviceAurora) {
     // R2VE01 loaded-stage byte, also used by the aim telemetry and stage runner.
-    const auto stage = Memory::Read8(0x804B1968u);
+    const auto stage = Memory::Read8(MKW_GADDR(804B1968));
     // R2VE01 pauseGameNWEF pauses gameplay layer 4. LayerNWEF::pause
     // increments its byte at +0x34. Resolve the layer as in 0x80029F40.
     uint32_t gm = 0, layers = 0, table = 0, layer = 0;
-    const bool haveGameplayLayer = stage < 8 && Memory::TryRead32(0x804B19A0u, gm) && gm &&
+    const bool haveGameplayLayer = stage < 8 && Memory::TryRead32(MKW_GADDR(804B19A0), gm) && gm &&
         Memory::TryRead32(gm + 0x58, layers) && layers &&
         Memory::TryRead32(layers + 0x1D0, table) && table &&
         Memory::TryRead32(table + 4 * sizeof(uint32_t), layer) && layer &&
@@ -400,7 +401,8 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
             if (n < 4 || n % 300 == 0) {
                 RT_LOG(RT_TAG_VI) << "[present] retrace=" << retraceValue << " hasXfb=" << hasXfbReady
                                   << " black=" << isBlack << " readyXfb=0x" << std::hex << readyXfb
-                                  << " currentFb=0x" << currentFb << std::dec << " frameActive=" << frameActive
+                                  << " currentFb=0x" << currentFb << " preCb=0x" << preCb << " postCb=0x" << postCb
+                                  << std::dec << " frameActive=" << frameActive
                                   << " submit=" << shouldSubmit << std::endl;
             }
         }

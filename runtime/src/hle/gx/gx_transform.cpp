@@ -52,7 +52,7 @@ extern "C" void GX__SetViewport_801733b4(float l, float t, float w, float h, flo
     // Sin's GXSetViewport (0x801DB3B0) only stores into the GX struct and sets a dirty bit that the HLE draw path never flushes.
     // Mirror the guest function's stores so guest readers see the current viewport.
     try {
-        const uint32_t gd = Memory::Read32(0x804B5B50u);
+        const uint32_t gd = Memory::Read32(MKW_GADDR(804B5B50));
         if (gd) {
             const float v[6] = {l, t, w, h, nz, fz};
             for (int i = 0; i < 6; ++i) Memory::WriteFloat32(gd + 1348u + 4u * i, v[i]);

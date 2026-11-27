@@ -25,6 +25,7 @@
 //         cam=(x,y) cls=(x,y) q.r=(a,b) q.l=(a,b) nunq=(a,b) btn=<hex> cl4=<hex> cl5=<hex> n=<reports>
 
 #include "memory.h"
+#include "guest_abi/guest_region.h"
 #include "runtime_log.h"
 #include "virtual_remote.h"
 
@@ -38,15 +39,15 @@
 
 namespace {
 
-constexpr uint32_t kGmPtrAddr = 0x804B19A0u;
-constexpr uint32_t kLoadedStageAddr = 0x804B1968u;
+const uint32_t kGmPtrAddr = MKW_GADDR(804B19A0);
+const uint32_t kLoadedStageAddr = MKW_GADDR(804B1968);
 constexpr uint32_t kStatusBase = 0x490u;   // input + this = KPADStatus copy, channel 0
 constexpr uint32_t kPointerBase = 0x48u;   // input + this = pointer x,y floats, channel 0
 // GunSight (the reticle object; Ng names from projects/r2ve01/MAP.txt): GunSight1P vtable 0x802F9270 (ctor 0x8006934C).
 // GunSight::draw (0x80068CF4) translates by (405 * x, 228 * y) around the screen centre of a 810 x 456 layer using
 // x = *(sight + 0x44), y = *(sight + 0x48): normalised -1..1, 0 = centre. setPos2D (0x80066138) stores +0x3C/+0x40 and
 // copies them to +0x44/+0x48. Byte +0x73 = visible/active, +0x76 = mode.
-constexpr uint32_t kSightVptr1P = 0x802F9270u;
+const uint32_t kSightVptr1P = MKW_GADDR(802F9270);  // R2VJ01: 0x802DFF10
 constexpr uint32_t kScanLo = 0x80400000u;
 constexpr uint32_t kScanHi = 0x81800000u;
 

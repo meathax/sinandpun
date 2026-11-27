@@ -16,6 +16,7 @@
 #include "module_file.h"
 #include "abi_bridge.h"
 #include "guest_abi/module_codeset.h"
+#include "guest_abi/guest_region.h"
 #include "hle_stubs.h"
 #include "memory.h"
 #include "perf_pacing.h"
@@ -66,7 +67,9 @@ std::filesystem::path FindImage(int index) {
     char file[32];
     std::snprintf(file, sizeof file, "stg%02d.bin", index);
     // Images generated from the user's disc at import time (disc_import.cpp) come first.
-    std::vector<std::filesystem::path> roots = {RuntimeConfigFile::ApplicationDataDirectory() / "Game" / "modules", "modules",
+    const bool japan = std::string_view(GuestRegion::CurrentFacts().gameId) == "R2VJ01";
+    const auto managedGame = RuntimeConfigFile::ApplicationDataDirectory() / (japan ? "Game-R2VJ01" : "Game");
+    std::vector<std::filesystem::path> roots = {managedGame / "modules", "modules",
                                                 "../modules", "../../build/modules", "build/modules"};
     if (const char* env = std::getenv("SIN_MODULE_DIR")) {
         roots.insert(roots.begin(), env);

@@ -13,6 +13,7 @@
 #include "aim_settings.h"
 #include "controls_menu.h"
 #include "game_ui.h"
+#include "guest_abi/guest_region.h"
 #include "input_bindings.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
@@ -54,6 +55,7 @@
 #include <dolphin/pad.h>
 
 extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled);
+extern "C" bool SinAudio_SupportsVoiceLanguage() noexcept;
 extern "C" void SinAudio_SyncVoiceLanguage(uint8_t language) noexcept;
 #include <dolphin/vi.h>
 #include <aurora/aurora.h>
@@ -316,14 +318,28 @@ bool g_combatLight = RuntimeConfigFile::CombatLight();
 bool g_contactShadow = RuntimeConfigFile::ContactShadow();
 bool g_stageAtmosphere = RuntimeConfigFile::StageAtmosphere();
 bool g_pixelLighting = RuntimeConfigFile::PixelLighting();
-std::atomic<bool> g_sceneGlow{RuntimeConfigFile::SceneGlow()};
+bool IsJapaneseGame() {
+    return std::string_view(GuestRegion::CurrentFacts().gameId) == "R2VJ01";
+}
+bool HdHudSupportedForGame() {
+    // The bundled HD HUD is retypeset English art for R2VE01. The Japanese
+    // release must keep its own HUD/GUI/text textures even when the same user
+    // configuration enables the USA pack.
+    return !IsJapaneseGame();
+}
+bool SceneGlowControlSupportedForGame() {
+    // The scene-glow draw-mask hook is part of the USA-only generated-code
+    // patchset. Japan always runs the retail glow/blur draws.
+    return std::string_view(GuestRegion::CurrentFacts().gameId) == "R2VE01";
+}
+std::atomic<bool> g_sceneGlow{RuntimeConfigFile::SceneGlow() || !SceneGlowControlSupportedForGame()};
 bool g_enhancedBloom = RuntimeConfigFile::EnhancedBloom();
-bool g_hdHud = RuntimeConfigFile::HdHud();
+bool g_hdHud = RuntimeConfigFile::HdHud() && HdHudSupportedForGame();
 bool g_hdWorld = RuntimeConfigFile::HdWorld();
 // Built-in HD HUD pack (hd_hud/ next to the exe), registered below user texture packs.
 aurora::texture::ReplacementGroup g_hdHudGroup;
 void ApplyHdHud(bool enabled) {
-    if (enabled && g_hdHudGroup.registrations.empty()) {
+    if (enabled && HdHudSupportedForGame() && g_hdHudGroup.registrations.empty()) {
         if (const auto dir = RuntimeConfigFile::ExecutableDirectory()) {
             const auto root = *dir / "hd_hud";
             std::error_code ec;
@@ -633,9 +649,9 @@ void ApplyGraphicsLive(GraphicsState next) {
     g_contactShadow = next.contactShadow;
     g_stageAtmosphere = next.stageAtmosphere;
     g_pixelLighting = next.pixelLighting;
-    g_sceneGlow.store(next.sceneGlow, std::memory_order_relaxed);
+    g_sceneGlow.store(next.sceneGlow || !SceneGlowControlSupportedForGame(), std::memory_order_relaxed);
     g_enhancedBloom = next.enhancedBloom;
-    g_hdHud = next.hdHud;
+    g_hdHud = next.hdHud && HdHudSupportedForGame();
     g_hdWorld = next.hdWorld;
     g_upscaler = next.upscaler;
     g_fsrQuality = next.fsrQuality;
@@ -715,13 +731,17 @@ void PersistGraphics(const GraphicsState& state) {
     RuntimeConfigFile::WriteSetting("video", "stage_atmosphere", state.stageAtmosphere ? "true" : "false");
     userConfig.pixelLighting = state.pixelLighting;
     RuntimeConfigFile::WriteSetting("video", "per_pixel_lighting", state.pixelLighting ? "true" : "false");
-    userConfig.sceneGlow = state.sceneGlow;
-    RuntimeConfigFile::WriteSetting("video", "scene_glow", state.sceneGlow ? "true" : "false");
+    if (SceneGlowControlSupportedForGame()) {
+        userConfig.sceneGlow = state.sceneGlow;
+        RuntimeConfigFile::WriteSetting("video", "scene_glow", state.sceneGlow ? "true" : "false");
+    }
     userConfig.enhancedBloom = state.enhancedBloom;
     RuntimeConfigFile::WriteSetting("video", "enhancements_enabled", state.enhancementsEnabled ? "true" : "false");
     RuntimeConfigFile::WriteSetting("video", "enhanced_bloom", state.enhancedBloom ? "true" : "false");
-    userConfig.hdHud = state.hdHud;
-    RuntimeConfigFile::WriteSetting("video", "hd_hud", state.hdHud ? "true" : "false");
+    if (HdHudSupportedForGame()) {
+        userConfig.hdHud = state.hdHud;
+        RuntimeConfigFile::WriteSetting("video", "hd_hud", state.hdHud ? "true" : "false");
+    }
     userConfig.hdWorld = state.hdWorld;
     RuntimeConfigFile::WriteSetting("video", "hd_world", state.hdWorld ? "true" : "false");
     userConfig.generateMips = state.generateMips;
@@ -1055,11 +1075,15 @@ void ResetGraphicsPage() {
     RuntimeConfigFile::WriteSetting("video", "gx_worker", "true");
     // Rows shown on the Graphics page: scene glow, frame generation and Reflex.
     g_sceneGlow.store(true, std::memory_order_relaxed);
-    RuntimeConfigFile::Mutable().sceneGlow = true;
-    RuntimeConfigFile::WriteSetting("video", "scene_glow", "true");
-    g_hdHud = true;
-    RuntimeConfigFile::Mutable().hdHud = true;
-    RuntimeConfigFile::WriteSetting("video", "hd_hud", "true");
+    if (SceneGlowControlSupportedForGame()) {
+        RuntimeConfigFile::Mutable().sceneGlow = true;
+        RuntimeConfigFile::WriteSetting("video", "scene_glow", "true");
+    }
+    g_hdHud = HdHudSupportedForGame();
+    if (HdHudSupportedForGame()) {
+        RuntimeConfigFile::Mutable().hdHud = true;
+        RuntimeConfigFile::WriteSetting("video", "hd_hud", "true");
+    }
     g_hdWorld = true;
     RuntimeConfigFile::Mutable().hdWorld = true;
     RuntimeConfigFile::WriteSetting("video", "hd_world", "true");
@@ -1134,21 +1158,25 @@ void ResetAudioPage() {
     g_audioVolumePercent = 100;
     g_audioMuted = false;
     g_audioMixWorker = true;
-    g_voiceLanguage = 1;
     g_muteHotkey = SDL_SCANCODE_BACKSLASH;
     AudioBackend::Instance().SetMasterVolume(1.0f);
     AudioBackend::Instance().SetMuted(false);
     AxDspHle::SetMixWorkerEnabled(true);
-    SinAudio_SyncVoiceLanguage(1);
     RuntimeConfigFile::SetAudioVolume(1.0f);
     RuntimeConfigFile::SetAudioMuted(false);
     RuntimeConfigFile::SetAudioMixWorker(true);
-    RuntimeConfigFile::SetVoiceLanguage(1);
+    if (SinAudio_SupportsVoiceLanguage()) {
+        g_voiceLanguage = 1;
+        SinAudio_SyncVoiceLanguage(1);
+        RuntimeConfigFile::SetVoiceLanguage(1);
+    }
     RuntimeConfigFile::SetMuteHotkey(g_muteHotkey);
 }
 
 void ResetCoopPage() {
-    RuntimeConfigFile::SetEnhancedCoop(false);
+    if (RuntimeConfigFile::EnhancedCoopSupportedForGame()) {
+        RuntimeConfigFile::SetEnhancedCoop(false);
+    }
     RuntimeConfigFile::SetSecondRemote(0);
 }
 
@@ -1572,7 +1600,7 @@ void BuildEnhancementsPage(ListView& v) {
              g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
     v.Toggle("Enhanced bloom", &g_graphicsDraft.enhancedBloom, false,
              "Adds a soft halo to bright scene details when Scene glow and blur is enabled in Graphics.",
-             g_graphicsDraft.sceneGlow && g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
+             (g_graphicsDraft.sceneGlow || !SceneGlowControlSupportedForGame()) && g_graphicsDraft.enhancementsEnabled ? 0u : game_ui::kRowDisabled);
     v.Toggle("Custom textures", &g_graphicsDraft.textureReplacements, false,
              "Loads replacement textures from texture_replacements/ next to Config.toml.", game_ui::kRowNextLaunch);
     v.Toggle("Generate missing texture mipmaps", &g_graphicsDraft.generateMips, false,
@@ -1608,10 +1636,20 @@ void BuildGraphicsPage(ListView& v) {
         g_graphicsDraft.upscaler == kUpscalerTemporal || g_graphicsDraft.upscaler == kUpscalerDlss);
 
     v.Note("A green star marks the recommended value of a row.");
-    v.Toggle("Scene glow and blur", &g_graphicsDraft.sceneGlow, true,
-             "Draws the original glare, blur trails and full-screen blur. Turning this off also suppresses enhanced bloom.");
+    if (SceneGlowControlSupportedForGame()) {
+        v.Toggle("Scene glow and blur", &g_graphicsDraft.sceneGlow, true,
+                 "Draws the original glare, blur trails and full-screen blur. Turning this off also suppresses enhanced bloom.");
+    } else {
+        bool sceneGlowAlwaysOn = true;
+        v.Toggle("Scene glow and blur", &sceneGlowAlwaysOn, true,
+                 "Always on in the Japanese version: its region-specific draw-control hook is not available, so the original glare, blur trails and full-screen blur cannot be disabled.",
+                 game_ui::kRowDisabled);
+    }
     v.Toggle("HD HUD and text", &g_graphicsDraft.hdHud, true,
-             "Rebuilt high-resolution HUD, reticles, text, subtitles and menus that stay sharp at 4K. Off shows the original low-resolution art. Your own texture pack takes priority.");
+             HdHudSupportedForGame()
+                 ? "Rebuilt high-resolution HUD, reticles, text, subtitles and menus that stay sharp at 4K. Off shows the original low-resolution art. Your own texture pack takes priority."
+                 : "Unavailable in the Japanese version because the bundled HD HUD uses retypeset English text. The original Japanese HUD, text and menus are always used.",
+             HdHudSupportedForGame() ? 0u : game_ui::kRowDisabled);
     v.Toggle("HD world and character textures", &g_graphicsDraft.hdWorld, true,
              "Remastered 4x environment, object and character textures that stay sharp at 4K. Needs about 350 MB of extra video memory. Off shows the original art. Your own texture pack takes priority.");
     v.Section("Quality");
@@ -1717,12 +1755,14 @@ void BuildAudioPage(ListView& v) {
         g_muteDeadline = Clock::now() + std::chrono::seconds(8);
         g_muteModal = game_ui::ModalState{};
     }
-    v.Section("Voice");
-    const char* voiceLanguages[] = {"Japanese", "English"};
-    if (v.Choice("Language", &g_voiceLanguage, voiceLanguages, 2, 1,
-                 "Select a language for in-game voice. Stage voices switch the next time a stage loads.") & kChanged) {
-        SinAudio_SyncVoiceLanguage(static_cast<uint8_t>(g_voiceLanguage));
-        RuntimeConfigFile::SetVoiceLanguage(g_voiceLanguage);
+    if (SinAudio_SupportsVoiceLanguage()) {
+        v.Section("Voice");
+        const char* voiceLanguages[] = {"Japanese", "English"};
+        if (v.Choice("Language", &g_voiceLanguage, voiceLanguages, 2, 1,
+                     "Select a language for in-game voice. Stage voices switch the next time a stage loads.") & kChanged) {
+            SinAudio_SyncVoiceLanguage(static_cast<uint8_t>(g_voiceLanguage));
+            RuntimeConfigFile::SetVoiceLanguage(g_voiceLanguage);
+        }
     }
     v.Section("Advanced");
     if (v.Toggle("Mix audio on a worker thread", &g_audioMixWorker, true,
@@ -1735,11 +1775,14 @@ void BuildAudioPage(ListView& v) {
 }
 
 void BuildCoopPage(ListView& v) {
-    int mode = RuntimeConfigFile::Get().enhancedCoop.value_or(false) ? 1 : 0;
+    const bool enhancedSupported = RuntimeConfigFile::EnhancedCoopSupportedForGame();
+    int mode = enhancedSupported && RuntimeConfigFile::Get().enhancedCoop.value_or(false) ? 1 : 0;
     const char* modes[] = {"Original", "Enhanced"};
     if (v.Choice("Co-op mode", &mode, modes, 2, 0,
-                 "Original gives Player 2 assist fire. Enhanced gives Player 2 the other character with full controls and a shared health bar.",
-                 game_ui::kRowNextLaunch) & kChanged) {
+                 enhancedSupported
+                     ? "Original gives Player 2 assist fire. Enhanced gives Player 2 the other character with full controls and a shared health bar."
+                     : "Enhanced co-op is unavailable in the Japanese version because its gameplay patchset is USA-specific. Original Player 2 assist fire remains available.",
+                 game_ui::kRowNextLaunch | (enhancedSupported ? 0u : game_ui::kRowDisabled)) & kChanged) {
         RuntimeConfigFile::SetEnhancedCoop(mode == 1);
     }
     int secondRemote = RuntimeConfigFile::SecondRemoteSetting();

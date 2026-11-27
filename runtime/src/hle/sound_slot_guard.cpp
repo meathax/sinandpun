@@ -9,9 +9,13 @@
 // where the jingle load (fn_8003B7F4(1901, 5, 2, 0xBB80), fn_800F6830 / fn_800F823C) was not requested, slot 5 is still
 // unloaded. When that is the case this hook requests the load the scene expects before the readiness check runs.
 //
-// Called from the translator-inserted GuestEntryHook for 0x8003B950 (projects/r2ve01/recomp.yml translation.entry_hooks).
+// Called from the translator-inserted GuestEntryHook for 0x8003B950 (projects/r2ve01/recomp.yml translation.entry_hooks;
+// R2VJ01 0x80039538 in projects/r2vj01/recomp.yml). The slot table layout, unload state 5 and the readiness check are
+// identical in R2VJ01, but its loader takes the stream file name instead of a music id: setPreGameOver (0x800EABE0)
+// calls fn_80039448("gover.adx" @ 0x802CC3A0, 5, 2, 0xBB80).
 
 #include "guest_abi/dispatch.h"
+#include "guest_abi/guest_region.h"
 #include "hle/sound_slot_guard.h"
 #include "memory.h"
 #include "runtime_log.h"
@@ -21,10 +25,10 @@
 namespace {
 
 constexpr uint32_t kGameOverSlot = 5;
-constexpr uint32_t kGameOverMusicId = 1901;
+constexpr uint32_t kGameOverMusicId = 1901;            // R2VE01 music id (stream gover.brstm)
+constexpr uint32_t kGameOverStreamNameJapan = 0x802CC3A0u;  // R2VJ01 "gover.adx" in .rodata
 constexpr uint32_t kGameOverFlags = 2;
 constexpr uint32_t kGameOverRate = 0xBB80;
-constexpr uint32_t kLoadMusic = 0x8003B7F4u;  // fn_8003B7F4(musicId, slot, flags, rate) -> slot
 constexpr uint32_t kEntryStride = 68;
 constexpr uint32_t kEntryStateOffset = 40;
 constexpr uint32_t kEntryHandleOffset = 44;
@@ -43,7 +47,8 @@ void SinSoundSlotGuard(CpuContext* ctx) {
     if (!GuardRd32(slotPtr, slot) || slot != kGameOverSlot) {
         return;
     }
-    if (!GuardRd32(ctx->gpr[13] - 23904u, smallData) || !GuardRd32(smallData + 92u, soundMgr) ||
+    // GM pointer: r13-23904 in R2VE01, r13-23936 in R2VJ01; use the region-mapped global directly.
+    if (!GuardRd32(MKW_GADDR(804B19A0), smallData) || !GuardRd32(smallData + 92u, soundMgr) ||
         !GuardRd32(soundMgr + 1004u, entries)) {
         return;
     }
@@ -61,13 +66,14 @@ void SinSoundSlotGuard(CpuContext* ctx) {
     // the complete context after the nested guest call, not only the argument registers: the loader legitimately
     // clobbers volatile GPRs, condition state, FP state, and LR.
     const CpuContext saved = *ctx;
-    ctx->gpr[3] = kGameOverMusicId;
+    const bool japan = ::GuestRegion::Current() == ::GuestRegion::Id::NtscJ;
+    ctx->gpr[3] = japan ? kGameOverStreamNameJapan : kGameOverMusicId;
     ctx->gpr[4] = kGameOverSlot;
     ctx->gpr[5] = kGameOverFlags;
     ctx->gpr[6] = kGameOverRate;
 
     uint32_t loadedSlot = 0xFFFFFFFFu;
-    InvokeIndirectCpu(kLoadMusic, ctx);
+    InvokeIndirectCpu(MKW_GADDR(8003B7F4), ctx);  // load music into slot (R2VJ01 0x80039448)
     loadedSlot = ctx->gpr[3];
     *ctx = saved;
 

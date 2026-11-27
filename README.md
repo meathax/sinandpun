@@ -11,7 +11,7 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 </p>
 
 > [!IMPORTANT]
-> Bring your own North American Wii copy of **Sin & Punishment: Star Successor** (`R2VE01`). The project does not supply the game disc, extracted game files, or disc keys.
+> Bring your own Wii copy of **Sin & Punishment: Star Successor** (North America, `R2VE01`) or **Tsumi to Batsu: Sora no Koukeisha** (Japan, `R2VJ01`). The project does not supply the game disc, extracted game files, or disc keys.
 
 ## Features
 
@@ -71,12 +71,16 @@ The pack is on by default. Turn it off in **Options → Graphics → HD world an
 Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required for the Windows build. See the separate [Linux](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/LINUX.md) and [macOS](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/MACOS.md) notes for build and validation status.
 
 1. See [GitHub Releases](https://github.com/meathax/sinandpun/releases) for published builds, or [build it from source](#building-from-source).
-2. Extract the entire Windows ZIP and run `sinandpun.exe`.
-3. Setup finds the game automatically when it sits next to the executable or in a `rom`/`roms` folder. Otherwise choose **Select disc image** for an R2VE01 ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ or CUE/BIN. Setup asks for a key only when the game partition needs one and none nearby unlocks it. For an extracted game, choose **Select extracted folder** and select the parent folder containing both `sys/` and `files/`. Keep that folder in place after setup. It needs no key.
+2. Extract the entire Windows ZIP. Run `sinandpun.exe` for the North American version or `sinandpun-jp.exe` for the Japanese version.
+3. Setup finds the game automatically when it sits next to the executable or in a `rom`/`roms` folder. Otherwise choose **Select disc image** for an R2VE01 or R2VJ01 ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ or CUE/BIN. Setup asks for a key only when the game partition needs one and none nearby unlocks it. For an extracted game, choose **Select extracted folder** and select the parent folder containing both `sys/` and `files/`. Keep that folder in place after setup. It needs no key.
 
 Keys are found by content and verified against the disc: a 16-byte key, BootMii `keys.bin`, `otp.bin`, any text containing the key, small dumps, 7z/zip/rar archives of those, or an RVZ of the same disc. Labels and file names do not matter. When nothing matches, setup explains what each file was and why it did not help. WAD channel packages do not supply this game's disc contents.
 
 The importer prepares the stage modules on first setup and leaves the key out of the game data folder. See [Wii setup](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/WII-SETUP.md) for supported inputs and command-line examples.
+
+### Japanese version (R2VJ01)
+
+Version 1.0.11 adds the Japanese release. `sinandpun-jp.exe` runs it with its own game folder (`Game-R2VJ01`), console settings and saves, so both versions can be installed side by side. Choosing a Japanese disc in `sinandpun.exe`, or passing one with `--game`, hands it to `sinandpun-jp.exe` automatically. The Japanese version keeps its original Japanese HUD and text; the HD HUD pack (retypeset English art), the scene-glow toggle and Enhanced co-op are USA-only and appear disabled in its menu. The HD world texture pack, graphics enhancements and controls work in both.
 
 ### RecompLauncher
 
@@ -120,7 +124,7 @@ See the [status notes](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2
 
 ## Building from source
 
-The original Wii PowerPC code is translated to C++ ahead of time. The host runtime provides GX graphics, audio, input, DVD access, and NAND storage. You need your own extracted `R2VE01` copy, .NET 8 SDK, CMake, Ninja, and a supported 64-bit Clang/LLVM toolchain.
+The original Wii PowerPC code is translated to C++ ahead of time. The host runtime provides GX graphics, audio, input, DVD access, and NAND storage. You need your own extracted `R2VE01` (or `R2VJ01`) copy, .NET 8 SDK, CMake, Ninja, and a supported 64-bit Clang/LLVM toolchain.
 
 ```powershell
 dotnet build translator/Translator.sln -c Release
@@ -133,6 +137,8 @@ dotnet $t generate-data-init --project projects/r2ve01/recomp.yml
 dotnet $t emit-build-shards --project projects/r2ve01/recomp.yml
 powershell -File tools\clean_build.ps1 -Keep
 ```
+
+The Japanese build uses `projects/r2vj01/recomp.yml` (entry point `0x800062F0`, output `generated-jp`) and a separate CMake build directory configured with `-DMKW_GENERATED_DIR=<repo>/generated-jp`; package it as `sinandpun-jp.exe` with `tools/package_recomplauncher.ps1 -JapanBuildDirectory`. Run `python tools/check_region_map.py` after changing `runtime/include/guest_abi/guest_versions.inc` or either project's hook lists.
 
 For stage-module generation, validation, and packaging, see [Build status](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/STATUS.md) and the [RecompLauncher audit](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/RECOMPLAUNCHER-AUDIT.md). Generated translations and local game data stay out of Git.
 

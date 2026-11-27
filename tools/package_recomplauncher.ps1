@@ -4,7 +4,8 @@ param(
     [string]$Source = "ready",
     [string]$Output = "dist",
     [string]$Python = "python",
-    [string]$BuildDirectory = "build/native"
+    [string]$BuildDirectory = "build/native",
+    [string]$JapanBuildDirectory = "build/native-r2vj01"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,10 +49,12 @@ if (Test-Path $archivePath) {
 New-Item -ItemType Directory $stagePath | Out-Null
 # Copy only known release assets. Loose keys and foreign tools never enter staging.
 $nativePath = Join-Path $root $BuildDirectory
+$japanNativePath = Join-Path $root $JapanBuildDirectory
 $runtimeDlls = @("SDL3.dll", "webgpu_dawn.dll", "dxcompiler.dll", "dxil.dll", "libc++.dll", "libpng16.dll", "libunwind.dll", "libzlib1.dll")
 foreach ($name in (@("sinandpun.exe", "dsp_coef.bin", "initial_pipeline_cache.db") + $runtimeDlls)) {
     Copy-Item -LiteralPath (Join-Path $nativePath $name) -Destination $stagePath
 }
+Copy-Item -LiteralPath (Join-Path $japanNativePath "sinandpun.exe") -Destination (Join-Path $stagePath "sinandpun-jp.exe")
 New-Item -ItemType Directory (Join-Path $stagePath "wii_bootstrap") | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "runtime/assets/wii/shared2") -Destination (Join-Path $stagePath "wii_bootstrap/shared2") -Recurse
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $stagePath
@@ -84,6 +87,7 @@ Copy-Item (Join-Path $root "third_party\disc_codecs") (Join-Path $stagePath "dis
 
 & $Python (Join-Path $root "tools\release_audit.py") `
     --source $nativePath `
+    --japan-source $japanNativePath `
     --package $stagePath `
     --modules (Join-Path $root "build\modules") `
     --require-launcher-clean

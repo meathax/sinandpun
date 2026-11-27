@@ -141,6 +141,11 @@ class ReleaseAuditTests(unittest.TestCase):
 
         (self.source / "sinandpun.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
         (self.package / "sinandpun.exe").write_bytes(b"executable AMD FSR provider: %s slEvaluateFeature")
+        # The Japan (R2VJ01) build ships beside the USA entry executable.
+        self.japan_source = self.base / "source-jp"
+        self.japan_source.mkdir(parents=True)
+        (self.japan_source / "sinandpun.exe").write_bytes(b"japan executable AMD FSR provider: %s slEvaluateFeature")
+        (self.package / "sinandpun-jp.exe").write_bytes(b"japan executable AMD FSR provider: %s slEvaluateFeature")
         for asset in ("dsp_coef.bin", "initial_pipeline_cache.db"):
             (self.source / asset).write_bytes(b"asset")
             (self.package / asset).write_bytes(b"asset")
@@ -164,8 +169,13 @@ class ReleaseAuditTests(unittest.TestCase):
         shutil.rmtree(self.base, ignore_errors=True)
 
     def test_clean_package_passes(self):
-        report = release_audit.audit(self.source, self.package, self.modules)
+        report = release_audit.audit(self.source, self.package, self.modules, japan_source=self.japan_source)
         self.assertEqual(report["errors"], [])
+
+    def test_stale_japan_executable_fails(self):
+        (self.package / "sinandpun-jp.exe").write_bytes(b"old")
+        report = release_audit.audit(self.source, self.package, self.modules, japan_source=self.japan_source)
+        self.assertTrue(any("sinandpun-jp.exe" in error for error in report["errors"]))
 
     def test_stale_executable_and_game_data_fail(self):
         (self.package / "sinandpun.exe").write_bytes(b"old")
@@ -191,6 +201,27 @@ class ReleaseAuditTests(unittest.TestCase):
             self.source, self.package, self.modules, require_launcher_clean=True)
         self.assertTrue(report["errors"])
         self.assertTrue(all("missing or incorrect graphics runtime file" in error for error in report["errors"]))
+
+
+class RegionMapTests(unittest.TestCase):
+    def test_japan_project_lists_match_mapped_usa_lists(self):
+        region = load_tool("check_region_map")
+        errors = region.check_projects(region.load_table(), ROOT / "projects/r2ve01/recomp.yml",
+                                       ROOT / "projects/r2vj01/recomp.yml")
+        self.assertEqual(errors, [])
+
+    def test_missing_japan_entry_hook_is_reported(self):
+        region = load_tool("check_region_map")
+        source = (ROOT / "projects/r2vj01/recomp.yml").read_text(encoding="utf-8")
+        scratch = ROOT / "build" / "tool-tests" / "region_map"
+        scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            broken = scratch / "recomp.yml"
+            broken.write_text(source.replace("    - 0x80068278\n", ""), encoding="utf-8")
+            errors = region.check_projects(region.load_table(), ROOT / "projects/r2ve01/recomp.yml", broken)
+            self.assertEqual(errors, ["entry_hooks: projects/r2vj01/recomp.yml lacks 0x80068278"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -46,11 +46,19 @@ class Reader:
         import json
         tags = json.load(open(RAW / f"{name}.tags.json"))
         idx = next(i for i, t in enumerate(tags) if t >= first_tag)
-        # Seek by time (capture is variable-rate; ~frames/duration is close enough), landing ~1 s early.
-        dur = float(subprocess.run([FFMPEG.replace("ffmpeg.exe", "ffprobe.exe"), "-v", "error", "-show_entries",
-                                    "format=duration", "-of", "csv=p=0", str(self.path)],
-                                   capture_output=True, text=True).stdout.strip())
-        seek = max(0.0, idx * dur / len(tags) - 1.0)
+        # Exact seek: the capture is variable-rate with B-frames, so sort packet times into display order
+        # (cached beside the capture) and start ffmpeg at the wanted frame's timestamp.
+        pts_file = RAW / f"{name}.pts.json"
+        if pts_file.exists():
+            pts = json.load(open(pts_file))
+        else:
+            out = subprocess.run([FFMPEG.replace("ffmpeg.exe", "ffprobe.exe"), "-v", "error", "-select_streams", "v",
+                                  "-show_entries", "packet=pts_time", "-of", "csv=p=0", str(self.path)],
+                                 capture_output=True, text=True).stdout
+            pts = sorted(float(x) for x in out.split() if x.strip())
+            json.dump(pts, open(pts_file, "w"))
+        idx = max(0, idx - 2)
+        seek = max(0.0, pts[min(idx, len(pts) - 1)] - 0.0005)
         self.proc = subprocess.Popen(
             [FFMPEG, "-hide_banner", "-loglevel", "error", "-hwaccel", "cuda", "-ss", f"{seek:.3f}",
              "-i", str(self.path), "-fps_mode", "passthrough",
@@ -195,9 +203,10 @@ def render(edl, out, preview=0, only=None):
             if "src" in readers:
                 f = zoom(scrub_tag(readers["src"].at(t).copy()), z, cx, cy)
             else:
-                b = zoom(scrub_tag(readers["before"].at(t).copy()), z, cx, cy)
-                a = zoom(scrub_tag(readers["after"].at(t).copy()), z, cx, cy)
                 p = ease_io((i - s["wipe_at"]) / s["wipe_len"])
+                a = zoom(scrub_tag(readers["after"].at(t).copy()), z, cx, cy)
+                # once revealed, the before clip is no longer read (it may end before the shot does)
+                b = a if p >= 1 else zoom(scrub_tag(readers["before"].at(t).copy()), z, cx, cy)
                 f = wipe(b, a, p)
                 lab = min(1.0, i / 12) * (1 - ease((i - (s["wipe_at"] + s["wipe_len"] + 20)) / 15))
                 f = label(f, s.get("before_label", "ORIGINAL"), "l", lab * (1 - ease((p - 0.75) / 0.25)))
@@ -208,9 +217,9 @@ def render(edl, out, preview=0, only=None):
                 f = cv2.addWeighted(f, 1 - k, np.full_like(f, 255), k, 0)
             if title is not None:
                 ti, to = s.get("title_in", 0), s.get("title_out", s["len"])
-                a_in = ease((i - ti) / 18)
+                a_in = 1.0 if ti < 0 else ease((i - ti) / 18)
                 a_out = 1 - ease((i - (to - 18)) / 18)
-                slide = int((1 - ease((i - ti) / 22)) * -160)
+                slide = 0 if ti < 0 else int((1 - ease((i - ti) / 22)) * -160)
                 f = over(f, title, min(a_in, a_out), dx=slide)
             if s.get("badge"):
                 bi, bo = s.get("badge_in", 0), s.get("badge_out", s["len"])
