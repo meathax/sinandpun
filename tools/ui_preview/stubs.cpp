@@ -28,7 +28,6 @@ MouseSample MouseNow() { return {}; }
 DualAnalog::Rect PictureRect(const MouseSample&) { return {}; }
 InputMap::ActiveDevice LastDevice() { return InputMap::ActiveDevice::None; }
 InputMap::Scheme EffectiveScheme() { return InputMap::Scheme::Pointer; }
-SchemeNotice LatestSwitch() { return {}; }
 void UpdateWindowState(bool) {}
 void BeginCapture(InputMap::Profile) {}
 CaptureResult PollCapture(bool) { return {}; }

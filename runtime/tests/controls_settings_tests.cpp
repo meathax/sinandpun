@@ -36,7 +36,6 @@ static void TestDefaults() {
     using namespace AimSettings;
     const Settings s = DefaultBindings();
     CHECK(s.schemeMode == SchemeMode::Auto);
-    CHECK(s.switchToast);
     const auto stick = DualAnalog::StickPointerConfig(s.aim, false);
     CHECK(stick.cameraMinX == 287.f && stick.cameraMaxX == 736.f);
     CHECK(s.aim.radialDeadzone == 0.10f && s.aim.outerSaturation == 0.92f && s.aim.curveExponent == 2.2f);
@@ -74,7 +73,6 @@ static void TestRoundTrip() {
     std::filesystem::remove(RuntimeConfigFile::ResolveConfigPath());
     Settings s = DefaultBindings();
     s.schemeMode = SchemeMode::Auto;
-    s.switchToast = false;
     s.buttonPromptStyle = ButtonPromptStyle::PlayStation;
     s.aim.leftDeadzone = 0.2f;
     s.aim.leftSaturation = 0.8f;
@@ -92,7 +90,6 @@ static void TestRoundTrip() {
     CHECK(Save());
     const Settings r = Load();
     CHECK(r.schemeMode == SchemeMode::Auto);
-    CHECK(!r.switchToast);
     CHECK(r.buttonPromptStyle == ButtonPromptStyle::PlayStation && r.IsPlayStationPrompts());
     CHECK(std::fabs(r.aim.leftDeadzone - 0.2f) < 1e-3f && std::fabs(r.aim.leftSaturation - 0.8f) < 1e-3f);
     CHECK(r.aim.invertMoveY && std::fabs(r.aim.triggerThreshold - 0.3f) < 1e-3f);

@@ -50,13 +50,6 @@ void UpdateWindowState(bool inputBlocked);
 InputMap::Scheme EffectiveScheme();
 InputMap::ActiveDevice LastDevice();
 
-// Latest automatic switch, for the on-screen note. `serial` grows by one per switch (0 = none yet).
-struct SchemeNotice {
-    uint32_t serial = 0;
-    InputMap::Scheme scheme = InputMap::Scheme::Pointer;
-    uint64_t atMs = 0;  // SDL_GetTicks() at the switch
-};
-SchemeNotice LatestSwitch();
 
 enum class CaptureState { Idle, Pending, Done, Cancelled, Cleared };
 struct CaptureResult {

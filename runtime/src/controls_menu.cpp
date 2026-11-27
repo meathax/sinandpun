@@ -596,37 +596,6 @@ void BuildPage(ListView& view, int page) {
     if (e.save) AimSettings::Save();
 }
 
-// Brief note at the bottom centre when Automatic switches scheme. Called once per frame from the overlay.
-void DrawHud() {
-    static uint32_t seen = AimInput::LatestSwitch().serial;
-    static Clock::time_point shown{};
-    static bool gamepad = false;
-    static bool active = false;
-    const AimInput::SchemeNotice n = AimInput::LatestSwitch();
-    if (n.serial != seen) {
-        seen = n.serial;
-        if (AimSettings::Get().switchToast) {
-            active = true;
-            shown = Clock::now();
-            gamepad = AimInput::LastDevice() == InputMap::ActiveDevice::Gamepad;
-        }
-    }
-    if (!active) return;
-    constexpr float kHold = 2.0f, kFadeIn = 0.15f, kFadeOut = 0.5f;
-    const float age = std::chrono::duration<float>(Clock::now() - shown).count();
-    if (age >= kHold + kFadeOut) {
-        active = false;
-        return;
-    }
-    const float alpha = age < kFadeIn ? age / kFadeIn : age < kHold ? 1.0f : 1.0f - (age - kHold) / kFadeOut;
-    const char* text = gamepad ? "Gamepad pointer active" : "Mouse and keyboard active";
-    const ImGuiIO& io = ImGui::GetIO();
-    const float S = game_ui::Scale();
-    const float w = game_ui::TextSize(22.0f, text).x + 24.0f * S;
-    const ImVec2 anchor(io.DisplaySize.x * 0.5f + w * 0.5f, io.DisplaySize.y - 90.0f * S);
-    game_ui::DrawHudBox(ImGui::GetForegroundDrawList(), anchor, {{text, game_ui::kWhite}}, alpha);
-}
-
 void DrawModals(game_ui::Frame& input) {
     if (!g_capture.open) return;
     const AimSettings::ActionInfo& info = AimSettings::kActions[g_capture.action];

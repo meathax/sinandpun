@@ -688,7 +688,12 @@ private:
         RefreshSettings();
         const InputMap::RawSample raw = AimInput::Sample(m_port);
         const bool menuNav = g_menuNavigation.load(std::memory_order_relaxed);
+        // Mixed co-op: only a seat whose own sample carries a gamepad switches to gamepad menu control, so a pad
+        // press by another player never hides the mouse/keyboard player's pointer.
+        const bool kbmSeat = m_port == (RuntimeConfigFile::SecondRemoteAtLaunch() == 2 ? 1u : 0u);
+        const bool seatPad = (m_port == 0 || !kbmSeat) && PADGetSDLGamepadForPort(m_port) != nullptr;
         if (menuNav &&
+            seatPad &&
             m_settings.schemeMode != InputMap::SchemeMode::KeyboardMouse &&
             AimInput::LastDevice() == InputMap::ActiveDevice::Gamepad) {
             in.padMenu = true;

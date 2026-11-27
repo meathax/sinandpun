@@ -77,9 +77,6 @@ State& G() {
 struct Published {
     std::atomic<uint8_t> scheme{static_cast<uint8_t>(InputMap::Scheme::Pointer)};
     std::atomic<uint8_t> device{static_cast<uint8_t>(InputMap::ActiveDevice::None)};
-    std::atomic<uint32_t> noticeSerial{0};
-    std::atomic<uint8_t> noticeScheme{static_cast<uint8_t>(InputMap::Scheme::Pointer)};
-    std::atomic<uint64_t> noticeAt{0};
 };
 
 Published& Pub() {
@@ -416,11 +413,6 @@ void TickScheme() {
             const InputMap::SchemeUpdate update =
                 InputMap::UpdateScheme(g.arbiter, mode, sense, static_cast<int64_t>(now));
             if (update.deviceChanged) pub.device.store(static_cast<uint8_t>(g.arbiter.device));
-            if (update.deviceChanged && mode == InputMap::SchemeMode::Auto) {
-                pub.noticeScheme.store(static_cast<uint8_t>(g.arbiter.scheme));
-                pub.noticeAt.store(now);
-                pub.noticeSerial.fetch_add(1);
-            }
             if (update.schemeChanged) {
                 publish = log = true;
                 why = mode == InputMap::SchemeMode::Auto ? "auto" : "setting";
@@ -435,15 +427,6 @@ void TickScheme() {
 
 InputMap::Scheme EffectiveScheme() { return static_cast<InputMap::Scheme>(Pub().scheme.load()); }
 InputMap::ActiveDevice LastDevice() { return static_cast<InputMap::ActiveDevice>(Pub().device.load()); }
-
-SchemeNotice LatestSwitch() {
-    Published& pub = Pub();
-    SchemeNotice n;
-    n.serial = pub.noticeSerial.load();
-    n.scheme = static_cast<InputMap::Scheme>(pub.noticeScheme.load());
-    n.atMs = pub.noticeAt.load();
-    return n;
-}
 
 void UpdateWindowState(bool inputBlocked) {
     VirtualMouse::Tick();

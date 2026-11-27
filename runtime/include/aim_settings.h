@@ -2,7 +2,7 @@
 
 // Controls state shared between the F10 settings menu and the virtual Wii Remote: aiming tunables, the
 // controller scheme, mouse options and the per-profile action bindings. Persisted to Config.toml:
-//   [input]                version = 6, scheme = "auto" | "classic" | "pointer", switch_toast = true
+//   [input]                version = 6, scheme = "auto" | "classic" | "pointer"
 //                          (auto: both devices drive the Wii pointer; files written before version 2
 //                          with scheme = "pointer" - the old default - are read as "auto")
 //   [input.gamepad]        <action> = "pad:south | pad:right_trigger"        (up to 3 bindings)
@@ -145,7 +145,6 @@ struct Settings {
     // The input service keeps the initial extension equal to the scheme in effect so a remote created late
     // starts right; live changes go through VirtualRemote::SetScheme.
     Scheme scheme = Scheme::Pointer;
-    bool switchToast = true;          // brief on-screen note when the scheme switches automatically
     ButtonPromptStyle buttonPromptStyle = ButtonPromptStyle::Xbox;
     DualAnalog::Config aim = DualAnalog::ModernAim();
     MouseConfig mouse;
@@ -337,7 +336,6 @@ inline void LoadFromConfig(Settings& s) {
     if (const auto v = FindValue<std::string>(d, "input", "scheme")) {
         s.schemeMode = InputMap::ParseSchemeMode(*v, schemaVersion, s.schemeMode);
     }
-    flag("input", "switch_toast", s.switchToast);
     if (const auto v = FindValue<std::string>(d, "input", "button_prompts")) {
         s.buttonPromptStyle = ParseButtonPromptStyle(*v);
     }
@@ -470,7 +468,6 @@ inline bool Save() {
     auto boolean = [](bool v) { return std::string(v ? "true" : "false"); };
     put("input", "version", std::to_string(kSchemaVersion));
     put("input", "scheme", str(InputMap::kSchemeModeKeys[static_cast<size_t>(s.schemeMode)]));
-    put("input", "switch_toast", boolean(s.switchToast));
     put("input", "button_prompts", str(kButtonPromptKeys[static_cast<size_t>(s.buttonPromptStyle)]));
     put("aim", "right_deadzone", Float(c.radialDeadzone));
     put("aim", "right_saturation", Float(c.outerSaturation));

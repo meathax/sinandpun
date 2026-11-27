@@ -16,8 +16,6 @@ void BuildPage(game_ui::ListView& view, int page);
 // Press-to-bind dialog. Call once per frame after the menu has been drawn.
 void DrawModals(game_ui::Frame& input);
 
-// Brief toast when the Automatic scheme switches (gamepad <-> mouse/keyboard). Call once per frame.
-void DrawHud();
 
 
 // True while a press-to-bind capture is running (the overlay must not treat Esc/Back as menu keys).

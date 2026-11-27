@@ -2703,7 +2703,6 @@ void Draw() noexcept {
         DrawShaderCompilationStatus();
     }
     DrawFpsOverlay();
-    controls_menu::DrawHud();
     const bool modal = AnyModalActive();
     DrawMenu(in, !modal);
     DrawModals(in);
