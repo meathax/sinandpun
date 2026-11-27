@@ -18,7 +18,6 @@
 namespace DiscImport {
 
 inline constexpr const char* kGameId = "R2VE01";
-inline constexpr const char* kGameIdJapan = "R2VJ01";
 
 struct GameVersionInfo {
     const char* gameId;
@@ -28,7 +27,6 @@ struct GameVersionInfo {
 
 inline constexpr GameVersionInfo kGameVersions[] = {
     {"R2VE01", "Sin & Punishment: Star Successor (USA)", "gs2.sel"},
-    {"R2VJ01", "Tsumi to Batsu: Sora no Koukeisha (Japan)", "AppWiiRelRso.sel"},
 };
 
 inline constexpr const GameVersionInfo* FindGameVersion(std::string_view gameId) {
@@ -36,6 +34,20 @@ inline constexpr const GameVersionInfo* FindGameVersion(std::string_view gameId)
         if (gameId == version.gameId) return &version;
     }
     return nullptr;
+}
+
+// Shown for a disc or folder that is not the supported USA release. The Japanese release (R2VJ01) is not
+// supported: the USA release already contains the Japanese voice track.
+inline std::string UnsupportedGameMessage(const std::string& gameId) {
+    if (gameId == "R2VJ01")
+        return "This is the Japanese version (R2VJ01), which is not supported. Use the North American (R2VE01) "
+               "disc instead: it includes the Japanese voices (Settings > Audio > Voice > Language).";
+    if (gameId.size() == 6 && gameId.compare(0, 3, "R2V") == 0) {
+        const char* name = gameId[3] == 'P' ? "European (PAL)" : gameId[3] == 'K' ? "Korean" : "another region's";
+        return std::string("This is the ") + name + " version of Sin & Punishment: Star Successor (" + gameId +
+               "). Only the North American (R2VE01) version is supported.";
+    }
+    return "This is \"" + gameId + "\", not Sin & Punishment: Star Successor for North America (R2VE01).";
 }
 
 inline constexpr uint32_t kModuleBase = 0x97DC0000u;  // reserved MEM2 window the stage modules are linked at

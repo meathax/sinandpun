@@ -154,7 +154,7 @@ inline constexpr Facts kFacts[kCount] = {
     // R2VE01 has no other-region build in this tree), rows 1/2 stay unused.
     {"R2VE01", 'E', 0x52325645u, 0u, 0x804C68C0u, "USA", "RVL-001(USA)", "LU", "NTSC", "US"},
     {"R2VP01", 'P', 0x52325650u, 1u, 0x804C68C0u, "EUR", "RVL-001(EUR)", "LEH", "PAL", "EU"},
-    {"R2VJ01", 'J', 0x5232564Au, 0u, 0x80476758u, "JPN", "RVL-001(JPN)", "LJ", "NTSC", "JP"},
+    {"R2VJ01", 'J', 0x5232564Au, 0u, 0x804C68C0u, "JPN", "RVL-001(JPN)", "LJ", "NTSC", "JP"},
 };
 
 inline const Facts& CurrentFacts() noexcept { return kFacts[static_cast<size_t>(Current())]; }

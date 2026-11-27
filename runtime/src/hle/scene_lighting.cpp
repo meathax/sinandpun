@@ -30,8 +30,7 @@ bool validPoint(const ScenePoint& point) {
 } // namespace
 
 bool ObserveSceneAnchor(uint32_t address, CpuContext* ctx) {
-    // Hook addresses and caller return sites are canonical R2VE01 identities;
-    // MKW_GADDR resolves the matching R2VJ01 address in the Japanese build.
+    // Hook addresses and caller return sites are R2VE01 addresses.
     if (address == MKW_GADDR(80258A60)) {  // nw4r::g3d::ScnObj::SetMtx
         // Return sites of the SetMtx calls in NWSM_Shadow::put and the two putShadow pairs.
         const uint32_t lr = ctx->lr;
@@ -56,7 +55,7 @@ bool ObserveSceneAnchor(uint32_t address, CpuContext* ctx) {
         return true;
     }
     unsigned positionArg = 3, lifetime = 12;
-    if (address == MKW_GADDR(8006D35C)) {  // PlShot::cbHitBg (R2VJ01: PlShotCore::cbHitBg)
+    if (address == MKW_GADDR(8006D35C)) {  // PlShot::cbHitBg
         lifetime = 5;
         positionArg = 4;
     } else if (address == MKW_GADDR(8006DA00) ||  // PlChargeShot::cbHitBg

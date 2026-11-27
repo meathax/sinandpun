@@ -798,13 +798,7 @@ Result ImportDisc(const fs::path& image, const fs::path& gameDir, Progress& prog
         }
         const GameVersionInfo* version = FindGameVersion(id);
         if (!version) {
-            if (id.compare(0, 3, "R2V") == 0 && id.size() == 6) {
-                const char region = id[3];
-                const char* name = region == 'P' ? "European (PAL)" : region == 'K' ? "Korean" : "another region's";
-                throw ImportError(std::string("This is the ") + name + " version of Sin & Punishment: Star Successor (" + id +
-                                  "). The North American (R2VE01) and Japanese (R2VJ01) versions are supported.");
-            }
-            throw ImportError("This disc image is \"" + id + "\", not a supported Sin & Punishment: Star Successor release (R2VE01 or R2VJ01).");
+            throw ImportError(UnsupportedGameMessage(id));
         }
         summary.gameId = id;
 
@@ -995,7 +989,7 @@ constexpr uint32_t kPoison = 0xDEAD0000u;
 
 // DOL section names by SEL section id; null = unused ids. The numeric DOL
 // section-table indices backing these logical names are fixed for this game's
-// CodeWarrior layout, but their addresses differ between R2VE01 and R2VJ01.
+// CodeWarrior layout; their addresses come from main.dol.
 constexpr const char* kDolSectionNames[14] = {nullptr, ".init", ".text", ".ctors", ".dtors", ".rodata", ".data",
                                               ".bss", ".sdata", ".sdata2", nullptr, ".sbss", ".sbss2", nullptr};
 

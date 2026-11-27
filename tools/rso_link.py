@@ -23,8 +23,7 @@ def parse_dol_layout(path):
 
     SEL indices use the linker section names rather than DOL section-table
     indices.  The mapping is fixed for these CodeWarrior Wii DOLs; deriving it
-    here keeps the linker correct for both R2VE01 and the differently laid out
-    R2VJ01 image.
+    here keeps the linker independent of the R2VE01 DOL's section-table order.
     """
     d = open(path, 'rb').read()
     addrs = struct.unpack_from('>18I', d, 0x48)
@@ -257,8 +256,7 @@ def main():
             # Frame prologues are real entry points. They are needed even when no
             # data word references them: several module factories keep method or
             # constructor pointers in generated code rather than a simple vtable
-            # word. R2VJ01 stg00 0x97DF17CC is a verified example reached only
-            # indirectly from gameplay.
+            # word; such functions are reached only indirectly from gameplay.
             if frame_prologue(word):
                 inferred.add(address)
             # addi r3,r3,-N ; b implementation: virtual-base adjusting thunk.

@@ -22,10 +22,9 @@
 
 namespace {
 // SDA-relative SDK globals (canonical USA r13 = 0x804B7700), verified by reading the
-// guest GXSetBreakPtCallback / GXEnableBreakPt bodies in main.dol. Japan uses the
-// corresponding region-mapped SDA addresses (r13 offsets shift by 0x58).
-const uint32_t kBreakPtCallbackAddr = MKW_GADDR(804B254C); // r13 - 20916 (USA); shifted in Japan
-const uint32_t kBreakPtAddrAddr = MKW_GADDR(804B2548);     // r13 - 20920 (USA); shifted in Japan
+// guest GXSetBreakPtCallback / GXEnableBreakPt bodies in main.dol.
+const uint32_t kBreakPtCallbackAddr = MKW_GADDR(804B254C); // r13 - 20916
+const uint32_t kBreakPtAddrAddr = MKW_GADDR(804B2548);     // r13 - 20920
 
 std::atomic<bool> g_breakPtArmed{false};
 } // namespace

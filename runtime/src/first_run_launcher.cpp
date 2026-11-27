@@ -36,18 +36,15 @@ namespace fs = std::filesystem;
 
 namespace first_run_launcher {
 
-bool JapanBuild() { return std::string_view(GuestRegion::CurrentFacts().gameId) == "R2VJ01"; }
-
-const char* ManagedGameDirectoryName() { return JapanBuild() ? "Game-R2VJ01" : "Game"; }
+const char* ManagedGameDirectoryName() { return "Game"; }
 
 fs::path ManagedGameDirectory() { return RuntimeConfigFile::ApplicationDataDirectory() / ManagedGameDirectoryName(); }
 
 namespace {
 
 fs::path g_initialImage;
-RegionHandOff g_regionHandOff = nullptr;
 
-// An extracted Star Successor game of any supported region.
+// An extracted Star Successor game (any region; LooksLikeGameRoot checks the id).
 bool LooksLikeAnyRegionRoot(const fs::path& root) {
     std::error_code ec;
     if (root.empty() || !fs::is_directory(root / "files", ec) || !fs::is_regular_file(root / "sys" / "fst.bin", ec) ||
@@ -58,13 +55,8 @@ bool LooksLikeAnyRegionRoot(const fs::path& root) {
 }
 
 bool LooksLikeGameRoot(const fs::path& root) {
-    // Another region's extracted data is not usable by this regional executable.
+    // Only the USA release (R2VE01) is supported.
     return LooksLikeAnyRegionRoot(root) && RuntimeConfigFile::DiscGameId(root) == GuestRegion::CurrentFacts().gameId;
-}
-
-bool IsOtherSupportedRegion(const std::string& gameId) {
-    return !gameId.empty() && gameId != GuestRegion::CurrentFacts().gameId &&
-           DiscImport::FindGameVersion(gameId) != nullptr;
 }
 
 void PointConfigAtManagedGame() {
@@ -76,18 +68,15 @@ void PointConfigAtManagedGame() {
 
 void SetInitialImage(const fs::path& image) { g_initialImage = image; }
 
-void SetRegionHandOff(RegionHandOff handOff) { g_regionHandOff = handOff; }
-
 bool GameDataAvailable() {
     // An unprepared --game disc is imported on the first-run screen.
     if (!g_initialImage.empty() && !LooksLikeGameRoot(ManagedGameDirectory())) return false;
     const auto configured = RuntimeConfigFile::ResolvedDvdRoot();
     if (LooksLikeGameRoot(configured)) return true;
-    // Imported earlier but the config lost its path, or the config both regional executables share names the other
-    // region's game: adopt this region's managed copy instead of asking again.
-    const bool otherRegion = LooksLikeAnyRegionRoot(configured) &&
-                             IsOtherSupportedRegion(RuntimeConfigFile::DiscGameId(configured));
-    if ((RuntimeConfigFile::DvdRoot().empty() || otherRegion) && LooksLikeGameRoot(ManagedGameDirectory())) {
+    // Imported earlier but the config lost its path, or it names an unsupported game (such as a Japanese copy
+    // from an older release): adopt the managed copy instead of asking again.
+    const bool foreignGame = LooksLikeAnyRegionRoot(configured);
+    if ((RuntimeConfigFile::DvdRoot().empty() || foreignGame) && LooksLikeGameRoot(ManagedGameDirectory())) {
         PointConfigAtManagedGame();
         return true;
     }
@@ -248,18 +237,10 @@ std::vector<FoundGame> FindGames() {
             std::error_code fileEc;
             const fs::path& path = it->path();
             if (it->is_directory(fileEc)) {
-                // Dolphin extracts the game into <folder>/DATA (next to UPDATE). Both regions are listed; the other
-                // region's game is handed to its executable.
-                const auto supportedRoot = [](const fs::path& root) {
-                    return LooksLikeAnyRegionRoot(root) &&
-                           DiscImport::FindGameVersion(RuntimeConfigFile::DiscGameId(root)) != nullptr;
-                };
-                const auto folderLabel = [](const fs::path& root) {
-                    return std::string(RuntimeConfigFile::DiscGameId(root) == DiscImport::kGameIdJapan ? "Folder, Japan" : "Folder");
-                };
-                if (supportedRoot(path)) games.push_back({path, path.filename().string(), folderLabel(path), true});
-                else if (supportedRoot(path / "DATA"))
-                    games.push_back({path / "DATA", path.filename().string() + "/DATA", folderLabel(path / "DATA"), true});
+                // Dolphin extracts the game into <folder>/DATA (next to UPDATE).
+                if (LooksLikeGameRoot(path)) games.push_back({path, path.filename().string(), "Folder", true});
+                else if (LooksLikeGameRoot(path / "DATA"))
+                    games.push_back({path / "DATA", path.filename().string() + "/DATA", "Folder", true});
                 continue;
             }
             if (!it->is_regular_file(fileEc) || !DiscImport::IsSupportedDiscExtension(path)) continue;
@@ -270,35 +251,17 @@ std::vector<FoundGame> FindGames() {
             DiscImport::DiscInfo info;
             std::string error;
             if (DiscImport::ProbeDisc(path, info, error) && info.supported)
-                games.push_back({path, path.filename().string(),
-                                 info.gameId == DiscImport::kGameIdJapan ? info.format + ", Japan" : info.format, false});
+                games.push_back({path, path.filename().string(), info.format, false});
         }
     }
-    // This executable's region first, then extracted folders and RVZ/WIA (normally keyless).
-    const bool japanBuild = JapanBuild();
-    auto rank = [japanBuild](const FoundGame& g) {
-        const bool japanGame = g.format.find("Japan") != std::string::npos;
-        const int base = japanGame != japanBuild ? 3 : 0;
-        if (g.folder) return base;
-        if (g.format.rfind("RVZ", 0) == 0 || g.format.rfind("WIA", 0) == 0) return base + 1;
-        return base + 2;
+    // Extracted folders first, then RVZ/WIA (normally keyless).
+    auto rank = [](const FoundGame& g) {
+        if (g.folder) return 0;
+        if (g.format.rfind("RVZ", 0) == 0 || g.format.rfind("WIA", 0) == 0) return 1;
+        return 2;
     };
     std::stable_sort(games.begin(), games.end(), [&](const FoundGame& a, const FoundGame& b) { return rank(a) < rank(b); });
     return games;
-}
-
-// The other region's disc or folder belongs to the other regional executable. On success the hand-off exits this
-// process with that executable's status; otherwise the failure is shown.
-void HandOffOtherRegion(Launcher& l, const std::string& gameId, const fs::path& game) {
-    std::string error = "This is " + gameId + "; its regional executable is missing.";
-    SDL_Window* window = aurora_get_window();
-    if (g_regionHandOff) {
-        if (window) SDL_HideWindow(window);
-        if (!g_regionHandOff(gameId, game, error) && window) SDL_ShowWindow(window);
-    }
-    std::lock_guard<std::mutex> guard(l.lock);
-    l.error = error;
-    l.phase = Phase::Failed;
 }
 
 void StartImport(Launcher& l, const fs::path& image, const fs::path& keys) {
@@ -312,12 +275,8 @@ void StartImport(Launcher& l, const fs::path& image, const fs::path& keys) {
         std::string selectedError;
         if (DiscImport::ProbeDisc(image, selectedInfo, selectedError)) selectedId = selectedInfo.gameId;
     }
-    if (IsOtherSupportedRegion(selectedId)) {
-        HandOffOtherRegion(l, selectedId, image);
-        return;
-    }
     if (!selectedId.empty() && selectedId != GuestRegion::CurrentFacts().gameId) {
-        l.error = "This is " + selectedId + ", which is not a supported Star Successor release.";
+        l.error = DiscImport::UnsupportedGameMessage(selectedId);
         l.phase = Phase::Failed;
         return;
     }
@@ -479,13 +438,8 @@ bool Run(PrepareFolder prepareFolder) {
                 std::error_code ec;
                 if (fs::is_directory(l.picked, ec)) {
                     if (!LooksLikeAnyRegionRoot(l.picked) && LooksLikeAnyRegionRoot(l.picked / "DATA")) l.picked /= "DATA";
-                    const std::string folderId = RuntimeConfigFile::DiscGameId(l.picked);
-                    if (IsOtherSupportedRegion(folderId)) {
-                        HandOffOtherRegion(l, folderId, l.picked);
-                    } else {
-                        finished = prepareFolder(l.picked, l.error);
-                        if (!finished) l.phase = Phase::Failed;
-                    }
+                    finished = prepareFolder(l.picked, l.error);
+                    if (!finished) l.phase = Phase::Failed;
                 } else {
                     StartImport(l, l.picked, l.pickedKeys);
                 }
@@ -581,7 +535,7 @@ bool Run(PrepareFolder prepareFolder) {
                 }
             } else {
                 game_ui::DrawWrapped(dl, 30.0f, ImVec2(bodyX, bodyY), bodyW, game_ui::kWhite,
-                                     "Welcome! To get started, choose your Star Successor (USA) or Tsumi to Batsu (Japan) disc image or extracted game folder.",
+                                     "Welcome! To get started, choose your North American (USA) Star Successor disc image or extracted game folder.",
                                      game_ui::Outline::Thin, 1.0f, true);
                 game_ui::DrawWrapped(dl, 24.0f, ImVec2(bodyX, bodyY + Px(105.0f)), bodyW, game_ui::kTextDim,
                                      l.scanDone.load()

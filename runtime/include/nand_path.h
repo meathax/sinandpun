@@ -56,12 +56,6 @@ inline std::filesystem::path ResolveConfiguredPath(const std::string& value) {
 }
 
 inline std::filesystem::path ManagedNandRootPath() {
-    // System settings are region-locked (language, area, product code and video
-    // mode). Keep the legacy USA directory unchanged, but do not expose a
-    // Japanese DOL to a USA console identity or vice versa.
-    if (::GuestRegion::Current() == ::GuestRegion::Id::NtscJ) {
-        return RuntimeConfigFile::ApplicationDataDirectory() / "NAND-R2VJ01";
-    }
     return RuntimeConfigFile::ApplicationDataDirectory() / "NAND";
 }
 

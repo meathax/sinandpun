@@ -487,8 +487,7 @@ inline std::string DiscGameId(const std::filesystem::path& root) {
 inline bool IsThisGamesDiscRoot(const std::filesystem::path& root) {
     std::error_code ec;
     return DiscGameId(root).compare(0, 3, "R2V") == 0 &&
-           (std::filesystem::is_regular_file(root / "files" / "gs2.sel", ec) ||
-            std::filesystem::is_regular_file(root / "files" / "AppWiiRelRso.sel", ec));
+           std::filesystem::is_regular_file(root / "files" / "gs2.sel", ec);
 }
 
 // One-time move of this game's data out of the shared pre-1.0.10 "WiiCompiled" folder. Only
@@ -1319,19 +1318,8 @@ inline bool SetControllerExpression(const std::string& key, const std::string& v
     return WriteSetting("controller", key, FormatString(value));
 }
 
-inline bool EnhancedCoopSupportedForGame() {
-    // The enhanced co-op patchset is translated only for R2VE01. Keep the
-    // shared configuration value intact, but never activate partial hooks in
-    // the Japanese build. Standalone runtime tests do not define a translated
-    // region; they exercise the default USA behavior.
-#if defined(MKW_TRANSLATED_GUEST_REGION)
-    return MKW_TRANSLATED_GUEST_REGION != 2;
-#else
-    return true;
-#endif
-}
 inline bool EnhancedCoopAtLaunch() {
-    static const bool enabled = EnhancedCoopSupportedForGame() && Get().enhancedCoop.value_or(false);
+    static const bool enabled = Get().enhancedCoop.value_or(false);
     return enabled;
 }
 inline bool SetEnhancedCoop(bool enabled) {
@@ -1344,7 +1332,7 @@ inline int SecondRemoteSetting() {
     const auto value = Get().secondRemote.value_or(0);
     // Older profiles can explicitly select the raw GameCube input path.
     // Enhanced co-op must run SDL pads through the same settings on both seats.
-    if (EnhancedCoopSupportedForGame() && Get().enhancedCoop.value_or(false)) return value == 2 ? 2 : 1;
+    if (Get().enhancedCoop.value_or(false)) return value == 2 ? 2 : 1;
     return value == 1 || value == 2 ? static_cast<int>(value) : 0;
 }
 

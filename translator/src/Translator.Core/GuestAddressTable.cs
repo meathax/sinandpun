@@ -21,9 +21,7 @@ public static class GuestRegions
         "RMCE01" => GuestRegion.NtscU,
         "RMCJ01" => GuestRegion.NtscJ,
         "RMCP01" => GuestRegion.Pal,
-        // Sin & Punishment uses the USA image as the canonical (slot-0) address space;
-        // the Japanese release occupies the NtscJ slot in guest_versions.inc.
-        "R2VJ01" => GuestRegion.NtscJ,
+        // Sin & Punishment (R2VE01) uses the USA image as the canonical (slot-0) address space.
         { } id when id.StartsWith("RMC", StringComparison.Ordinal) =>
             throw new InvalidDataException($"Mario Kart Wii release '{gameId}' is not supported."),
         _ => GuestRegion.Pal,

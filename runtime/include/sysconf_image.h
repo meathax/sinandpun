@@ -1,6 +1,5 @@
 #pragma once
 
-#include "guest_abi/guest_region.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -46,13 +45,12 @@ inline std::vector<uint8_t> Bytes32(uint32_t value) {
 }
 
 // Build a valid 16 KiB retail SYSCONF. The layout and default item set follow
-// Dolphin's first-boot generation, with two region-dependent values: IPL.LNG
-// and the IPL.SADR country code. The trailing item-offset lookup table is zero;
+// Dolphin's first-boot generation for a USA console (IPL.LNG English, IPL.SADR
+// country United States). The trailing item-offset lookup table is zero;
 // Nintendo's SC implementation falls back to a name lookup in that case.
 inline std::vector<uint8_t> Build() {
-    const bool japan = ::GuestRegion::Current() == ::GuestRegion::Id::NtscJ;
-    const uint8_t language = japan ? 0u : 1u;       // 0 Japanese, 1 English
-    const uint8_t country = japan ? 1u : 49u;       // IPL.SADR country: Japan / United States
+    constexpr uint8_t language = 1u;  // English
+    constexpr uint8_t country = 49u;  // IPL.SADR country: United States
 
     std::vector<Item> items;
     const auto add = [&](ItemType type, std::string_view name, std::vector<uint8_t> data) {

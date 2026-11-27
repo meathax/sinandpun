@@ -28,7 +28,7 @@
 
 namespace {
 
-// SDK IdleThread (OSInit/OSSetIdleFunction), region-mapped because the OS .bss layout shifts in Japan. Context layout: gpr[N] at N*4, r1 at +4, r2 at +8,
+// SDK IdleThread (OSInit/OSSetIdleFunction). Context layout: gpr[N] at N*4, r1 at +4, r2 at +8,
 // r13 at +0x34, SRR0 (entry) at +0x198.
 const uint32_t kIdleThreadAddr = MKW_GADDR(8042A9B8);
 // The SDK's own default idle loop lives in the SDK address range; only a game function counts.

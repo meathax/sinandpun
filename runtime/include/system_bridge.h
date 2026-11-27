@@ -65,12 +65,9 @@ void WriteCrashArtifacts(std::string_view reason,
 // isa/ppc_isa_context.h - that is its standalone host seam, not a duplicate.)
 void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) noexcept;
 
-// The translated entry point differs between the supported R2V regional DOLs.
-// This is applied as the default while parsing the command line; there is no
-// flag to override it.
-inline uint32_t DefaultEntryAddress() {
-    return GuestRegion::Current() == GuestRegion::Id::NtscJ ? 0x800062F0u : 0x80006310u;
-}
+// R2VE01 translated entry point, applied as the default while parsing the
+// command line; there is no flag to override it.
+inline uint32_t DefaultEntryAddress() { return 0x80006310u; }
 
 class SystemBridge {
 public:

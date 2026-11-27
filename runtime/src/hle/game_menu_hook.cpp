@@ -219,19 +219,10 @@ void GuestEntryHook(uint32_t address, CpuContext* ctx) {
     }
 }
 
-// Dual Japanese/English voices only exist in Western releases (R2VE01/R2VP01);
-// the Japanese release (R2VJ01) has a single voice track and no language setting.
-extern "C" bool SinAudio_SupportsVoiceLanguage() noexcept {
-    return GuestRegion::Current() != GuestRegion::Id::NtscJ;
-}
-
 // Writes the configured voice language (0 = Japanese, 1 = English) into the game's
 // g_pSysGlobals + 0x104 (read by getDemoVoiceLanguage__Fv at 0x80091FB8 and compared
 // against the loaded stage voice bank at +0xD5C by fn_800C2704 on stage load).
 extern "C" void SinAudio_SyncVoiceLanguage(uint8_t language) noexcept {
-    if (!SinAudio_SupportsVoiceLanguage()) {
-        return;
-    }
     const uint32_t kSysGlobalsPtrAddr = MKW_GADDR(804B19A0);
     constexpr uint32_t kDemoVoiceLanguageOffset = 0x104u;
     const uint8_t desired = language == 0 ? 0u : 1u;
