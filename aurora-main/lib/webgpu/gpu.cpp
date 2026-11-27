@@ -321,7 +321,9 @@ fn gather_bounce(p: vec2i, dim: vec2i) -> vec4f {
                                vec2f(-1,0),vec2f(-0.707,-0.707),vec2f(0,-1),vec2f(0.707,-0.707));
     // Only local geometry contributes to screen-space GI. Long screen-space
     // offsets copy foreground silhouettes onto unrelated receivers.
-    let radius = clamp(0.045*f32(dim.y),8.0,44.0);
+    // The 44 px cap was tuned at 1080 rows; scale it with height above that so
+    // the search covers the same screen fraction at higher internal resolutions.
+    let radius = clamp(0.045*f32(dim.y),8.0,44.0*max(1.0,f32(dim.y)/1080.0));
     var light = vec3f(0);
     var blocked = 0.0;
     for (var i=0; i<8; i++) {
@@ -364,9 +366,12 @@ fn fs_bounce(in: VertexOutput) -> @location(0) vec4<f32> {
         let depth = eye_depth(pixel);
         var sum = vec4f(0);
         var total = 0.0;
+        // Tap spacing of 2 cells was tuned at 1080 rows (270 quarter rows). Widen it
+        // with resolution so the denoise footprint stays a fixed fraction of the screen.
+        let tap_stride = max(2, i32(round(f32(reduced.y)/135.0)));
         for (var y=-4;y<=4;y++) { for (var x=-4;x<=4;x++) {
             let offset = vec2i(x,y);
-            let q = clamp(vec2i(in.position.xy)+2*offset,vec2i(0),reduced-1);
+            let q = clamp(vec2i(in.position.xy)+tap_stride*offset,vec2i(0),reduced-1);
             let neighbor = min(q*4+2,dim-1);
             if (textureLoad(scene_depth,neighbor,0).r <= 1e-7) { continue; }
             let error = abs(eye_depth(neighbor)-depth)/max(depth,1e-6);

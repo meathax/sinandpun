@@ -158,8 +158,19 @@ void copy_disp(GXBool clear, u32 copyControl) noexcept {
 
 void copy_tex(const void* dest, GXBool clear, u32 copyControl) noexcept {
   const auto rect = map_logical_scissor(g_gxState.texCopySrc);
-  const auto [dstWidth, dstHeight] = scale_copy_dst(g_gxState.texCopyDstWidth, g_gxState.texCopyDstHeight);
   const auto texCopyFmt = g_gxState.texCopyFmt;
+  // Reduction copies (source at least 2x the destination, e.g. mipmap box-filter copies) feed the
+  // stock post effects: glare/bloom chains blur them with taps offset by whole guest texels and then
+  // magnify them. Storing them at the upscaled size makes those taps s-times too fine, so the glow
+  // shrinks into a sharp halo. Keep them at native size so the effect matches the original at any
+  // internal resolution; the resolve box-filters the larger scaled source down.
+  const bool reductionCopy = !is_depth_format(texCopyFmt) &&
+                             static_cast<u32>(std::max(g_gxState.texCopySrc.width, 0)) >= 2u * g_gxState.texCopyDstWidth &&
+                             static_cast<u32>(std::max(g_gxState.texCopySrc.height, 0)) >= 2u * g_gxState.texCopyDstHeight;
+  const auto [dstWidth, dstHeight] =
+      reductionCopy ? aurora::Vec2<uint32_t>{std::max<u32>(g_gxState.texCopyDstWidth, 1),
+                                             std::max<u32>(g_gxState.texCopyDstHeight, 1)}
+                    : scale_copy_dst(g_gxState.texCopyDstWidth, g_gxState.texCopyDstHeight);
   const auto copy = texture::resolve_copy_texture({
       .dest = dest,
       .width = dstWidth,

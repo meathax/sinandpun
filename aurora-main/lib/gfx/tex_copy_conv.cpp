@@ -66,16 +66,36 @@ fn clamp_copy_uv(uv: vec2f) -> vec2f {
     return vec2f(uv.x, clamp(uv.y, ubuf.flags.z, ubuf.flags.w));
 }
 
+// One destination texel covers `footprint` source texels. Up to 2 texels a single bilinear tap
+// is exact (1:1 and 2x box copies); larger reductions (native-size post-effect copies taken from a
+// scaled EFB) average a grid of bilinear taps so the result matches GX's box filter instead of aliasing.
+fn copy_tap(uv: vec2f, footprint: vec2f) -> vec4f {
+    let n = vec2i(clamp(ceil(footprint * 0.5), vec2f(1.0), vec2f(8.0)));
+    if (n.x == 1 && n.y == 1) {
+        return textureSampleLevel(src, src_samp, clamp_copy_uv(uv), 0.0);
+    }
+    let texel = footprint / vec2f(textureDimensions(src));
+    var sum = vec4f(0.0);
+    for (var y = 0; y < n.y; y++) {
+        for (var x = 0; x < n.x; x++) {
+            let offset = ((vec2f(f32(x), f32(y)) + 0.5) / vec2f(n) - 0.5) * texel;
+            sum += textureSampleLevel(src, src_samp, clamp_copy_uv(uv + offset), 0.0);
+        }
+    }
+    return sum / f32(n.x * n.y);
+}
+
 fn sample_efb(uv: vec2f) -> vec4f {
-    let current = textureSample(src, src_samp, clamp_copy_uv(uv));
+    let footprint = max(abs(vec2f(dpdx(uv).x, dpdy(uv).y)) * vec2f(textureDimensions(src)), vec2f(1.0));
+    let current = copy_tap(uv, footprint);
     if (ubuf.copy_filter.w == 0.0) {
         return apply_opaque_alpha(current);
     }
 
     let pixel_size = vec2f(1.0, 1.0) / vec2f(textureDimensions(src));
     let row_stride = max(ubuf.flags.y, 1.0);
-    let prev = textureSample(src, src_samp, clamp_copy_uv(uv - vec2f(0.0, pixel_size.y * row_stride)));
-    let next = textureSample(src, src_samp, clamp_copy_uv(uv + vec2f(0.0, pixel_size.y * row_stride)));
+    let prev = copy_tap(uv - vec2f(0.0, pixel_size.y * row_stride), footprint);
+    let next = copy_tap(uv + vec2f(0.0, pixel_size.y * row_stride), footprint);
     let prev_rgb = floor(prev.rgb * 255.0 + vec3f(0.5));
     let current_rgb = floor(current.rgb * 255.0 + vec3f(0.5));
     let next_rgb = floor(next.rgb * 255.0 + vec3f(0.5));
