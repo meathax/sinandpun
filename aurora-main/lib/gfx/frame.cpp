@@ -906,6 +906,7 @@ void end_frame(EndFrameCallback callback) {
           }
           const wgpu::CommandEncoderDescriptor desc{.label="Native uncapped scene"};
           auto cmd=g_device.CreateCommandEncoder(&desc);
+          webgpu::gpu_prof::frame_begin(cmd, true);
           gx::g_velocityFrame = g_framePackets[frameSlot].frameId;
           gx::g_velocityWeight = weight < 0.f ? 1.f : weight;
           gx::g_nativeSceneWeight=weight;

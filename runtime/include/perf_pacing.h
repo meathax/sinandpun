@@ -16,6 +16,8 @@ enum Phase : int {
     kPhaseDvd,           // host disc reads on the guest thread
     kPhaseRso,           // stage module link
     kPhaseAlarm,         // alarm/audio service inside the pace wait
+    kPhaseViWait,        // guest VIWaitForRetrace (the game's own retrace wait)
+    kPhaseGxSync,        // game thread waiting for the GX worker to drain (GxWorker::Sync)
     kPhaseCount
 };
 

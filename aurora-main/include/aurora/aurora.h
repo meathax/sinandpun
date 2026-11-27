@@ -166,6 +166,13 @@ bool aurora_begin_frame_gx();
 AuroraImguiFrame* aurora_end_frame_window();
 // Takes ownership of frame.
 void aurora_end_frame_gx(AuroraImguiFrame* frame);
+// First half of aurora_end_frame_gx: drains the GX FIFO and texture work (everything that can still read
+// guest memory). aurora_end_frame_gx skips it when already done this frame, so a producer thread can wait
+// for this half only and let the frame seal overlap its next frame.
+void aurora_end_frame_gx_flush();
+// True when aurora_begin_frame_window only needs per-frame bookkeeping (surface present, not paused), i.e.
+// it does not touch the surface and need not wait for a thread that is still encoding the previous frame.
+bool aurora_frame_window_steady();
 // Frees a frame that will not be ended.
 void aurora_release_imgui_frame(AuroraImguiFrame* frame);
 

@@ -14,6 +14,7 @@
 // SIN_SCREENSHOT=<file.png> (optional SIN_SCREENSHOT_DELAY=<seconds>, default 30) saves the final upscaled game
 // image once, before the overlay is drawn; independent of SIN_PERF_LOG.
 
+#include "gx_worker.h"
 #include "perf_pacing.h"
 #include "runtime_log.h"
 
@@ -162,6 +163,11 @@ struct PerfLog {
             uint32_t lastRetraces = VI_HLE_GetRetraceCount();
             uint32_t gfRead = g_gfWrite.load(std::memory_order_acquire);
             DWORD lastPageFaults = 0;
+            uint64_t lastGxCycles = 0;
+            {
+                uint64_t a = 0, b = 0;
+                GxWorker::PerfTake(a, b, lastGxCycles);
+            }
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 const auto now = Clock::now();
@@ -237,6 +243,14 @@ struct PerfLog {
                             "run n=%u p50=%.2f p99=%.2f p99.9=%.2f max=%.2f over25=%u | present_max_run=%.2f\n",
                             PerfPacing::SecondsSinceStart(), w.n, w.p50, w.p99, w.p999, w.max, w.over25, t.n, t.p50, t.p99, t.p999, t.max, t.over25,
                             presentMaxRun = std::max(presentMaxRun, static_cast<double>(timing.maxFrameTimeMs)));
+                }
+                {
+                    uint64_t syncNs = 0, syncs = 0, gxCycles = 0;
+                    GxWorker::PerfTake(syncNs, syncs, gxCycles);
+                    RT_LOGF(RT_TAG_RUNTIME, "[perf-gx] sync_wait=%.1fms/s syncs=%llu/s worker=%.1fMcyc/s\n",
+                            static_cast<double>(syncNs) / 1e6 / dt, static_cast<unsigned long long>(syncs / dt),
+                            static_cast<double>(gxCycles - lastGxCycles) * 1e-6 / dt);
+                    lastGxCycles = gxCycles;
                 }
                 lastPageFaults = pmc.PageFaultCount;
                 lastTime = now;

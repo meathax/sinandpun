@@ -807,6 +807,62 @@ float translation_delta_squared(const Mat3x4<float>& previous,
   return dx * dx + dy * dy + dz * dz;
 }
 
+// Skinned (PNMTXIDX) draws used to bypass the translation gate, and a lone previous/current pair was
+// accepted unconditionally. When one instance of a repeated skinned mesh (e.g. stage 2's harpoon
+// riders) leaves and another appears, that paired two different objects and the interpolated frames
+// blended one into the other: stretched bodies and long rope lines for one frame. A pair is plausible
+// only if its joint centroid moved within the per-frame gate and the joints kept their layout around
+// it: the squared residual over the mean squared radius is 2(1 - cos t) for a rotation by t, so 0.27
+// allows about 30 degrees (or ~1.5x scale) per guest frame.
+bool indexed_pair_plausible(const FrameTransformSnapshot& previous, const FrameTransformSnapshot& current) noexcept {
+  if (!previous.indexedMatrices || !current.indexedMatrices || previous.usedMatrixMask != current.usedMatrixMask ||
+      current.usedMatrixMask == 0) {
+    return false;
+  }
+  const auto translation = [](const Mat3x4<float>& m) {
+    return std::array<double, 3>{m.m0.w(), m.m1.w(), m.m2.w()};
+  };
+  std::array<double, 3> before{}, after{};
+  double count = 0;
+  for (size_t i = 0; i < MaxPnMtx; ++i) {
+    if ((current.usedMatrixMask & (1u << i)) == 0) continue;
+    const auto b = translation(previous.indexedMatrices->position[i]);
+    const auto a = translation(current.indexedMatrices->position[i]);
+    for (unsigned r = 0; r < 3; ++r) {
+      before[r] += b[r];
+      after[r] += a[r];
+    }
+    ++count;
+  }
+  double moved = 0;
+  for (unsigned r = 0; r < 3; ++r) {
+    before[r] /= count;
+    after[r] /= count;
+    moved += (after[r] - before[r]) * (after[r] - before[r]);
+  }
+  if (!(moved <= double(kMaximumTranslationPerFrame) * kMaximumTranslationPerFrame)) return false;
+  double residual = 0, extent = 0;
+  for (size_t i = 0; i < MaxPnMtx; ++i) {
+    if ((current.usedMatrixMask & (1u << i)) == 0) continue;
+    const auto b = translation(previous.indexedMatrices->position[i]);
+    const auto a = translation(current.indexedMatrices->position[i]);
+    for (unsigned r = 0; r < 3; ++r) {
+      const double x = a[r] - after[r], y = b[r] - before[r];
+      residual += (x - y) * (x - y);
+      extent += 0.5 * (x * x + y * y);
+    }
+  }
+  return std::isfinite(residual) && residual <= 0.27 * extent + 1e-6 * count;
+}
+
+// Same gate for any pair: rigid draws by translation, skinned draws by indexed_pair_plausible.
+bool snapshot_pair_plausible(const FrameTransformSnapshot& previous, const FrameTransformSnapshot& current) noexcept {
+  if (static_cast<bool>(previous.indexedMatrices) != static_cast<bool>(current.indexedMatrices)) return false;
+  if (current.indexedMatrices) return indexed_pair_plausible(previous, current);
+  return translation_delta_squared(previous.position, current.position) <=
+         kMaximumTranslationPerFrame * kMaximumTranslationPerFrame;
+}
+
 // 2*current - previous. Not a valid rigid transform, but it is only a matching
 // reference and its one-frame error stays far below instance spacing.
 Mat3x4<float> extrapolate_transform(const Mat3x4<float>& previous,
@@ -845,7 +901,7 @@ float snapshot_match_distance_squared(const FrameTransformEntry& previousEntry,
 
   // PNMTXIDX is an absolute palette slot baked into the vertices, so nearest matching
   // swaps joint histories. A changed mask has no safe correspondence: leave the draw.
-  if (previous.usedMatrixMask != current.usedMatrixMask) {
+  if (previous.usedMatrixMask != current.usedMatrixMask || !indexed_pair_plausible(previous, current)) {
     return std::numeric_limits<float>::infinity();
   }
 
@@ -1128,6 +1184,10 @@ void finalize_frame_interpolation() noexcept {
       // A unique draw has no identity ambiguity. Keep the conservative
       // interpolation fallback for malformed/non-finite matrices.
       if (groupPreviousIndices.size() == 1 && groupCurrentIndices.size() == 1) {
+        if (!snapshot_pair_plausible(s_previousFrameTransforms[groupPreviousIndices.front()].transform,
+                                     s_currentFrameTransforms[groupCurrentIndices.front()].transform)) {
+          continue;  // a replaced instance: snap instead of blending two objects
+        }
         currentToPrevious[groupCurrentIndices.front()] = groupPreviousIndices.front();
         previousMatched[groupPreviousIndices.front()] = 1;
         currentMatched[groupCurrentIndices.front()] = 1;
@@ -1167,11 +1227,7 @@ void finalize_frame_interpolation() noexcept {
           // instance; leave over-gate pairs unmatched so they snap instead of sweeping.
           const auto& previousEntry = s_previousFrameTransforms[groupPreviousIndices[i]];
           const auto& currentEntry = s_currentFrameTransforms[groupCurrentIndices[i]];
-          if (!previousEntry.transform.indexedMatrices &&
-              !currentEntry.transform.indexedMatrices &&
-              !(translation_delta_squared(previousEntry.transform.position,
-                                          currentEntry.transform.position) <=
-                kMaximumTranslationPerFrame * kMaximumTranslationPerFrame)) {
+          if (!snapshot_pair_plausible(previousEntry.transform, currentEntry.transform)) {
             continue;
           }
           currentToPrevious[groupCurrentIndices[i]] = groupPreviousIndices[i];

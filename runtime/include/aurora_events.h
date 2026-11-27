@@ -134,12 +134,27 @@ inline void ApplyPendingDynamicAspectSurface() {
 
 void GxWorkerBeginFrame();
 void GxWorkerEndFrame(AuroraImguiFrame* imgui);
+void GxWorkerEndFrameFlush();
+
+// SIN_ASYNC_SEAL=0 restores the fully joined frame end (A/B and fallback).
+inline bool AsyncFrameSealEnabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("SIN_ASYNC_SEAL");
+        return !(v && *v == '0');
+    }();
+    return enabled;
+}
 void SetAuroraFrameGxBegun(bool begun);
 
 inline bool BeginAuroraFrame() {
     if (GxWorker::ShouldDefer()) {
-        // The window half can touch the surface and render targets the worker draws into.
-        GxWorker::Sync();
+        // The window half can touch the surface and render targets the worker draws into. In the
+        // steady state (surface present, not paused) it only starts ImGui/Reflex bookkeeping, so it
+        // need not wait for the worker to finish sealing the previous frame; the GX half below is
+        // recorded behind that seal anyway.
+        if (!AsyncFrameSealEnabled() || !aurora_frame_window_steady()) {
+            GxWorker::Sync();
+        }
         bool begun = false;
         {
             PerfStats::WaitScope wait;
@@ -165,6 +180,16 @@ inline bool BeginAuroraFrame() {
 inline void EndAuroraFrame() {
     if (GxWorker::ShouldDefer()) {
         AuroraImguiFrame* imgui = aurora_end_frame_window();
+        if (AsyncFrameSealEnabled()) {
+            // Join only the half that can still read guest memory (FIFO/texture drains). The seal
+            // (native-scene matching, interpolation, render hand-off) touches host data only and
+            // overlaps the guest's next frame; later GX work queues behind it in order.
+            GxWorker::Submit([] { GxWorkerEndFrameFlush(); });
+            GxWorker::Sync();
+            GxWorker::Submit([imgui] { GxWorkerEndFrame(imgui); });
+            GxWorker::Kick();
+            return;
+        }
         GxWorker::Submit([imgui] { GxWorkerEndFrame(imgui); });
         GxWorker::Sync();
         return;

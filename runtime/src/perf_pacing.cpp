@@ -26,6 +26,7 @@ struct State {
     Clock::time_point last{};
     bool haveLast = false;
     bool logSpikes = false;
+    bool logAll = false;  // SIN_PERF_SPIKES=2: a line for every guest frame
     std::mutex mutex;  // guards the sample vectors (guest thread writes, perf thread reads once a second)
     std::vector<float> window;
     static constexpr size_t kBins = 4000;  // 0.1 ms bins up to 400 ms
@@ -59,6 +60,7 @@ bool ComputeEnabled() {
     };
     (void)ProcessStart();
     S().logSpikes = on("SIN_PERF_SPIKES");
+    if (const char* v = std::getenv("SIN_PERF_SPIKES")) S().logAll = *v == '2';
     return on("SIN_PERF_LOG") || S().logSpikes;
 }
 
@@ -154,7 +156,7 @@ void OnGuestFrame() noexcept {
                 static_cast<unsigned long long>((s.totalDvdBytes.load() - s.linkBytes) >> 10),
                 static_cast<double>(s.totalDvdNs.load() - s.linkNs) / 1e6, s.linkMs);
     }
-    if (s.logSpikes && ms > 25.0) {
+    if (s.logSpikes && (ms > 25.0 || s.logAll)) {
         uint64_t faults = 0;
         size_t wsMb = 0;
 #if defined(_WIN32)
@@ -163,18 +165,21 @@ void OnGuestFrame() noexcept {
         faults = pmc.PageFaultCount;
         wsMb = static_cast<size_t>(pmc.WorkingSetSize >> 20);
 #endif
-        const double other = ms - ph[kPhaseEndFrame] - ph[kPhasePace] - ph[kPhasePrewarm] - ph[kPhaseDvd] - ph[kPhaseRso];
+        const double other = ms - ph[kPhaseEndFrame] - ph[kPhasePace] - ph[kPhasePrewarm] - ph[kPhaseDvd] - ph[kPhaseRso] -
+                             ph[kPhaseViWait] - ph[kPhaseGxSync];
         const char* cause = "guest/other";
         if (ph[kPhaseDvd] > 8.0) cause = "dvd";
         else if (ph[kPhaseRso] > 8.0) cause = "rso-link";
         else if (ph[kPhaseEndFrame] > 8.0) cause = "end-frame(render worker backpressure)";
         else if (ph[kPhasePrewarm] > 8.0) cause = "prewarm/events";
         else if (ph[kPhasePace] > 17.5) cause = "pace(oversleep)";
+        else if (ph[kPhaseGxSync] > 8.0) cause = "gx-sync";
+        else if (ph[kPhaseViWait] > 8.0) cause = "vi-wait(game retrace wait)";
         RT_LOGF(RT_TAG_RUNTIME,
                 "[spike] t=%.1f interval=%.1fms endframe=%.1f pace=%.1f prewarm=%.1f dvd=%.1f(%u reads %lluKB max %.1f) rso=%.1f "
-                "other=%.1f faults+=%llu ws=%zuMB cause=%s\n",
+                "viwait=%.1f gxsync=%.1f other=%.1f faults+=%llu ws=%zuMB cause=%s\n",
                 std::chrono::duration<double>(now - ProcessStart()).count(), ms, ph[kPhaseEndFrame], ph[kPhasePace], ph[kPhasePrewarm], ph[kPhaseDvd], reads,
-                static_cast<unsigned long long>(bytes >> 10), dvdMax, ph[kPhaseRso], other,
+                static_cast<unsigned long long>(bytes >> 10), dvdMax, ph[kPhaseRso], ph[kPhaseViWait], ph[kPhaseGxSync], other,
                 static_cast<unsigned long long>(faults - s.lastFaults), wsMb, cause);
         s.lastFaults = faults;
     }

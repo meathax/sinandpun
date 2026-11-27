@@ -9,7 +9,9 @@ namespace aurora::webgpu::gpu_prof {
 void initialize();
 void shutdown();
 
-void frame_begin(const wgpu::CommandEncoder& encoder);
+// idleRender: the uncapped mode's retained-scene re-render. SIN_GPU_PROF=idle profiles only those, otherwise only
+// native (guest) frames are profiled.
+void frame_begin(const wgpu::CommandEncoder& encoder, bool idleRender = false);
 void frame_end(const wgpu::CommandEncoder& encoder);
 void after_submit();
 const wgpu::PassTimestampWrites* pass_writes(std::string_view name);

@@ -634,14 +634,28 @@ bool begin_frame_gx() noexcept {
 
 bool begin_frame() noexcept { return begin_frame_window() && begin_frame_gx(); }
 
-void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept {
-  ZoneScoped;
 #ifdef AURORA_ENABLE_GX
+// Set by end_frame_gx_flush, consumed by end_frame_gx (both on the GX producer thread).
+bool g_endFrameFlushed = false;
+#endif
+
+void end_frame_gx_flush() noexcept {
+#ifdef AURORA_ENABLE_GX
+  if (g_endFrameFlushed) return;
   gx::flush_texture_destructions();
   gx::fifo::drain();
   gx::fifo::end_frame();
   gx::texture::end_frame();
   gfx::finish();
+  g_endFrameFlushed = true;
+#endif
+}
+
+void end_frame_gx(imgui::DrawData imguiDrawData, uint64_t reflexFrame) noexcept {
+  ZoneScoped;
+#ifdef AURORA_ENABLE_GX
+  end_frame_gx_flush();
+  g_endFrameFlushed = false;
   const auto pixelPerfectGui = gfx::pixel_perfect_gui_present();
 
   // A display copy (the XFB) is what reaches the screen; post-copy EFB draws must not leak in.
@@ -1141,6 +1155,16 @@ void aurora_end_frame() { aurora::end_frame(); }
 bool aurora_begin_frame_window() { return aurora::begin_frame_window(); }
 
 bool aurora_begin_frame_gx() { return aurora::begin_frame_gx(); }
+
+void aurora_end_frame_gx_flush() { aurora::end_frame_gx_flush(); }
+
+bool aurora_frame_window_steady() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::window::is_presentable() && !aurora::window::is_paused() && static_cast<bool>(aurora::g_surface);
+#else
+  return true;
+#endif
+}
 
 AuroraImguiFrame* aurora_end_frame_window() {
 #ifdef AURORA_ENABLE_GX

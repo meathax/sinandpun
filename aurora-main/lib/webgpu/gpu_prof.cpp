@@ -133,6 +133,7 @@ void log_accumulate(const Slot& slot, const uint64_t* ts, uint64_t frameBegin, u
 }
 
 bool g_enabled = false;
+bool g_idleOnly = false;
 bool g_timestampsEnabled = false;
 wgpu::QuerySet g_querySet;
 wgpu::Buffer g_resolveBuffer;
@@ -418,8 +419,8 @@ void shutdown() {
   g_framePending = false;
 }
 
-void frame_begin(const wgpu::CommandEncoder& encoder) {
-  if (!g_enabled) {
+void frame_begin(const wgpu::CommandEncoder& encoder, bool idleRender) {
+  if (!g_enabled || idleRender != g_idleOnly) {
     return;
   }
   auto& slot = record_slot();

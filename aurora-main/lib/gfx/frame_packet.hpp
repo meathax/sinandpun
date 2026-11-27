@@ -96,6 +96,9 @@ struct RenderPass {
   bool applyGlobalIllumination = false;
   std::vector<webgpu::rtgi::Triangle> giTriangles;
   std::vector<webgpu::rtgi::Node> giNodes;
+  // Set while the BVH is built in the background (rtgi::submit_bvh_job): it owns the final triangles and
+  // the nodes until the render worker joins it at the pass's first (native) encode.
+  std::shared_ptr<webgpu::rtgi::BvhJob> giBvhJob;
   std::vector<webgpu::rtgi::Triangle> giUnretained;
   std::vector<webgpu::rtgi::Node> giUnretainedNodes;
   size_t giRetainedCount = 0;

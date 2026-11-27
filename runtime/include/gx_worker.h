@@ -77,6 +77,13 @@ void SetWaitCallback(void (*callback)());
 // Blocks until every recorded command has executed.
 void Sync();
 
+// Hands every recorded command to the worker now without waiting for it.
+void Kick();
+
+// Perf counters (SIN_PERF_LOG): Sync wait time and calls since the previous call, and the worker
+// thread's cumulative CPU cycles.
+void PerfTake(uint64_t& syncNs, uint64_t& syncs, uint64_t& workerCycles);
+
 // GX entry points run inline on the game thread while inside (after a Sync), for work whose
 // results the guest needs immediately.
 void BeginInline();

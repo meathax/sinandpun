@@ -23,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <type_traits>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -279,6 +280,14 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
     const webgpu::TextureWithSampler scene{.texture = passInfo.copySourceTexture, .view = passInfo.copySourceView,
       .size = size, .format = attachment.format, .sampler = webgpu::present_source().sampler};
     const webgpu::Viewport full{0,0,float(size.width),float(size.height),0,1};
+    if (passInfo.giBvhJob) {
+      // Join the background BVH build (see RenderPass::giBvhJob); only the render worker reaches here.
+      auto& pending = const_cast<std::remove_cvref_t<decltype(passInfo)>&>(passInfo);
+      webgpu::rtgi::wait_bvh_job(*pending.giBvhJob);
+      pending.giTriangles.swap(pending.giBvhJob->triangles);
+      pending.giNodes.swap(pending.giBvhJob->nodes);
+      pending.giBvhJob.reset();
+    }
     const bool rayTraced = !passInfo.giNodes.empty();
     // Replays (interpolation slots and uncapped idle re-renders) are encoded and
     // submitted while the next native frame may already have queued its GI

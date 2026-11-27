@@ -1,3 +1,6 @@
+#include <cstdlib>
+#include <cstdio>
+#include <chrono>
 #include "fifo.hpp"
 
 #include "../thread.hpp"
@@ -70,7 +73,16 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
                     sStreamBase + detail::sBufferSize);
       const auto start = static_cast<uint32_t>(processed - sStreamBase);
       const auto size = static_cast<uint32_t>(target - processed);
+      static const bool slowLog = [] {
+        const char* v = std::getenv("SIN_GX_SLOW_LOG");
+        return v && *v && *v != '0';
+      }();
+      const auto slowStart = slowLog ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
       result = process(detail::sBufferData + start, size);
+      if (slowLog) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slowStart).count();
+        if (ms > 8.0) std::fprintf(stderr, "[fifo-slow] %u bytes took %.1fms\n", size, ms);
+      }
     }
     AURORA_ASSERT(result.bytesProcessed > 0 && result.bytesProcessed <= target - processed,
                   "FIFO processor made invalid progress: processed {} of {} remaining bytes", result.bytesProcessed,

@@ -995,6 +995,7 @@ PPC_NATIVE_OVERRIDE_VOID(801BC3B0, VIGetCurrentLine_HLE_801bac48, (CpuContext* c
 extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
+    PerfPacing::PhaseScope viWaitPhase(PerfPacing::kPhaseViWait);
 
     {
         static std::atomic<int> s_waitLogs{0};

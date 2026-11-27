@@ -466,8 +466,28 @@ std::vector<std::shared_ptr<NativeSceneDraw>> retain_native_scene() {
   return owners;
 }
 
+// Identical draws (same mesh, material and camera; e.g. every enemy's harpoon rope) are told apart by
+// nearest center. When one leaves or appears, the nearest old copy can belong to another object, and the
+// interpolated frames then blend between two objects' poses: long stretched slabs for one frame. Accept a
+// previous draw only if its vertices keep their layout around the center: the squared residual over the
+// mean squared radius is 2(1 - cos t) for a rotation by t, so 0.27 allows about 30 degrees (or ~1.5x
+// scale) per guest frame, far beyond real motion, while differently oriented copies fail.
+bool same_shape(const Draw& old, const Draw& now) noexcept {
+  double residual = 0, extent = 0;
+  for (size_t v = 0; v < now.pose.size(); ++v) {
+    for (unsigned r = 0; r < 3; ++r) {
+      const double a = now.pose[v].pos[r] - now.center[r];
+      const double b = old.pose[v].pos[r] - old.center[r];
+      residual += (a - b) * (a - b);
+      extent += 0.5 * (a * a + b * b);
+    }
+  }
+  return residual <= 0.27 * extent + 1e-6 * double(now.pose.size());
+}
+
 bool seal_native_scene() noexcept {
   const auto started = std::chrono::steady_clock::now();
+  size_t shapeRejected = 0;
   if (current.empty()) {
     previous.clear();
     return false;
@@ -487,6 +507,9 @@ bool seal_native_scene() noexcept {
     size_t best = SIZE_MAX;
     float distance = 1500.f * 1500.f;
     if (const auto it = history.find(draw.key); it != history.end()) {
+      // Nearest first; the first previous copy with the same shape wins (usually the first checked).
+      static std::vector<std::pair<float, size_t>> candidates;
+      candidates.clear();
       for (size_t index : it->second) {
         const auto& old = previous[index];
         if (old.used || old.pose.size() != draw.pose.size())
@@ -496,10 +519,17 @@ bool seal_native_scene() noexcept {
           const float delta = old.center[r] - draw.center[r];
           d += delta * delta;
         }
-        if (d < distance) {
+        if (d < distance)
+          candidates.emplace_back(d, index);
+      }
+      std::sort(candidates.begin(), candidates.end());
+      for (const auto& [d, index] : candidates) {
+        if (same_shape(previous[index], draw)) {
           best = index;
           distance = d;
+          break;
         }
+        ++shapeRejected;
       }
     }
     draw.previousIndex = best;
@@ -552,6 +582,8 @@ bool seal_native_scene() noexcept {
     }
   }
   size_t matched = 0, welded = 0, translucent = 0, translucentMatched = 0;
+  static size_t shapeRejectedTotal = 0;
+  shapeRejectedTotal += shapeRejected;
   const size_t vertices = totalVertices;
   const auto beforePose = [](const Draw& draw, size_t v) -> const Pose& {
     return draw.matched ? previous[draw.previousIndex].pose[v] : draw.pose[v];
@@ -625,10 +657,10 @@ bool seal_native_scene() noexcept {
   if (++frames % 60 == 0)
     std::fprintf(stderr,
                  "[native-scene] draws=%zu matched=%zu vertices=%zu shared=%zu records=%zu rejected=%u capture=%.3fms "
-                 "seal=%.3fms translucent=%zu translucent_matched=%zu\n",
+                 "seal=%.3fms translucent=%zu translucent_matched=%zu shape_rejected=%zu\n",
                  current.size(), matched, vertices, welded, packed.size(), rejected, captureMs,
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
-                 translucent, translucentMatched);
+                 translucent, translucentMatched, shapeRejectedTotal);
   recycled.clear();
   for (auto it = previous.rbegin(); it != previous.rend(); ++it)
     recycled.push_back(std::move(*it));

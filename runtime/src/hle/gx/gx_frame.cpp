@@ -130,6 +130,12 @@ void GxWorkerBeginFrame() {
     }
 }
 
+void GxWorkerEndFrameFlush() {
+    if (g_frameGxBegun) {
+        aurora_end_frame_gx_flush();
+    }
+}
+
 void GxWorkerEndFrame(AuroraImguiFrame* imgui) {
     if (g_frameGxBegun) {
         aurora_end_frame_gx(imgui);

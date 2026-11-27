@@ -45,7 +45,16 @@ extern "C" void aurora_set_strong_bounce(bool enabled) { s_strongBounce.store(en
 #include "../webgpu/rtgi_history.hpp"
 
 #include <array>
+#include "../thread.hpp"
+
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <thread>
+#include <mutex>
+#include <deque>
+#include <condition_variable>
 #include <cstring>
 #include <new>
 #include <optional>
@@ -641,6 +650,46 @@ void restore_efb() {
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_recorder.cachedScissor});
 }
 
+} // namespace
+} // namespace aurora::gfx
+
+namespace aurora::webgpu::rtgi {
+void submit_bvh_job(std::shared_ptr<BvhJob> job) {
+  struct Builder {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::deque<std::shared_ptr<BvhJob>> queue;
+    Builder() {
+      std::thread([this] {
+        // The render worker joins this build before encoding the lit pass, so it must not wait behind
+        // normal-priority work.
+        thread::set_current({.name = "Aurora RTGI BVH", .priority = thread::Priority::High});
+        for (;;) {
+          std::shared_ptr<BvhJob> next;
+          {
+            std::unique_lock lock{mutex};
+            cv.wait(lock, [this] { return !queue.empty(); });
+            next = std::move(queue.front());
+            queue.pop_front();
+          }
+          build_bvh_parallel(next->triangles, next->nodes);
+          next->done.store(true, std::memory_order_release);
+          next->done.notify_all();
+        }
+      }).detach();
+    }
+  };
+  static Builder* builder = new Builder();  // intentionally leaked: the detached thread outlives statics
+  {
+    std::lock_guard lock{builder->mutex};
+    builder->queue.push_back(std::move(job));
+  }
+  builder->cv.notify_one();
+}
+} // namespace aurora::webgpu::rtgi
+
+namespace aurora::gfx {
+namespace {
 void enqueue_op(FramePacket& frame, uint32_t opIndex) {
   if (opIndex >= frame.ops.size() || g_recorder.suppressRenderWorker) {
     return;
@@ -654,7 +703,19 @@ void enqueue_op(FramePacket& frame, uint32_t opIndex) {
       return;
     }
     if (op.encoderTask || op.readbackTask) render_worker::clear_idle_render();
+    static const bool slowLog = [] {
+      const char* v = std::getenv("SIN_GX_SLOW_LOG");
+      return v && *v && *v != '0';
+    }();
+    const auto slowStart = slowLog ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     encode_op(packet->encoder, *packet, op);
+    if (slowLog) {
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slowStart).count();
+      if (ms > 8.0) {
+        std::fprintf(stderr, "[encode-slow] op type=%d pass='%s' cmds=%zu uploads=%zu took %.1fms\n",
+                     int(op.type), op.renderPass ? op.renderPass->label.c_str() : "", op.renderPass ? op.renderPass->commands.size() : size_t{0}, op.textureUploads.size(), ms);
+      }
+    }
   });
 }
 
@@ -685,12 +746,24 @@ void enqueue_pass(FramePacket& frame, uint32_t passIndex) {
         }
       }
       pass.giNodes.swap(frame.giNodeScratch);
-      webgpu::rtgi::build_bvh(pass.giTriangles, pass.giNodes);
+      static const bool deferBvh = [] {
+        const char* v = std::getenv("SIN_BVH_DEFER");
+        return !(v && *v == '0');
+      }();
+      if (deferBvh && !pass.giTriangles.empty()) {
+        auto job = std::make_shared<webgpu::rtgi::BvhJob>();
+        job->triangles.swap(pass.giTriangles);
+        job->nodes.swap(pass.giNodes);
+        pass.giBvhJob = job;
+        webgpu::rtgi::submit_bvh_job(std::move(job));
+      } else {
+        webgpu::rtgi::build_bvh(pass.giTriangles, pass.giNodes);
+      }
       pass.discardable = false;
       g_recorder.giScheduled = true;
     }
   }
-  if (pass.giNodes.empty()) {
+  if (pass.giNodes.empty() && !pass.giBvhJob) {
     pass.giTriangles.clear();
     if (pass.giTriangles.capacity() > frame.giTriangleScratch.capacity())
       pass.giTriangles.swap(frame.giTriangleScratch);
