@@ -473,16 +473,28 @@ std::vector<std::shared_ptr<NativeSceneDraw>> retain_native_scene() {
 // mean squared radius is 2(1 - cos t) for a rotation by t, so 0.27 allows about 30 degrees (or ~1.5x
 // scale) per guest frame, far beyond real motion, while differently oriented copies fail.
 bool same_shape(const Draw& old, const Draw& now) noexcept {
+  // Per vertex as well: one vertex pulled from another object's place passes the average.
+  static std::vector<std::pair<double, double>> perVertex;  // (residual, radius), seal thread only
+  perVertex.resize(now.pose.size());
   double residual = 0, extent = 0;
   for (size_t v = 0; v < now.pose.size(); ++v) {
+    double res = 0, rad = 0;
     for (unsigned r = 0; r < 3; ++r) {
       const double a = now.pose[v].pos[r] - now.center[r];
       const double b = old.pose[v].pos[r] - old.center[r];
-      residual += (a - b) * (a - b);
-      extent += 0.5 * (a * a + b * b);
+      res += (a - b) * (a - b);
+      rad += 0.5 * (a * a + b * b);
     }
+    perVertex[v] = {res, rad};
+    residual += res;
+    extent += rad;
   }
-  return residual <= 0.27 * extent + 1e-6 * double(now.pose.size());
+  const double n = double(now.pose.size());
+  if (residual > 0.27 * extent + 1e-6 * n) return false;
+  const double meanRadius = n > 0 ? extent / n : 0;
+  for (const auto& [res, rad] : perVertex)
+    if (res > 0.27 * (rad + meanRadius) + 1e-6) return false;
+  return true;
 }
 
 bool seal_native_scene() noexcept {

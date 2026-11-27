@@ -841,6 +841,9 @@ bool indexed_pair_plausible(const FrameTransformSnapshot& previous, const FrameT
     moved += (after[r] - before[r]) * (after[r] - before[r]);
   }
   if (!(moved <= double(kMaximumTranslationPerFrame) * kMaximumTranslationPerFrame)) return false;
+  // Per joint as well as overall: when a slot holds a different bone than last frame, the averages
+  // barely move but that one joint (and every vertex on it) is blended from another bone's place.
+  std::array<double, MaxPnMtx> jointResidual{}, jointRadius{};
   double residual = 0, extent = 0;
   for (size_t i = 0; i < MaxPnMtx; ++i) {
     if ((current.usedMatrixMask & (1u << i)) == 0) continue;
@@ -848,11 +851,19 @@ bool indexed_pair_plausible(const FrameTransformSnapshot& previous, const FrameT
     const auto a = translation(current.indexedMatrices->position[i]);
     for (unsigned r = 0; r < 3; ++r) {
       const double x = a[r] - after[r], y = b[r] - before[r];
-      residual += (x - y) * (x - y);
-      extent += 0.5 * (x * x + y * y);
+      jointResidual[i] += (x - y) * (x - y);
+      jointRadius[i] += 0.5 * (x * x + y * y);
     }
+    residual += jointResidual[i];
+    extent += jointRadius[i];
   }
-  return std::isfinite(residual) && residual <= 0.27 * extent + 1e-6 * count;
+  if (!std::isfinite(residual) || residual > 0.27 * extent + 1e-6 * count) return false;
+  const double meanRadius = extent / count;
+  for (size_t i = 0; i < MaxPnMtx; ++i) {
+    if ((current.usedMatrixMask & (1u << i)) == 0) continue;
+    if (jointResidual[i] > 0.27 * (jointRadius[i] + meanRadius) + 1e-6) return false;
+  }
+  return true;
 }
 
 // Same gate for any pair: rigid draws by translation, skinned draws by indexed_pair_plausible.
