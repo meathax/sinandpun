@@ -25,6 +25,9 @@ NativeSceneDraw* record_native_scene(const ShaderConfig&, GXPrimitive, const uin
                                      HashType material, bool translucent) noexcept;
 void record_ray_trace_geometry(const ShaderConfig&, GXPrimitive, const uint8_t*, uint16_t);
 bool seal_native_scene() noexcept;
+// Call at the start of every draw chunk: record_ray_trace_geometry's decoded positions are reused by the
+// native-scene capture of the same chunk only.
+void reset_decoded_chunk() noexcept;
 extern thread_local float g_nativeSceneWeight;
 extern thread_local uint64_t g_velocityFrame, g_presentedVelocityFrame;
 extern thread_local float g_velocityWeight, g_presentedVelocityWeight;

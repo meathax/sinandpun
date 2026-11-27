@@ -134,7 +134,18 @@ struct Join {
 struct JoinHash {
   size_t operator()(const Join& j) const { return xxh3_hash_s(j.xyz.data(), sizeof(j.xyz), j.camera); }
 };
+// World positions of the chunk record_ray_trace_geometry just decoded (FIFO thread only). Valid only for
+// the same vertex pointer, count and shader config, and only when every vertex decoded.
+struct DecodedChunk {
+  const uint8_t* vertices = nullptr;
+  uint16_t count = 0;
+  const ShaderConfig* config = nullptr;
+  bool valid = false;
+};
+DecodedChunk g_decoded;
+const std::vector<webgpu::rtgi::Point>* g_decodedPositions = nullptr;
 } // namespace
+void reset_decoded_chunk() noexcept { g_decoded.valid = false; }
 void record_ray_trace_geometry(const ShaderConfig& config, GXPrimitive primitive, const uint8_t* vertices, uint16_t count) {
   if (primitive != GX_TRIANGLES && primitive != GX_TRIANGLESTRIP && primitive != GX_TRIANGLEFAN &&
       primitive != GX_QUADS) return;
@@ -148,6 +159,8 @@ void record_ray_trace_geometry(const ShaderConfig& config, GXPrimitive primitive
   // recover its actual textured radiance from the matched EFB.
   thread_local std::vector<webgpu::rtgi::Point> positions;
   positions.resize(count);
+  g_decoded.valid = false;
+  g_decodedPositions = &positions;
   for (uint32_t i = 0; i < count; ++i) {
     const auto* vertex = vertices + size_t(i) * config.vtxStride;
     const auto& matrixAttribute = config.attrs[GX_VA_PNMTXIDX];
@@ -159,6 +172,8 @@ void record_ray_trace_geometry(const ShaderConfig& config, GXPrimitive primitive
     for (float value : positions[i])
       if (!finite(value) || std::abs(value) > 1.e7f) return;
   }
+  // The native-scene capture of this same chunk computes the identical transform; let it reuse these.
+  g_decoded = {vertices, count, &config, true};
   const auto emit = [&](unsigned a, unsigned bIndex, unsigned c) {
     if (triangles->size() < webgpu::rtgi::LiveTriangleLimit && positions[a] != positions[bIndex] &&
         positions[a] != positions[c] && positions[bIndex] != positions[c])
@@ -217,6 +232,8 @@ bool capture_scene_vertices(Draw& draw, const ShaderConfig& config, const uint8_
   const auto& nrmAttr = config.attrs[GX_VA_NRM];
   const auto indexed = [](const auto& a) { return a.attrType == GX_INDEX8 || a.attrType == GX_INDEX16; };
   const bool cacheable = indexed(posAttr) && (indexed(nrmAttr) || nrmAttr.attrType == GX_NONE);
+  const bool decodedChunk = g_decoded.valid && g_decoded.vertices == vertices && g_decoded.count == count &&
+                            g_decoded.config == &config && g_decodedPositions && g_decodedPositions->size() >= count;
 
   for (uint32_t i = 0; i < count; ++i) {
     const uint8_t* vertex = vertices + size_t(i) * config.vtxStride;
@@ -255,7 +272,10 @@ bool capture_scene_vertices(Draw& draw, const ShaderConfig& config, const uint8_
       }
     }
     float p[3]{}, n[3]{1.f, 0.f, 0.f};
-    if (!attribute(config, vertex, GX_VA_POS, p, 3) || !attribute(config, vertex, GX_VA_NRM, n, 3)) {
+    // Reuse the world position record_ray_trace_geometry decoded for this exact chunk (bit-identical:
+    // same attribute decode and transform); translucent draws need the local position for their key.
+    const bool reuse = decodedChunk && !draw.translucent;
+    if ((!reuse && !attribute(config, vertex, GX_VA_POS, p, 3)) || !attribute(config, vertex, GX_VA_NRM, n, 3)) {
       ++rejected;
       return false;
     }
@@ -264,7 +284,10 @@ bool capture_scene_vertices(Draw& draw, const ShaderConfig& config, const uint8_
     if (draw.translucent)
       key.update(p, sizeof(p));
     Pose pose;
-    pose.pos = transform(g_gxState.pnMtx[matrix].pos, p, 1.f);
+    if (reuse)
+      pose.pos = (*g_decodedPositions)[i];
+    else
+      pose.pos = transform(g_gxState.pnMtx[matrix].pos, p, 1.f);
     pose.normal = transform(g_gxState.pnMtx[matrix].nrm, n, 0.f);
     for (unsigned r = 0; r < 3; ++r)
       if (!finite(pose.pos[r]) || std::abs(pose.pos[r]) > 1.e9f || !finite(pose.normal[r])) {

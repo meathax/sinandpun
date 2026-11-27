@@ -664,6 +664,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   } else if (prim == GX_POINTS) {
     instanceCount = vtxCount;
   }
+  reset_decoded_chunk();
   if (aurora_ray_traced_gi_enabled() && state.projType == GX_PERSPECTIVE && state.depthCompare &&
       state.depthUpdate && state.colorUpdate && state.blendMode == GX_BM_NONE) {
     record_ray_trace_geometry(cache.config.shaderConfig, prim, sourceVertices, vtxCount);
@@ -786,6 +787,7 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& 
     } else {
       lastDraw->idxRange.size += idxRange.size;
     }
+    reset_decoded_chunk();
     if (aurora_ray_traced_gi_enabled() && g_gxState.projType == GX_PERSPECTIVE && g_gxState.depthCompare &&
         g_gxState.depthUpdate && g_gxState.colorUpdate && g_gxState.blendMode == GX_BM_NONE) {
       record_ray_trace_geometry(sDrawCache.config.shaderConfig, prim, vertexData.data(), vtxCount);

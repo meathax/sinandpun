@@ -1,3 +1,4 @@
+#include <chrono>
 #include "reflex.hpp"
 #include "dlss.hpp"
 
@@ -144,10 +145,23 @@ void begin() {
         std::shared_lock lock(lifetime);
         if (!device || !active()) return;
         frame = ++sequence;
-        if (const auto error = webgpu::dlss::fg_sleep(frame) ? NVAPI_OK : sleepFrame(device); error != NVAPI_OK) {
+        // The producer is a 60 Hz guest already paced to its VI retrace, and this sleep runs right after
+        // that wait. In heavy GPU phases (stage section changes) the driver held it 18-25 ms for several
+        // frames in a row, making each of them late. A sleep longer than half a guest frame suspends the
+        // driver sleep for the next 60 frames (markers and low-latency mode stay on); normal sleeps are
+        // unchanged. Removing the sleep outright is worse (presents fell 118 -> 103 fps in testing).
+        static uint32_t suspended = 0;
+        const bool skipSleep = suspended > 0;
+        if (suspended > 0) --suspended;
+        const auto sleepStart = std::chrono::steady_clock::now();
+        if (const auto error = webgpu::dlss::fg_sleep(frame) ? NVAPI_OK : (skipSleep ? NVAPI_OK : sleepFrame(device));
+            error != NVAPI_OK) {
             enabled.store(false);
             std::fprintf(stderr, "[reflex] sleep failed: %d\n", int(error));
             return;
+        }
+        if (!skipSleep && std::chrono::steady_clock::now() - sleepStart > std::chrono::milliseconds(8)) {
+            suspended = 60;
         }
         producer.store(frame);
         if (frame == 120 && getStatus) {
