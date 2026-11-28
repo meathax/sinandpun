@@ -550,18 +550,33 @@ public:
             return false;
         };
         bool explicitFile = false;
-        if (!requestedKeyFile.empty()) {
-            explicitFile = true;
-            scan(requestedKeyFile);
-        } else {
+        fs::path chosen = requestedKeyFile;
+        if (chosen.empty()) {
             const wchar_t* configured = _wgetenv(L"SIN_WII_KEY_FILE");
-            if (configured && *configured) {
-                explicitFile = true;
-                scan(fs::path(configured));
-            } else {
-                for (const auto& file : NearbyKeyFiles(image))
-                    if (scan(file)) break;
-            }
+            if (configured && *configured) chosen = fs::path(configured);
+        }
+        std::vector<fs::path> scanned;
+        auto scanOnce = [&](const fs::path& file) {
+            std::error_code ec;
+            const auto canonical = fs::weakly_canonical(file, ec);
+            for (const auto& seen : scanned)
+                if (seen == canonical) return false;
+            scanned.push_back(canonical);
+            return scan(file);
+        };
+        if (!chosen.empty()) {
+            explicitFile = true;
+            scanOnce(chosen);
+        }
+        // A chosen file that does not unlock the disc (a Wii U key list, a NAND dump) must not hide a working key
+        // beside it: an RVZ/WIA of the same game carries the title key, and other key files may hold the common key.
+        if (!matcher.Matched()) {
+            for (const auto& file : NearbyKeyFiles(image))
+                if (scanOnce(file)) break;
+        }
+        if (!matcher.Matched() && !chosen.empty()) {
+            for (const auto& file : NearbyKeyFiles(chosen))
+                if (scanOnce(file)) break;
         }
         if (!matcher.Matched()) throw KeyRequired{KeyFailureMessage(notes, report, explicitFile)};
         const uint8_t* titleKey = matcher.TitleKey();
