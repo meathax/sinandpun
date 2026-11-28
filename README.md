@@ -4,16 +4,35 @@ A native PC port of Treasure's Wii rail shooter. Run the original campaign with 
 
 **Windows x64 · Native PowerPC recompilation · In testing · [GPL-3.0](LICENSE)**
 
-[Getting started](#getting-started) · [Features](#features) · [HD textures](#hd-world-textures) · [Enhanced local co-op](#enhanced-local-co-op) · [Controls](#controls) · [Project status](#project-status) · [Building from source](#building-from-source)
+[Getting started](#getting-started) · [Features](#key-features) · [HD textures](#hd-world-textures) · [Enhanced local co-op](#enhanced-local-co-op) · [Controls](#controls) · [Project status](#project-status) · [Building from source](#building-from-source)
 
 <p align="center">
-  <img src="docs/screenshots/gameplay.png" alt="Gameplay in Sin &amp; Punishment: Star Successor Recompiled" width="900">
+  <img src="docs/screenshots/coop-city.jpg" alt="Enhanced co-op: Isa and Kachi fighting together in the city" width="900">
 </p>
+
+| Two players, one screen | Co-op under the sea |
+| --- | --- |
+| ![Enhanced co-op in the underwater stage](docs/screenshots/coop-underwater.jpg) | ![Enhanced co-op in the cave](docs/screenshots/coop-cave.jpg) |
+| **City firefight** | **Boss fight** |
+| ![City firefight in 4K](docs/screenshots/city-firefight.jpg) | ![Boss encounter](docs/screenshots/boss-encounter.jpg) |
+| **Underwater assault** | **Sunset battle** |
+| ![Underwater stage in 4K](docs/screenshots/underwater.jpg) | ![Sunset battle in 4K](docs/screenshots/sunset-battle.jpg) |
+
+### Key features
+
+- **Native PC port:** statically recompiled from the Wii game, original 60 Hz gameplay intact.
+- **Real two-player co-op:** Player 2 controls Isa or Kachi fully on screen, with a shared 150 HP pool.
+- **Modern aiming:** mouse, dual-stick or gyro, fully remappable.
+- **4K everything:** any internal resolution, FSR, DLSS/DLAA, MSAA, frame generation and VRR.
+- **HD remaster packs:** 292 remastered world and character textures plus a rebuilt 4K HUD, on by default.
+- **Optional lighting upgrades:** ray-traced bounce light, reflections, impact lighting and stage atmosphere.
+- **Any Wii disc format:** ISO, NKit, RVZ, WIA, WBFS, CHD, CISO, GCZ, WDF or an extracted folder, with automatic key search.
+- **RecompLauncher ready:** one-click setup and settings through [RecompLauncher](https://recomplauncher.com/).
 
 > [!IMPORTANT]
 > Bring your own Wii copy of **Sin & Punishment: Star Successor** (North America, `R2VE01`). It includes both the English and Japanese voice tracks. The project does not supply the game disc, extracted game files, or disc keys.
 
-## Features
+## Feature details
 
 - **Modern aiming.** Use a mouse or right stick to aim while moving with the left stick or WASD. Controllers with a supported motion sensor can use [calibrated gyro aiming](https://github.com/meathax/sinandpun/blob/b67b4cd944c43d2ffefa3d73cbbf686a36e4d1a9/docs/GYRO-AIMING.md).
 - **Remappable controls.** Configure gamepad and keyboard/mouse bindings in-game. The port supports Wii Remote + Nunchuk and Classic Controller input schemes.
