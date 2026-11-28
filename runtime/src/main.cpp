@@ -1346,6 +1346,23 @@ static void TerminateHandler() {
 namespace {
 
 constexpr const char* kPreparedMarkerFile = "prepared.txt";
+// Bump when what --prepare writes changes. RecompLauncher runs the setup step again on every release,
+// so an unchanged build from the same copy finishes at once ("Already built").
+constexpr int kPrepareBuildVersion = 4;
+std::string g_prepareSource;  // identity of the copy being prepared; third line of the marker
+
+std::string PrepareSourceIdentity(const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::path probe = path;
+    if (std::filesystem::is_directory(path, ec)) probe = path / "sys" / "main.dol";
+    const auto size = std::filesystem::file_size(probe, ec);
+    if (ec) return {};
+    const auto stamp = std::filesystem::last_write_time(probe, ec);
+    if (ec) return {};
+    return "build " + std::to_string(kPrepareBuildVersion) + " size " + std::to_string(size) + " time " +
+           std::to_string(static_cast<long long>(stamp.time_since_epoch().count())) + " source " +
+           RuntimeConfigFile::PathToUtf8(path.lexically_normal());
+}
 
 std::filesystem::path ManagedGameDirectory() {
     return RuntimeConfigFile::ApplicationDataDirectory() / "Game";
@@ -1383,7 +1400,8 @@ bool WritePreparedConfiguration(const std::filesystem::path& dvdRoot, std::strin
     const auto marker = RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile;
     std::ofstream output(marker, std::ios::trunc);
     output << RuntimeConfigFile::DiscGameId(dvdRoot) << '\n'
-           << RuntimeConfigFile::PathToUtf8(dvdRoot) << '\n';
+           << RuntimeConfigFile::PathToUtf8(dvdRoot) << '\n'
+           << g_prepareSource << '\n';
     output.close();
     if (!output) {
         error = "Could not write the setup marker " + RuntimeConfigFile::PathToUtf8(marker);
@@ -1501,6 +1519,23 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
     }
 
     std::string error;
+    const auto marker = RuntimeConfigFile::ApplicationDataDirectory() / kPreparedMarkerFile;
+    g_prepareSource = PrepareSourceIdentity(absoluteGamePath);
+    if (!g_prepareSource.empty() && StageModulesPrepared()) {
+        std::ifstream previous(marker);
+        std::string gameId, dvdRoot, source;
+        std::getline(previous, gameId);
+        std::getline(previous, dvdRoot);
+        std::getline(previous, source);
+        if (previous && DiscImport::FindGameVersion(gameId) && source == g_prepareSource &&
+            DiscImport::IsGameDirectoryComplete(RuntimeConfigFile::PathFromUtf8(dvdRoot))) {
+            std::cout << "progress 1 Already built\n";
+            return EXIT_SUCCESS;
+        }
+    }
+    // Removed before any work so a build cut short never looks finished.
+    std::filesystem::remove(marker, ec);
+
     if (std::filesystem::is_directory(absoluteGamePath, ec)) {
         // Dolphin extracts the game into <folder>/DATA beside UPDATE.
         auto gameFolder = absoluteGamePath;
@@ -1516,7 +1551,7 @@ int PrepareForRecompLauncher(const RecompLauncher::Arguments& args) {
 
     if (!std::filesystem::is_regular_file(absoluteGamePath, ec) ||
         !DiscImport::IsSupportedDiscExtension(absoluteGamePath)) {
-        std::cerr << "[prepare] Select a supported R2VE01 .iso, .wbfs, .rvz, .wia, .chd, .ciso, .gcz, .gcm, .bin or .cue disc, "
+        std::cerr << "[prepare] Select a supported R2VE01 .iso (incl. NKit), .wbfs, .rvz, .wia, .chd, .ciso, .gcz, .wdf, .gcm, .bin or .cue disc, "
                      "or an extracted folder containing sys/ and files/.\n";
         return EXIT_FAILURE;
     }

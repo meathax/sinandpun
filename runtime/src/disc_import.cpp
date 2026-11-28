@@ -227,6 +227,59 @@ private:
     FileStream m_stream;
 };
 
+// Wiimms WDF ("WII\1DISC"): a sparse ISO. Big-endian header (56 bytes), then at chunk_off the magic again and
+// chunk_n entries {[v1: u32 ignored], u64 file_pos, u64 data_off, u64 data_size}. Bytes outside chunks are zero.
+// Layout from wiimms-iso-tools project/src/lib-wdf.h.
+static uint64_t WdfBe64(const uint8_t* p) { return (uint64_t(Be32(p)) << 32) | Be32(p + 4); }
+
+class WdfImage : public RawImage {
+public:
+    explicit WdfImage(const fs::path& path) : m_stream(path) {
+        uint8_t head[56];
+        if (!m_stream.Read(0, head, sizeof head) || std::memcmp(head, "WII\1DISC", 8) != 0) throw ImportError("Not a WDF file.");
+        const uint32_t version = Be32(head + 8);
+        if (version < 1 || version > 2) throw ImportError("This WDF version is not supported. Convert it to ISO or WBFS with wit.");
+        m_size = WdfBe64(head + 24);
+        const uint32_t count = Be32(head + 44);
+        const uint64_t tableOff = WdfBe64(head + 48);
+        const size_t entry = version == 1 ? 28 : 24;
+        if (count == 0 || count > (1u << 20)) throw ImportError("The WDF chunk table is damaged.");
+        std::vector<uint8_t> table(size_t(count) * entry + 8);
+        if (!m_stream.Read(tableOff, table.data(), table.size()) || std::memcmp(table.data(), "WII\1DISC", 8) != 0)
+            throw ImportError("The WDF file is truncated (chunk table).");
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint8_t* e = table.data() + 8 + size_t(i) * entry + (version == 1 ? 4 : 0);
+            Chunk c{WdfBe64(e), WdfBe64(e + 8), WdfBe64(e + 16)};
+            if (c.size == 0) continue;
+            if (c.pos + c.size > m_size || c.off + c.size > m_stream.Size()) throw ImportError("The WDF chunk table is damaged.");
+            m_chunks.push_back(c);
+        }
+        std::sort(m_chunks.begin(), m_chunks.end(), [](const Chunk& a, const Chunk& b) { return a.pos < b.pos; });
+    }
+    bool Read(uint64_t off, void* dst, size_t size) override {
+        if (off > m_size || size > m_size - off) return false;
+        auto* out = static_cast<uint8_t*>(dst);
+        std::memset(out, 0, size);
+        auto it = std::upper_bound(m_chunks.begin(), m_chunks.end(), off, [](uint64_t o, const Chunk& c) { return o < c.pos; });
+        if (it != m_chunks.begin()) --it;
+        for (; it != m_chunks.end() && it->pos < off + size; ++it) {
+            const uint64_t from = std::max(off, it->pos), to = std::min(off + size, it->pos + it->size);
+            if (from >= to) continue;
+            if (!m_stream.Read(it->off + (from - it->pos), out + (from - off), size_t(to - from))) return false;
+        }
+        return true;
+    }
+    uint64_t Size() const override { return m_size; }
+
+private:
+    struct Chunk {
+        uint64_t pos, off, size;
+    };
+    FileStream m_stream;
+    uint64_t m_size = 0;
+    std::vector<Chunk> m_chunks;
+};
+
 // A .bin of 2352-byte (or 2048-byte) sectors; `dataOffset` is the user-data offset inside a raw sector.
 class BinImage : public RawImage {
 public:
@@ -435,8 +488,8 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
     }
     if (ext == ".wad") throw ImportError("WAD files install Wii titles or channels. This port needs the R2VE01 game disc or its extracted files.");
     if (ext == ".dol" || ext == ".elf" || ext == ".app" || ext == ".tik" || ext == ".tmd")
-        throw ImportError("That is a single Wii file, not a disc image. Select the whole game disc image (ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ) or the extracted game folder.");
-    if (ext == ".nfs") throw ImportError("Wii U virtual-console .nfs files are not supported. Use an ISO, WBFS, RVZ, WIA, CHD, CISO or GCZ image of the Wii disc.");
+        throw ImportError("That is a single Wii file, not a disc image. Select the whole game disc image (ISO, NKit, WBFS, RVZ, WIA, CHD, CISO, GCZ, WDF) or the extracted game folder.");
+    if (ext == ".nfs") throw ImportError("Wii U virtual-console .nfs files are not supported. Use an ISO, NKit, WBFS, RVZ, WIA, CHD, CISO, GCZ or WDF image of the Wii disc.");
     if (ext == ".zip" || ext == ".7z" || ext == ".rar" || ext == ".gz" || ext == ".xz" || ext == ".bz2" || ext == ".zst" || ext == ".tar")
         throw ImportError("Disc images inside archives must be extracted first. Unpack the archive and select the image inside.");
     {
@@ -449,12 +502,13 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
             if (!std::memcmp(magic, "RVZ\1", 4) || !std::memcmp(magic, "WIA\1", 4)) return std::make_unique<RvzImage>(chosen);
             if (!std::memcmp(magic, "MComprHD", 8)) return std::make_unique<ChdImage>(chosen);
             if (!std::memcmp(magic, "CISO", 4)) return std::make_unique<CisoImage>(chosen);
+            if (!std::memcmp(magic, "WII\1DISC", 8)) return std::make_unique<WdfImage>(chosen);
             uint32_t gcz = 0;
             std::memcpy(&gcz, magic, 4);
             if (gcz == 0xb10bc001) return std::make_unique<GczImage>(chosen);
         }
     }
-    if (ext == ".rvz" || ext == ".wia" || ext == ".chd" || ext == ".ciso" || ext == ".gcz")
+    if (ext == ".rvz" || ext == ".wia" || ext == ".chd" || ext == ".ciso" || ext == ".gcz" || ext == ".wdf")
         throw ImportError("This " + ext + " file is damaged or not really a " + ext.substr(1) + " image.");
     fs::path image = chosen;
     {
@@ -501,12 +555,7 @@ std::unique_ptr<RawImage> OpenDiscImage(const fs::path& chosen) {
             return std::make_unique<BinImage>(image, layout.stride, layout.dataOffset);
         }
     }
-    uint8_t nk[4] = {};
-    FileStream probe(image);
-    if (probe.Read(0x200, nk, 4) && std::memcmp(nk, "NKIT", 4) == 0) {
-        throw ImportError("NKit-compressed images are not supported. Use a regular .iso dump (or convert it back with NKit's Recover function).");
-    }
-    throw ImportError("This does not look like a Wii disc image. Select an ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ or CUE/BIN image of your Sin & Punishment: Star Successor disc.");
+    throw ImportError("This does not look like a Wii disc image. Select an ISO, NKit, WBFS, RVZ, WIA, CHD, CISO, GCZ, WDF or CUE/BIN image of your Sin & Punishment: Star Successor disc.");
 }
 
 // ---- Wii partition ----------------------------------------------------------------------------------------
@@ -530,6 +579,24 @@ public:
         if (raw.SelectPartition(m_dataStart, m_clusters, nullptr)) {
             keySource = "not needed (decrypted partition)";
             m_plainPartition = true;
+            m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
+            return;
+        }
+        // Disc header 0x60 = "hashes disabled", 0x61 = "encryption disabled" (Dolphin VolumeWii semantics).
+        // NKit Wii images set both: the partition payload is stored as plain linear data.
+        uint8_t flags[2] = {};
+        if (!raw.Read(0x60, flags, sizeof flags)) throw ImportError("The disc image is truncated.");
+        const bool hashes = flags[0] == 0, encrypted = flags[1] == 0;
+        if (!hashes) {
+            if (encrypted) throw ImportError("This disc image is encrypted but has no hash data; it is not a supported layout. Use a regular dump.");
+            keySource = "not needed (unencrypted image)";
+            m_linearSize = encryptedSize;
+            return;
+        }
+        if (!encrypted) {
+            keySource = "not needed (unencrypted image)";
+            m_unencrypted = true;
+            m_raw_buf.resize(size_t(kChunkClusters) * kClusterSize);
             m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
             return;
         }
@@ -586,11 +653,17 @@ public:
         m_plain.resize(size_t(kChunkClusters) * kClusterDataBytes);
     }
 
-    uint64_t DataSize() const { return m_clusters * kClusterDataBytes; }
+    uint64_t DataSize() const { return m_linearSize ? m_linearSize : m_clusters * kClusterDataBytes; }
 
     void Read(uint64_t off, void* dst, size_t size) {
         auto* out = static_cast<uint8_t*>(dst);
         if (off + size > DataSize()) throw ImportError("The disc image refers to data past the end of its partition (damaged image).");
+        if (m_linearSize) {
+            if (m_cancel.load(std::memory_order_relaxed)) throw ImportCancelled{};
+            if (!m_raw.Read(m_dataStart + off, out, size))
+                throw ImportError("The disc image is truncated or unreadable (it ends before all game data).");
+            return;
+        }
         while (size) {
             const uint64_t cluster = off / kClusterDataBytes;
             const uint64_t chunk = cluster / kChunkClusters;
@@ -629,8 +702,13 @@ private:
             const uint8_t* in = m_raw_buf.data() + size_t(i) * kClusterSize;
             uint8_t* out = m_plain.data() + size_t(i) * kClusterDataBytes;
             uint8_t hashes[kClusterHashBytes];
-            m_aes->Decrypt(zeroIv, in, hashes, kClusterHashBytes);
-            m_aes->Decrypt(in + 0x3D0, in + kClusterHashBytes, out, kClusterDataBytes);
+            if (m_unencrypted) {
+                std::memcpy(hashes, in, kClusterHashBytes);
+                std::memcpy(out, in + kClusterHashBytes, kClusterDataBytes);
+            } else {
+                m_aes->Decrypt(zeroIv, in, hashes, kClusterHashBytes);
+                m_aes->Decrypt(in + 0x3D0, in + kClusterHashBytes, out, kClusterDataBytes);
+            }
             // H0: SHA-1 of each of the 31 0x400-byte blocks is stored in the (decrypted) hash block.
             for (uint32_t b = 0; b < 31; ++b) {
                 uint8_t digest[20];
@@ -649,6 +727,8 @@ private:
     }
 
     bool m_plainPartition = false;
+    bool m_unencrypted = false;
+    uint64_t m_linearSize = 0;
     RawImage& m_raw;
     const Sha1& m_sha;
     std::atomic<bool>& m_cancel;
@@ -746,7 +826,7 @@ void WriteFile(const fs::path& path, const void* data, size_t size, Progress& pr
 bool IsSupportedDiscExtension(const fs::path& path) {
     const std::string ext = ExtensionOf(path);
     static const char* const kExtensions[] = {".rvz", ".wia", ".chd", ".ciso", ".cso", ".gcz", ".iso", ".wbfs", ".bin", ".cue", ".gcm",
-                                              ".img", ".wbf1", ".wbf2", ".wbf3", ".nkit", ".tgc"};
+                                              ".img", ".wbf1", ".wbf2", ".wbf3", ".nkit", ".tgc", ".wdf"};
     for (const char* known : kExtensions)
         if (ext == known) return true;
     // Numbered split parts: .001, .002 or .0, .1
@@ -769,7 +849,9 @@ bool ProbeDisc(const fs::path& image, DiscInfo& info, std::string& error) {
         FileStream(image).Read(0, magic, 8);
         info.format = !std::memcmp(magic, "RVZ\1", 4) ? "RVZ" : !std::memcmp(magic, "WIA\1", 4) ? "WIA" :
                       !std::memcmp(magic, "MComprHD", 8) ? "CHD" : !std::memcmp(magic, "CISO", 4) ? "CISO" :
-                      !std::memcmp(magic, "WBFS", 4) ? "WBFS" : ext == ".gcz" ? "GCZ" : ext == ".cue" || ext == ".bin" ? "BIN" : "ISO";
+                      !std::memcmp(magic, "WBFS", 4) ? "WBFS" : !std::memcmp(magic, "WIIDISC", 8) ? "WDF" : ext == ".gcz" ? "GCZ" : ext == ".cue" || ext == ".bin" ? "BIN" : "ISO";
+        uint8_t nkit[4] = {};
+        if (raw->Read(0x200, nkit, sizeof nkit) && !std::memcmp(nkit, "NKIT", 4)) info.format = "NKit " + info.format;
         info.supported = info.wii && FindGameVersion(info.gameId) != nullptr;
         return true;
     } catch (const std::exception& e) {

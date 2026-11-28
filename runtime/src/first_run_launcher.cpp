@@ -175,7 +175,7 @@ void PickInput(Launcher& launcher, HWND owner, Picker picker) {
     launcher.dialogThread = std::thread([&launcher, owner, picker] {
         if (picker == Picker::Disc) {
             launcher.picked = PickFile(owner, L"Select your Wii disc image", L"Wii disc images",
-                                       L"*.iso;*.wbfs;*.rvz;*.wia;*.chd;*.ciso;*.cso;*.gcz;*.gcm;*.cue;*.bin;*.img;*.nkit;*.wbf1;*.001;*.part0.iso");
+                                       L"*.iso;*.wbfs;*.rvz;*.wia;*.chd;*.ciso;*.cso;*.gcz;*.gcm;*.cue;*.bin;*.img;*.nkit;*.wdf;*.wbf1;*.001;*.part0.iso");
         } else if (picker == Picker::Folder) {
             launcher.picked = PickFile(owner, L"Select the game folder containing sys and files", nullptr, nullptr);
         } else {

@@ -3,30 +3,50 @@
   "format": 1,
   "name": "Sin & Punishment: Star Successor Recomp",
   "repo": "meathax/sinandpun",
-  "game": {
-    "kind": "iso_or_folder",
-    "label": "NTSC-U R2VE01 disc image (ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ, CUE/BIN, split) or extracted game folder. A key next to an encrypted image is found automatically; otherwise set SIN_WII_KEY_FILE.",
-    "check": {
-      "file": "sys/main.dol",
-      "ids": [
-        "R2VE01"
+  "inputs": [
+    {
+      "id": "game",
+      "label": "Your NTSC-U Sin & Punishment: Star Successor disc (R2VE01): ISO (NKit too), RVZ, WIA, WBFS, CISO, GCZ or CHD, or an extracted game folder with sys and files. A key next to an encrypted image is found automatically.",
+      "formats": [
+        {
+          "type": "file",
+          "extensions": [
+            "iso",
+            "gcm",
+            "rvz",
+            "wia",
+            "wbfs",
+            "ciso",
+            "gcz",
+            "chd"
+          ]
+        },
+        {
+          "type": "folder"
+        }
+      ],
+      "check": {
+        "file": "sys/main.dol",
+        "ids": [
+          "R2VE01"
+        ]
+      },
+      "dumps": [
+        {
+          "name": "USA (R2VE01, original ISO)",
+          "size": 4699979776,
+          "crc32": "7df9d581"
+        }
       ]
-    },
-    "dumps": [
-      {
-        "name": "USA (R2VE01, original ISO)",
-        "size": 4699979776,
-        "crc32": "7df9d581"
-      }
-    ]
-  },
+    }
+  ],
   "start": {
     "program": [
       "sinandpun.exe"
     ],
     "args": [
       "--data={data}",
-      "--game={game}"
+      "--game={input:game}"
     ]
   },
   "prepare": {
@@ -36,11 +56,9 @@
     "args": [
       "--prepare",
       "--data={data}",
-      "--game={game}"
+      "--game={input:game}"
     ],
     "label": "Extracting R2VE01 and preparing its stage modules",
-    "timeout": 1200,
-    "version": "3",
     "done": [
       "{data}/prepared.txt"
     ]
@@ -427,19 +445,5 @@
         "vulkan": "1.3"
       }
     }
-  },
-  "requires": [
-    "start",
-    "setup",
-    "exit_codes",
-    "files.folder",
-    "files.flag",
-    "files.accepts",
-    "files.contains",
-    "settings.toml",
-    "settings.choices",
-    "settings.slider",
-    "settings.groups"
-  ],
-  "min": "0.90.0-beta.27"
+  }
 }

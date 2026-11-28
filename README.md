@@ -72,7 +72,7 @@ Windows 10 or 11 (64-bit) and a Direct3D 12 or Vulkan-capable GPU are required f
 
 1. See [GitHub Releases](https://github.com/meathax/sinandpun/releases) for published builds, or [build it from source](#building-from-source).
 2. Extract the entire Windows ZIP. Run `sinandpun.exe`.
-3. Setup finds the game automatically when it sits next to the executable or in a `rom`/`roms` folder. Otherwise choose **Select disc image** for an R2VE01 ISO, WBFS, RVZ, WIA, CHD, CISO, GCZ or CUE/BIN. Setup asks for a key only when the game partition needs one and none nearby unlocks it. For an extracted game, choose **Select extracted folder** and select the parent folder containing both `sys/` and `files/`. Keep that folder in place after setup. It needs no key.
+3. Setup finds the game automatically when it sits next to the executable or in a `rom`/`roms` folder. Otherwise choose **Select disc image** for an R2VE01 ISO (including NKit), WBFS, RVZ, WIA, CHD, CISO, GCZ, WDF or CUE/BIN. Setup asks for a key only when the game partition needs one and none nearby unlocks it. For an extracted game, choose **Select extracted folder** and select the parent folder containing both `sys/` and `files/`. Keep that folder in place after setup. It needs no key.
 
 Keys are found by content and verified against the disc: a 16-byte key, BootMii `keys.bin`, `otp.bin`, any text containing the key, small dumps, 7z/zip/rar archives of those, or an RVZ of the same disc. Labels and file names do not matter. When nothing matches, setup explains what each file was and why it did not help. WAD channel packages do not supply this game's disc contents.
 
