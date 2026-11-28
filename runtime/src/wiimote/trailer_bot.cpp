@@ -53,7 +53,18 @@ bool RF(uint32_t a, float& f) {
     f = std::bit_cast<float>(v);
     return std::isfinite(f);
 }
-bool Valid(uint32_t p) { return p >= 0x80000000u && p < 0x81800000u && (p & 3) == 0; }
+// MEM1 (24 MiB) or the guest's MEM2 window: the stage heaps (player actors) live in MEM2.
+bool Valid(uint32_t p) {
+    return (p & 3) == 0 && ((p >= 0x80000000u && p < 0x81800000u) || (p >= 0x90000000u && p < 0x98000000u));
+}
+
+// StgGlobals = *(*(GM+0x60)+0x44). Sampled from the input thread, *(GM+0x60) reads 0 on most polls
+// during a stage (measured: ~90% of samples), so callers must tolerate misses.
+bool StgGlobals(uint32_t gm, uint32_t& sg) {
+    uint32_t scene;
+    if (!R32(gm + 0x60, scene) || !Valid(scene)) return false;
+    return R32(scene + 0x44, sg) && Valid(sg);
+}
 
 int EnvInt(const char* name, int fallback) {
     const char* e = std::getenv(name);
@@ -125,13 +136,19 @@ bool CamMatrix(uint32_t gm, float m[16]) {
 
 void ResolvePlayerHits(uint32_t gm) {
     // Seat 0 drives the lead actor, seat 1 the partner (hle/sin_coop.cpp resolves both).
-    g_playerHit[0] = g_playerHit[1] = 0;
     uint32_t lead, partner;
     if (SinCoopLastActors(lead, partner) && Valid(lead) && Valid(partner)) {
         g_playerHit[0] = lead + 668;
         g_playerHit[1] = partner + 668;
+    } else {
+        // Solo play: sin_coop only resolves actors in enhanced co-op. StgGlobals = *(*(GM+0x60)+0x44)
+        // holds the player actors at +8/+0xC (getPlayer__10StgGlobalsFv 0x800F2FB8; +4 is the GameCam).
+        // Keep the last resolved actors across polls where the chain reads 0 (see StgGlobals).
+        uint32_t sg, p;
+        if (StgGlobals(gm, sg)) {
+            for (int i = 0; i < 2; ++i) g_playerHit[i] = R32(sg + 8 + 4u * i, p) && Valid(p) ? p + 668 : 0;
+        }
     }
-    (void)gm;
     for (int i = 0; i < 2; ++i) {
         g_actorValid[i] = g_playerHit[i] && RF(g_playerHit[i] - 668 + 384, g_actorPos[i][0]) &&
                           RF(g_playerHit[i] - 668 + 388, g_actorPos[i][1]);
@@ -141,12 +158,25 @@ void ResolvePlayerHits(uint32_t gm) {
 void KeepTeamAlive(uint32_t gm) {
     static const bool god = EnvInt("SIN_TRAILER_BOT_GOD", 0) != 0;
     if (!god) return;
+    static const bool godLog = EnvInt("SIN_TRAILER_BOT_GODLOG", 0) != 0;
+    static auto lastLog = std::chrono::steady_clock::now();
+    if (godLog && std::chrono::steady_clock::now() - lastLog > std::chrono::milliseconds(500)) {
+        lastLog = std::chrono::steady_clock::now();
+        uint32_t c0 = 0, m0 = 0, c1 = 0, m1 = 0, flags = 0, gd = 0;
+        if (g_playerHit[0]) { R32(g_playerHit[0] + 28, c0); R32(g_playerHit[0] + 32, m0); }
+        if (g_playerHit[1]) { R32(g_playerHit[1] + 28, c1); R32(g_playerHit[1] + 32, m1); }
+        if (R32(gm + 100, gd) && Valid(gd)) R32(gd, flags);
+        std::fprintf(stderr, "[god] hit0=%08x %d/%d hit1=%08x %d/%d gdflags=%08x\n", g_playerHit[0],
+                     static_cast<int32_t>(c0), static_cast<int32_t>(m0), g_playerHit[1], static_cast<int32_t>(c1),
+                     static_cast<int32_t>(m1), flags);
+    }
     for (uint32_t hit : g_playerHit) {
         if (!hit) continue;
         uint32_t cur, max;
         if (!R32(hit + 28, cur) || !R32(hit + 32, max)) continue;
+        // Refill on any damage: topping up only below 3/4 let single large hits kill the player.
         if (static_cast<int32_t>(max) > 0 && static_cast<int32_t>(cur) > 0 &&
-            static_cast<int32_t>(cur) < static_cast<int32_t>(max) * 3 / 4) {
+            static_cast<int32_t>(cur) < static_cast<int32_t>(max)) {
             try { Memory::Write32(hit + 28, max); } catch (...) {}
         }
     }
@@ -156,7 +186,6 @@ void KeepTeamAlive(uint32_t gm) {
 void Scan(float t) {
     if (t - g_scanAt < 0.008f) return;
     g_scanAt = t;
-    g_targets.clear();
     static const bool flipY = EnvInt("SIN_TRAILER_BOT_FLIPY", 0) != 0;
     static const bool log = EnvInt("SIN_TRAILER_BOT_LOG", 0) != 0;
     static float nextLog = 0;
@@ -164,11 +193,13 @@ void Scan(float t) {
     if (!R32(MKW_GADDR(804B19A0), gm) || !Valid(gm)) return;
     ResolvePlayerHits(gm);
     KeepTeamAlive(gm);
-    if (!R32(gm + 0x60, a) || !Valid(a) || !R32(a + 0x44, m) || !Valid(m) || !R32(m + 0x14, h) || !Valid(h)) return;
+    // Keep the previous targets when the chain misses this poll (see StgGlobals).
+    if (!StgGlobals(gm, m) || !R32(m + 0x14, h) || !Valid(h)) return;
     float c[16];
     if (!CamMatrix(gm, c)) return;
     uint32_t countWord;
     if (!R32(h + 0x38, countWord)) return;
+    g_targets.clear();
     const uint32_t count = std::min<uint32_t>(countWord & 0xFFFFu, 512);
     const bool doLog = log && t >= nextLog;
     if (doLog) {
